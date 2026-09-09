@@ -35,6 +35,8 @@ export const StoryManifest = Schema.Struct({
   audioPath: Path, audioSha256: Sha256, audioManifestPath: Path, audioManifestSha256: Sha256,
   transcriptPath: Path, transcriptSha256: Sha256, textPath: Path, textSha256: Sha256,
   origin: StoryOrigin,
+  /** Per-story editor settings that override the server config; absent means the config default. */
+  chunking: Schema.optionalKey(Schema.Struct({ minSentenceBreakMs: Index })),
 });
 export type StoryManifest = typeof StoryManifest.Type;
 

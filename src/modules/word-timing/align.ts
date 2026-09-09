@@ -13,6 +13,9 @@ export type MeasureInput = {
   readonly boundaryPauseSamples: number;
 };
 export type AlignInput = {
+  /** Ids of words that begin a sentence (the first word after `.`, `?`, or `!`, plus the first word). Lets a word that overlaps no speech region follow its
+   * sentence neighbours instead of the merely nearest region (a 17 ms coin flip on the pilot corpus). Absent means nearest-region only. */
+  readonly sentenceStartIds?: ReadonlySet<string>;
   /** Every transcript word with its ORIGINAL provider timing, in transcript order. Manual and auto overlays are never an input (A42). */
   readonly words: ReadonlyArray<TimedWord>;
   readonly regions: ReadonlyArray<SpeechRegion>;
@@ -57,7 +60,9 @@ export function measureRange(input: MeasureInput): TimingMeasure {
 
 /**
  * The energy-only first pass (A47), pure. Takes the words whose original start lies in `[range.startSample, range.endSample)`, shifts each later by
- * the lead, assigns each to the speech region it overlaps most (the nearest region when it overlaps none; earliest wins ties), then maps every
+ * the lead, assigns each to the speech region it overlaps most, then maps every
+ * region's words linearly. A word that overlaps no region joins the region of its nearest overlapping neighbour within the same sentence (walking outward in
+ * transcript order, stopping at a sentence start); with such a neighbour on both sides, or none, it takes the nearest region by distance (earliest wins ties). Then maps every
  * region's words linearly so the earliest start lands on the region start and the latest end on the region end; a lone word fills its region.
  * Regions are first clipped to the range and regions outside it dropped, so no entry ever leaves the range; with no region in the range there are
  * no entries. Word order within a region is preserved; results are integers with `startSample < endSample`. Words outside the range are untouched.
@@ -73,17 +78,39 @@ export function alignRange(input: AlignInput): { readonly entries: TimingEntries
   const entries: Record<string, TimingEntry> = {};
   if (clipped.length > 0) {
     const groups = new Map<number, Array<TimedWord>>();
-    for (const word of inRange) {
-      const shifted = { id: word.id, startSample: word.startSample + leadSamples, endSample: word.endSample + leadSamples };
-      // Overlap is negative by exactly the gap when the two are disjoint, so the largest overlap is also the nearest region when nothing overlaps.
+    const starts = input.sentenceStartIds ?? new Set<string>();
+    // Pass 1: the region each shifted word overlaps most. Overlap is negative by exactly the gap when disjoint, so the largest overlap is also the
+    // nearest region when nothing overlaps; `overlaps` records whether it actually touched speech.
+    const shiftedWords = inRange.map(word => ({ id: word.id, startSample: word.startSample + leadSamples, endSample: word.endSample + leadSamples }));
+    const nearest = shiftedWords.map(shifted => {
       let best = 0, bestOverlap = -Infinity;
       clipped.forEach((r, i) => {
         const overlap = Math.min(r.endSample, shifted.endSample) - Math.max(r.startSample, shifted.startSample);
         if (overlap > bestOverlap) { best = i; bestOverlap = overlap; }
       });
+      return { best, overlaps: bestOverlap > 0 };
+    });
+    // Pass 2: a word in silence follows its sentence. Walk backwards to the previous overlapping word without crossing a sentence start (this
+    // word being a sentence start means there is no previous neighbour), and forwards to the next overlapping word without crossing one.
+    const neighbourRegion = (index: number, step: -1 | 1): number | null => {
+      for (let j = index; ; j += step) {
+        if (step === -1 && starts.has(shiftedWords[j]!.id)) return null;
+        const k = j + step;
+        if (k < 0 || k >= shiftedWords.length) return null;
+        if (step === 1 && starts.has(shiftedWords[k]!.id)) return null;
+        if (nearest[k]!.overlaps) return nearest[k]!.best;
+      }
+    };
+    shiftedWords.forEach((shifted, index) => {
+      let best = nearest[index]!.best;
+      if (!nearest[index]!.overlaps) {
+        const before = neighbourRegion(index, -1), after = neighbourRegion(index, 1);
+        if (before !== null && after === null) best = before;
+        else if (after !== null && before === null) best = after;
+      }
       const group = groups.get(best) ?? [];
       group.push(shifted); groups.set(best, group);
-    }
+    });
     for (const [index, group] of groups) {
       const region = clipped[index]!;
       const first = Math.min(...group.map(w => w.startSample)), last = Math.max(...group.map(w => w.endSample));

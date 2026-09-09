@@ -20,7 +20,7 @@ export const EditorServerConfig = Schema.Struct({
   /** The automatic align pass (A47, A48): words are shifted later by `leadMs` before snapping; a gap of at least `boundaryPauseMs` marks a phrase boundary in the report. */
   alignment: Schema.Struct({ leadMs: Schema.Int, boundaryPauseMs: Positive }),
   watch: Schema.Struct({ debounceMs: Positive }),
-  limits: Schema.Struct({ maxUploadBytes: Positive, requestTimeoutMs: Positive }),
+  limits: Schema.Struct({ maxUploadBytes: Positive, requestTimeoutMs: Positive, maxWordTimingBytes: Positive }),
   /** A gap between consecutive words at least this long ends a chunk in the editor's chunk lane. */
   chunking: Schema.Struct({ pauseBreakMs: Positive, minSentenceBreakMs: NonNegative }),
 });

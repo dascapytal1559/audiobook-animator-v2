@@ -22,10 +22,11 @@
   },
   "limits": {
     "maxUploadBytes": 52428800,
-    "requestTimeoutMs": 30000
+    "requestTimeoutMs": 30000,
+    "maxWordTimingBytes": 16777216
   },
   "chunking": {
     "pauseBreakMs": 600,
-    "minSentenceBreakMs": 150
+    "minSentenceBreakMs": 0
   }
 }

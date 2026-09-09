@@ -5,6 +5,13 @@ import { EditorServerError, type PeaksFile, type SpeechFile } from "./contracts.
 import { computePeaksAndSpeech, readPeaksCache, readSpeechCache, writeCache } from "./peaks.js";
 import type { EditorContext } from "./routes.js";
 const fail = (code: EditorServerError["code"], message: string) => Effect.fail(new EditorServerError({ code, message }));
+/** The first word plus every word that follows a sentence mark in the transcript's punctuation; the align pass uses it to keep silence-only words in their sentence. */
+function sentenceStartIds(ctx: EditorContext): ReadonlySet<string> {
+  const ids = new Set(listSentenceBreaks(ctx.elements).map(b => b.nextWordId));
+  const first = ctx.words[0];
+  if (first !== undefined) ids.add(first.id);
+  return ids;
+}
 
 /** Peaks and speech regions from one shared decode (A46). Each is read from its cache when pinned; a miss on either decodes once and writes both files. One decode at a time. */
 export function makeCaches(ctx: EditorContext) {
@@ -33,7 +40,7 @@ export function makeCaches(ctx: EditorContext) {
 }
 export type Caches = ReturnType<typeof makeCaches>;
 
-const overlayContext = (ctx: EditorContext): OverlayContext => ({ storyDirectory: ctx.storyDirectory, clip: ctx.clip, wordIds: new Set(ctx.words.map(w => w.id)), maxBytes: ctx.timelineConfig.limits.maxDecisionsBytes });
+const overlayContext = (ctx: EditorContext): OverlayContext => ({ storyDirectory: ctx.storyDirectory, clip: ctx.clip, wordIds: new Set(ctx.words.map(w => w.id)), maxBytes: ctx.config.limits.maxWordTimingBytes });
 export const timingPaths = (ctx: EditorContext) => { const o = overlayContext(ctx); return { auto: autoPath(o), manual: manualPath(o) }; };
 
 /** The overlays merged over the transcript (A37): effective words, chunks recomputed on effective times, and the map shot anchors resolve against. */
@@ -44,12 +51,14 @@ export function loadTiming(ctx: EditorContext) {
     const byId = new Map(effective.words.map(w => [w.id, w] as const));
     const elements = ctx.elements.map(e => e.kind === "word" ? { ...e, startSample: byId.get(e.id)!.startSample, endSample: byId.get(e.id)!.endSample } : e);
     const toSamples = (ms: number) => Math.round((ms / 1000) * ctx.clip.sampleRateHz);
-    const minSentenceBreakSamples = toSamples(ctx.config.chunking.minSentenceBreakMs);
+    // The story's manifest may override the config default (A54): the rule is enabled story by story after listening.
+    const minSentenceBreakMs = ctx.story.story.chunking?.minSentenceBreakMs ?? ctx.config.chunking.minSentenceBreakMs;
+    const minSentenceBreakSamples = toSamples(minSentenceBreakMs);
     const chunks = computeChunks(elements, toSamples(ctx.config.chunking.pauseBreakMs), minSentenceBreakSamples);
     const mergedSentenceBreaks = listSentenceBreaks(elements).filter(b => b.gapSamples < minSentenceBreakSamples)
       .map(b => ({ ...b, gapMs: Math.round((b.gapSamples / ctx.clip.sampleRateHz) * 1000) }));
     const wordStarts: ReadonlyMap<string, number> = new Map(effective.words.map(w => [w.id, w.startSample] as const));
-    return { auto, manual, effective, chunks, wordStarts, chunking: { minSentenceBreakMs: ctx.config.chunking.minSentenceBreakMs, pauseBreakMs: ctx.config.chunking.pauseBreakMs, mergedSentenceBreaks } };
+    return { auto, manual, effective, chunks, wordStarts, chunking: { minSentenceBreakMs, pauseBreakMs: ctx.config.chunking.pauseBreakMs, mergedSentenceBreaks } };
   });
 }
 /** `GET /api/story`: identity, titles, effective words with their layers, chunks on effective times, and the timing summary. */
@@ -82,7 +91,7 @@ export function alignTiming(ctx: EditorContext, caches: Caches, options: AlignOp
     }
     if (range.startSample === 0 && range.endSample === ctx.clip.sampleCount && !options.wholeClip) return yield* fail("InvalidRequest", "The range covers the whole clip; pass wholeClip to align everything at once (A43).");
     const speech = yield* caches.speech;
-    const { entries, report } = alignRange({ words: ctx.words, regions: speech.regions, range, sampleRateHz: ctx.clip.sampleRateHz, leadMs: ctx.config.alignment.leadMs, boundaryPauseMs: ctx.config.alignment.boundaryPauseMs });
+    const { entries, report } = alignRange({ words: ctx.words, sentenceStartIds: sentenceStartIds(ctx), regions: speech.regions, range, sampleRateHz: ctx.clip.sampleRateHz, leadMs: ctx.config.alignment.leadMs, boundaryPauseMs: ctx.config.alignment.boundaryPauseMs });
     if (options.dryRun) return report;
     yield* writeAutoRun(overlayContext(ctx), { range, entries, report, originalStarts: new Map(ctx.words.map(w => [w.id, w.startSample] as const)), ranAt: new Date().toISOString(), producer: options.producer,
       parameters: { leadMs: ctx.config.alignment.leadMs, thresholdDbfs: ctx.config.speech.thresholdDbfs, minSilenceMs: ctx.config.speech.minSilenceMs, minSpeechMs: ctx.config.speech.minSpeechMs } });

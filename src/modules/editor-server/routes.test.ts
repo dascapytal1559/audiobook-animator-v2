@@ -14,9 +14,13 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const VALID_ULID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 /** The synthetic verified story (10 Hz, 100 samples, 12-byte "audio"), the only story under the fixture root, behind an ephemeral loopback server with a fetch client pointed at it. */
-async function serve(t: TestContext, options: { readonly staticDirectory?: string; readonly words?: ReadonlyArray<FixtureWord> } = {}) {
+async function serve(t: TestContext, options: { readonly staticDirectory?: string; readonly words?: ReadonlyArray<FixtureWord>; readonly manifestPatch?: Record<string, unknown> } = {}) {
   const story = await fixture(t, options.words ? { words: options.words } : {});
   const planningDirectory = story.dir;
+  if (options.manifestPatch) {
+    const manifestPath = join(planningDirectory, "story.json");
+    await writeFile(manifestPath, encode({ ...(JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>), ...options.manifestPatch }));
+  }
   await mkdir(join(planningDirectory, "shots"), { recursive: true });
   await mkdir(join(planningDirectory, "cache"), { recursive: true });
   await writeFile(join(story.root, "visual-timeline.json"), encode({ schemaVersion: 1, storyPlanningConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } }));
@@ -24,7 +28,7 @@ async function serve(t: TestContext, options: { readonly staticDirectory?: strin
   // At 10 Hz a 100 ms frame is one sample; the lead is 2 samples.
   await writeFile(configPath, encode({ schemaVersion: 1, storiesDirectory: ".", visualTimelineConfigPath: "visual-timeline.json", ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 },
     speech: { frameMs: 100, thresholdDbfs: -50, minSilenceMs: 200, minSpeechMs: 100 }, alignment: { leadMs: 200, boundaryPauseMs: 300 },
-    watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } }));
+    watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } }));
   const library = await Effect.runPromise(loadEditorLibrary({ configPath }).pipe(Effect.provide(NodeServices.layer)));
   const { ctx } = await Effect.runPromise(library.open("pilot").pipe(Effect.provide(NodeServices.layer)));
   const layer = HttpRouter.serve(makeEditorRoutes(library, { producer: { name: "editor", version: "test" }, ...(options.staticDirectory !== undefined ? { staticDirectory: options.staticDirectory } : {}) }), { disableLogger: true, disableListenLog: true })
@@ -397,4 +401,10 @@ test("static mode serves the client with index.html fallback while unknown API p
     assert.equal((yield* bodyJson(api))["code"], "NotFound");
     assert.equal((yield* get("/api/stories/pilot/story")).status, 200);
   }));
+});
+
+test("a story manifest's chunking.minSentenceBreakMs overrides the config default in the story payload", async t => {
+  const s = await serve(t, { manifestPatch: { chunking: { minSentenceBreakMs: 150 } } });
+  const body = await s.run(Effect.gen(function* () { return yield* bodyJson(yield* get("/api/stories/pilot/story")); }));
+  assert.equal(body["chunking"].minSentenceBreakMs, 150);
 });

@@ -101,3 +101,21 @@ test("measureRange: boundaries are the first word and words after a pause, error
   assert.deepEqual(measureRange({ words: [], regions, sampleRateHz: RATE, boundaryPauseSamples: 300 }), { wordCount: 0, boundaryCount: 0, onsetErrorMs: null, insideSpeechCount: 0, insideSpeechFraction: null });
   assert.deepEqual(measureRange({ words: [words[0]!], regions, sampleRateHz: 44_100, boundaryPauseSamples: 300 }).onsetErrorMs, { median: -2.3, p10: -2.3, p90: -2.3 }, "ms are rounded to one decimal");
 });
+
+test("a word in silence follows its sentence: a sentence start joins the next region, a sentence end joins the previous one, mid-sentence stays nearest", () => {
+  // Two regions with a 1400-sample gap. Shifted (lead 0) word "the" sits at 583 from the first region's end and 600 from the second's start.
+  const regions = [{ startSample: 0, endSample: 1000 }, { startSample: 2400, endSample: 3400 }];
+  const prev = word("prev", 800, 950), next = word("next", 2500, 2700);
+  const the = word("the", 1583, 1800);
+  const nearestOnly = alignRange({ ...base, leadMs: 0, words: [prev, the, next], regions, range: { startSample: 0, endSample: 4000 } }).entries;
+  assert.ok(nearestOnly["the"]!.endSample <= 1000, "without sentence information the nearer first region wins");
+  const asStart = alignRange({ ...base, leadMs: 0, words: [prev, the, next], regions, range: { startSample: 0, endSample: 4000 }, sentenceStartIds: new Set(["prev", "the"]) }).entries;
+  assert.ok(asStart["the"]!.startSample >= 2400 && asStart["next"]!.startSample > asStart["the"]!.startSample, "a sentence start joins the following region and keeps its order");
+  assert.deepEqual(asStart["prev"], { startSample: 0, endSample: 1000 }, "the previous region now holds one word and it fills it");
+  const asEnd = alignRange({ ...base, leadMs: 0, words: [prev, the, next], regions, range: { startSample: 0, endSample: 4000 }, sentenceStartIds: new Set(["prev", "next"]) }).entries;
+  assert.ok(asEnd["the"]!.endSample <= 1000, "a sentence-final word joins the preceding region");
+  const mid = alignRange({ ...base, leadMs: 0, words: [prev, the, next], regions, range: { startSample: 0, endSample: 4000 }, sentenceStartIds: new Set(["prev"]) }).entries;
+  assert.ok(mid["the"]!.endSample <= 1000, "with overlapping neighbours on both sides the nearest region still decides");
+  const chain = alignRange({ ...base, leadMs: 0, words: [prev, word("a", 1500, 1600), the, next], regions, range: { startSample: 0, endSample: 4000 }, sentenceStartIds: new Set(["prev", "a"]) }).entries;
+  assert.ok(chain["a"]!.startSample >= 2400 && chain["the"]!.startSample > chain["a"]!.startSample, "a run of silence-only words walks outward to the sentence's overlapping neighbour");
+});
