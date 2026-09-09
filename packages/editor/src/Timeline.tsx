@@ -14,6 +14,8 @@ const DRAG_THRESHOLD_PX = 3;
 const MIN_PAUSE_MS = 300;
 const MAX_PX_PER_SECOND = 2000;
 const DEFAULT_PX_PER_SECOND = 120;
+/** Below this zoom the speech band and the timing rows are unreadable, so they are not drawn; the row toggles keep their state. */
+const DETAIL_MIN_PX_PER_SECOND = 20;
 const LANE_HEIGHTS = { ruler: 20, waveform: 72, row: 36, shots: 44 } as const;
 const SNAP_TEXT_MAX_CHARS = 40;
 
@@ -219,7 +221,8 @@ export function Timeline(p: Props) {
 
   const ticks = useMemo(() => rulerTicks(viewStartSample, Math.min(viewEndSample, p.sampleCount), p.sampleRateHz, pxPerSecond), [viewStartSample, viewEndSample, p.sampleCount, p.sampleRateHz, pxPerSecond]);
   const playheadX = p.playhead * pxPerSample;
-  const rowOrder: ReadonlyArray<RowVariant> = (["original", "auto", "edited"] as const).filter(r => rows[r]);
+  const detail = pxPerSecond >= DETAIL_MIN_PX_PER_SECOND;
+  const rowOrder: ReadonlyArray<RowVariant> = detail ? (["original", "auto", "edited"] as const).filter(r => rows[r]) : [];
   const laneTotal = LANE_HEIGHTS.ruler + LANE_HEIGHTS.waveform + LANE_HEIGHTS.row * rowOrder.length + LANE_HEIGHTS.shots;
   const rowData = (variant: RowVariant): TimingRowData => (variant === "original" ? p.original : variant === "auto" ? p.auto : { words: p.words, chunks: p.chunks });
   const wordDragHint = p.wordDrag === null ? null : `${formatDeltaMs(p.wordDrag.delta, p.sampleRateHz)}${p.wordDrag.snap ? ` · ${describeSnap(p.wordDrag.snap, p.sampleRateHz)}` : ""}`;
@@ -228,7 +231,7 @@ export function Timeline(p: Props) {
     <div className="timeline">
       <div className="timeline-toolbar">
         <button type="button" onClick={() => zoomTo(pxPerSecond / 1.5, null)} aria-label="Zoom out">−</button>
-        <span className="zoom-value">{pxPerSecond.toFixed(0)} px/s</span>
+        <span className="zoom-value">{pxPerSecond.toFixed(pxPerSecond < 10 ? 1 : 0)} px/s</span>
         <button type="button" onClick={() => zoomTo(pxPerSecond * 1.5, null)} aria-label="Zoom in">+</button>
         <button type="button" onClick={() => zoomTo(minPxPerSecond, null)}>Fit</button>
         <span className="toolbar-group" role="radiogroup" aria-label="Text lane">
@@ -236,6 +239,7 @@ export function Timeline(p: Props) {
           <button type="button" className={textMode === "words" ? "toggle on" : "toggle"} aria-pressed={textMode === "words"} onClick={() => chooseTextMode("words")}>Words</button>
         </span>
         <span className="toolbar-group" role="group" aria-label="Rows">
+          {!detail && <span className="muted" title={`Speech and timing rows are hidden below ${DETAIL_MIN_PX_PER_SECOND} px/s`} data-testid="detail-hidden">hidden at this zoom</span>}
           <button type="button" className={rows.speech ? "toggle on" : "toggle"} aria-pressed={rows.speech} onClick={() => toggleRow("speech")} title={p.speech === null ? "Speech regions have not loaded" : `${p.speech.length} speech regions`} data-testid="toggle-speech">Speech</button>
           <button type="button" className={rows.original ? "toggle on" : "toggle"} aria-pressed={rows.original} onClick={() => toggleRow("original")} title="Transcriber timing, read-only" data-testid="toggle-original">Original</button>
           <button type="button" className={rows.auto ? "toggle on" : "toggle"} aria-pressed={rows.auto} onClick={() => toggleRow("auto")} title="Scripted align result, read-only" data-testid="toggle-auto">Auto</button>
@@ -256,7 +260,7 @@ export function Timeline(p: Props) {
           </div>
           <div className="lane lane-waveform" style={{ height: LANE_HEIGHTS.waveform }}>
             <div className="sticky" style={{ left: 0, width: view.width }}>
-              <MemoWaveform peaks={p.peaks} regions={rows.speech ? p.speech : null} viewStartSample={viewStartSample} pxPerSample={pxPerSample} width={view.width} height={LANE_HEIGHTS.waveform} />
+              <MemoWaveform peaks={p.peaks} regions={rows.speech && detail ? p.speech : null} viewStartSample={viewStartSample} pxPerSample={pxPerSample} width={view.width} height={LANE_HEIGHTS.waveform} />
             </div>
           </div>
           {rowOrder.map(variant => {
