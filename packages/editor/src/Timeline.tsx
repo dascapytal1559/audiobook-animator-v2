@@ -111,16 +111,25 @@ export function Timeline(p: Props) {
     if (x < el.scrollLeft + view.width * 0.05 || x > el.scrollLeft + view.width * 0.9) el.scrollLeft = Math.max(0, x - view.width * 0.2);
   }, [p.playhead, p.follow, p.drag, p.wordDrag, pxPerSample, view.width]);
 
+  // Zoom keeps the sample under the anchor fixed on screen. The scroll correction must land in the same commit as the new
+  // scale (before paint), or the content, the sticky waveform, and the culling window disagree for a frame and flicker.
+  const zoomAnchorRef = useRef<{ sample: number; x: number } | null>(null);
   const zoomTo = useCallback((next: number, anchorClientX: number | null) => {
     const el = scrollRef.current;
     const clamped = Math.min(MAX_PX_PER_SECOND, Math.max(minPxPerSecond, next));
     if (el === null || clamped === pxPerSecond) return;
-    const rect = el.getBoundingClientRect();
-    const anchorX = anchorClientX === null ? view.width / 2 : anchorClientX - rect.left;
-    const anchorSample = (el.scrollLeft + anchorX) / pxPerSample;
+    const anchorX = anchorClientX === null ? view.width / 2 : anchorClientX - el.getBoundingClientRect().left;
+    zoomAnchorRef.current = { sample: (el.scrollLeft + anchorX) / pxPerSample, x: anchorX };
     setPxPerSecond(clamped);
-    requestAnimationFrame(() => { el.scrollLeft = anchorSample * (clamped / p.sampleRateHz) - anchorX; });
-  }, [minPxPerSecond, pxPerSecond, pxPerSample, view.width, p.sampleRateHz]);
+  }, [minPxPerSecond, pxPerSecond, pxPerSample, view.width]);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const anchor = zoomAnchorRef.current;
+    if (el === null || anchor === null) return;
+    zoomAnchorRef.current = null;
+    el.scrollLeft = anchor.sample * pxPerSample - anchor.x;
+    setView({ scrollLeft: el.scrollLeft, width: el.clientWidth });
+  }, [pxPerSample]);
 
   const onWheel = (e: ReactWheelEvent<HTMLDivElement>) => {
     if (!(e.ctrlKey || e.metaKey)) return;
