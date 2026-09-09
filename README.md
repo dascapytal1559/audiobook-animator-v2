@@ -76,7 +76,7 @@ Exhalation job `eekQ2vQNJp3XjfF6` returned 100,593 timed words; Stories of Your 
 
 ## Paired story splitting and inventory
 
-The story-split module consumes a reviewed plan, slices the timed transcript, calls the verified audio extractor for every story and extra, and publishes a duration inventory after all pairs succeed. Stories are then relocated into `data/stories/<story>/` by `scripts/relocate-stories.mjs`, which hash-checks every file before and after the move, writes each story's `story.json`, and records the moves in `data/story-relocation.json`; extras stay with the book. Discovery is separate: the first Exhalation plan was produced by agents using transcript content and measured audio gaps. A reusable autonomous discovery service is still to be implemented.
+The story-split module consumes a reviewed plan, slices the timed transcript, calls the verified audio extractor for every story and extra, and publishes a duration inventory after all pairs succeed. The existing stories were moved into `data/stories/<story>/` by a one-time relocation on 2026-09-09 that hash-checked every file before and after the move and wrote each story's `story.json`; `data/story-relocation.json` records those moves, and the script was removed afterwards. Extras stay with the book. A future split run still writes into `split/segments/`, so its stories need the same relocation and manifest step. Discovery is separate: the first Exhalation plan was produced by agents using transcript content and measured audio gaps. A reusable autonomous discovery service is still to be implemented.
 
 ```sh
 node dist/split-stories.js --plan data/books/exhalation/split-plan.json --source data/books/exhalation/input/book.mp3 --config config/story-split.json --validate-only
