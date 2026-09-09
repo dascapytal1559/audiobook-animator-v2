@@ -255,7 +255,7 @@ export function Timeline(p: Props) {
             return (
               <div key={variant} style={{ height: LANE_HEIGHTS.row, position: "relative" }}>
                 <MemoChunkLane
-                  variant={variant} mode={textMode} chunks={data.chunks} words={data.words} viewStartSample={viewStartSample} viewEndSample={viewEndSample} pxPerSample={pxPerSample}
+                  variant={variant} mode={textMode} chunks={data.chunks} words={data.words} viewStartSample={viewStartSample} viewEndSample={viewEndSample} pxPerSample={pxPerSample} clipEndSample={p.sampleCount}
                   currentWordId={edited ? p.currentWordId : null} selectedIds={edited ? selectedIds : EMPTY_IDS}
                   onWordClick={edited ? noop : w => p.onSeek(w.startSample, true)} onChunkClick={edited ? noop : c => p.onSeek(c.startSample, false)}
                   {...(edited ? { onItemPointerDown } : {})}

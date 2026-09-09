@@ -59,7 +59,8 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .align-report button { padding: 0 6px; line-height: 16px; }
 .timeline-scroll { flex: 1; overflow-x: auto; overflow-y: hidden; position: relative; background: var(--bg-2); cursor: text; user-select: none; }
 .timeline-scroll.dragging { cursor: grabbing; }
-.timeline-content { position: relative; min-width: 100%; display: flex; flex-direction: column; }
+/* `overflow: clip` (not hidden, which would turn this into the sticky canvas's scrollport) keeps the scroll extent equal to the clip width. */
+.timeline-content { position: relative; min-width: 100%; display: flex; flex-direction: column; overflow: clip; }
 .lane { position: relative; width: 100%; }
 .lane-ruler { overflow: hidden; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 10px; font-family: ui-monospace, Menlo, monospace; }
 .tick { position: absolute; top: 0; height: 100%; border-left: 1px solid var(--line); padding-left: 3px; line-height: 20px; white-space: nowrap; }
