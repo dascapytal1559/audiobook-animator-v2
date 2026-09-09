@@ -103,13 +103,14 @@ export function Timeline(p: Props) {
     return () => { observer.disconnect(); el.removeEventListener("scroll", update); };
   }, []);
 
-  // Follow playback: keep the playhead in view while it is on.
+  // Follow playback: keep the playhead in view while it moves during playback. Deliberately not re-run on zoom or resize,
+  // or a zoom that pushes the playhead off screen would snap the scroll away from the anchor.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el === null || !p.follow || p.drag !== null || p.wordDrag !== null || view.width === 0) return;
+    if (el === null || !p.follow || !p.playing || p.drag !== null || p.wordDrag !== null || view.width === 0) return;
     const x = p.playhead * pxPerSample;
     if (x < el.scrollLeft + view.width * 0.05 || x > el.scrollLeft + view.width * 0.9) el.scrollLeft = Math.max(0, x - view.width * 0.2);
-  }, [p.playhead, p.follow, p.drag, p.wordDrag, pxPerSample, view.width]);
+  }, [p.playhead, p.follow, p.playing, p.drag, p.wordDrag]);
 
   // Zoom keeps the sample under the anchor fixed on screen. The scroll correction must land in the same commit as the new
   // scale (before paint), or the content, the sticky waveform, and the culling window disagree for a frame and flicker.
