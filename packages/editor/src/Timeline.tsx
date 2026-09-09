@@ -238,12 +238,11 @@ export function Timeline(p: Props) {
           <button type="button" className={textMode === "sentences" ? "toggle on" : "toggle"} aria-pressed={textMode === "sentences"} onClick={() => chooseTextMode("sentences")}>Sentences</button>
           <button type="button" className={textMode === "words" ? "toggle on" : "toggle"} aria-pressed={textMode === "words"} onClick={() => chooseTextMode("words")}>Words</button>
         </span>
-        <span className="toolbar-group" role="group" aria-label="Rows">
-          {!detail && <span className="muted" title={`Speech and timing rows are hidden below ${DETAIL_MIN_PX_PER_SECOND} px/s`} data-testid="detail-hidden">hidden at this zoom</span>}
-          <button type="button" className={rows.speech ? "toggle on" : "toggle"} aria-pressed={rows.speech} onClick={() => toggleRow("speech")} title={p.speech === null ? "Speech regions have not loaded" : `${p.speech.length} speech regions`} data-testid="toggle-speech">Speech</button>
-          <button type="button" className={rows.original ? "toggle on" : "toggle"} aria-pressed={rows.original} onClick={() => toggleRow("original")} title="Transcriber timing, read-only" data-testid="toggle-original">Original</button>
-          <button type="button" className={rows.auto ? "toggle on" : "toggle"} aria-pressed={rows.auto} onClick={() => toggleRow("auto")} title="Scripted align result, read-only" data-testid="toggle-auto">Auto</button>
-          <button type="button" className={rows.edited ? "toggle on" : "toggle"} aria-pressed={rows.edited} onClick={() => toggleRow("edited")} title="Effective timing: select and drag here" data-testid="toggle-edited">Edited</button>
+        <span className="toolbar-group" role="group" aria-label="Rows" title={detail ? undefined : `Rows are hidden below ${DETAIL_MIN_PX_PER_SECOND} px/s; zoom in to show them`}>
+          <button type="button" className={rows.speech ? "toggle on" : "toggle"} aria-pressed={rows.speech} onClick={() => toggleRow("speech")} disabled={!detail} title={p.speech === null ? "Speech regions have not loaded" : `${p.speech.length} speech regions`} data-testid="toggle-speech">Speech</button>
+          <button type="button" className={rows.original ? "toggle on" : "toggle"} aria-pressed={rows.original} onClick={() => toggleRow("original")} disabled={!detail} title="Transcriber timing, read-only" data-testid="toggle-original">Original</button>
+          <button type="button" className={rows.auto ? "toggle on" : "toggle"} aria-pressed={rows.auto} onClick={() => toggleRow("auto")} disabled={!detail} title="Scripted align result, read-only" data-testid="toggle-auto">Auto</button>
+          <button type="button" className={rows.edited ? "toggle on" : "toggle"} aria-pressed={rows.edited} onClick={() => toggleRow("edited")} disabled={!detail} title="Effective timing: select and drag here" data-testid="toggle-edited">Edited</button>
         </span>
         <button type="button" className="align-button" onClick={p.onAlign} disabled={p.selection === null || p.alignBusy || p.wordDrag !== null} title="Run the automatic pass on the selected words (A43)" data-testid="align-selection">
           {p.alignBusy ? "Aligning…" : "Align selection"}
