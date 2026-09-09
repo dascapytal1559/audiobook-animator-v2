@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ApiError, AUDIO_URL, getPeaks, getSpeech, getStory, getTimeline, postAlign, postShot, putDecisions, putWordTiming, useServerEvents, type PeaksResponse, type ShotMode, type SpeechResponse, type StitchedEntry, type Word } from "./api.js";
+import { ApiError, storyApi, useServerEvents, type PeaksResponse, type ShotMode, type SpeechResponse, type StitchedEntry, type StorySummary, type Word } from "./api.js";
 import { referenceChunks, retimeChunks } from "./chunks.js";
 import { entryAt, mergeTimeline } from "./merge.js";
 import { planTick } from "./playback.js";
@@ -7,6 +7,7 @@ import { selectItem, selectedRange, type SelectionItem } from "./selection.js";
 import type { SnapTarget } from "./snap.js";
 import { Preview } from "./Preview.js";
 import { ShotPanel } from "./ShotPanel.js";
+import { StoryPicker } from "./StoryPicker.js";
 import { decisionsForView, initialState, isDecisionsDirty, isDirty, isTimingDirty, reduce, wordsForView, workingBounds } from "./state.js";
 import { Timeline, type TimingRowData } from "./Timeline.js";
 import { effectiveWords, wordStartMap } from "./timing.js";
@@ -24,7 +25,11 @@ const EMPTY_ROW: TimingRowData = { words: [], chunks: [] };
 
 const describe = (e: unknown) => (e instanceof ApiError ? `${e.code}: ${e.message}` : e instanceof Error ? e.message : String(e));
 
-export function App() {
+type Props = { storyId: string; stories: ReadonlyArray<StorySummary>; onSelectStory: (storyId: string) => void };
+
+/** The editor for one story. Mount it with `key={storyId}` so a switch starts from a clean reducer, audio element, and event stream. */
+export function App({ storyId, stories, onSelectStory }: Props) {
+  const api = useMemo(() => storyApi(storyId), [storyId]);
   const [state, dispatch] = useReducer(reduce, initialState);
   const [peaks, setPeaks] = useState<PeaksResponse | null>(null);
   const [speech, setSpeech] = useState<SpeechResponse | null>(null);
@@ -78,30 +83,31 @@ export function App() {
 
   // Initial load.
   const loadTimeline = useCallback(async () => {
-    try { dispatch({ type: "timeline-loaded", timeline: await getTimeline() }); }
+    try { dispatch({ type: "timeline-loaded", timeline: await api.getTimeline() }); }
     catch (e) { dispatch({ type: "error", message: `Timeline load failed. ${describe(e)}` }); }
-  }, []);
+  }, [api]);
   const loadStory = useCallback(async () => {
-    try { dispatch({ type: "story-loaded", story: await getStory() }); return true; }
+    try { dispatch({ type: "story-loaded", story: await api.getStory() }); return true; }
     catch (e) { dispatch({ type: "error", message: `Story load failed. ${describe(e)}` }); return false; }
-  }, []);
+  }, [api]);
   useEffect(() => {
     void (async () => {
       if (!(await loadStory())) return;
       await loadTimeline();
-      try { setPeaks(await getPeaks()); }
+      try { setPeaks(await api.getPeaks()); }
       catch (e) { dispatch({ type: "error", message: `Peaks load failed. ${describe(e)}` }); }
       // A server without the speech route yet (404) just means no shading; anything else is reported.
-      try { setSpeech(await getSpeech()); }
+      try { setSpeech(await api.getSpeech()); }
       catch (e) { if (!(e instanceof ApiError && e.status === 404)) dispatch({ type: "error", message: `Speech regions load failed. ${describe(e)}` }); }
     })();
-  }, [loadStory, loadTimeline]);
+  }, [api, loadStory, loadTimeline]);
+  useEffect(() => { document.title = state.story === null ? "Story editor" : `${state.story.story.title} · Story editor`; }, [state.story]);
 
   // Live updates: a refetch never touches the audio element or an in-progress drag (the reducer keeps the drag and local edits).
   // The planning directory holds the timing overlays too, so the story is refetched with the timeline.
   const onTimelineChanged = useCallback(() => { void loadTimeline(); void loadStory(); }, [loadTimeline, loadStory]);
   const onStatus = useCallback((ok: boolean) => setConnected(ok), []);
-  useServerEvents({ onTimelineChanged, onStatus });
+  useServerEvents(api.eventsUrl, { onTimelineChanged, onStatus });
 
   // Debounced persistence with one save in flight at a time: decisions, then the word-timing overlay (A53), each only when dirty. The
   // effect re-runs when a save finishes, so edits made during a save get their own PUT.
@@ -115,12 +121,12 @@ export function App() {
     try {
       if (isDecisionsDirty(snapshot)) {
         const version = snapshot.editVersion;
-        const timeline = await putDecisions(snapshot.decisions);
+        const timeline = await api.putDecisions(snapshot.decisions);
         dispatch({ type: "save-succeeded", version, timeline });
       }
       if (isTimingDirty(snapshot)) {
         const version = snapshot.timingEditVersion;
-        const story = await putWordTiming({ words: snapshot.manual });
+        const story = await api.putWordTiming({ words: snapshot.manual });
         dispatch({ type: "timing-save-succeeded", version, story });
       }
     } catch (e) {
@@ -128,7 +134,7 @@ export function App() {
     } finally {
       inFlightRef.current = false;
     }
-  }, []);
+  }, [api]);
   useEffect(() => {
     if (!isDirty(state) || state.drag !== null || state.wordDrag !== null || state.save.status !== "saved") return;
     const timer = window.setTimeout(() => { void saveNow(); }, SAVE_DEBOUNCE_MS);
@@ -235,10 +241,10 @@ export function App() {
   }, [togglePlay, seek]);
 
   // Record-creating actions.
-  const createShot = useCallback(async (request: Parameters<typeof postShot>[0], selectInGroup: boolean) => {
+  const createShot = useCallback(async (request: Parameters<typeof api.postShot>[0], selectInGroup: boolean) => {
     setBusy(true);
     try {
-      const record = await postShot(request);
+      const record = await api.postShot(request);
       dispatch({ type: "record-added", record });
       if (selectInGroup) {
         const group = mergedRef.current.candidates.find(g => g.startSample === request.startSample);
@@ -247,7 +253,7 @@ export function App() {
     } catch (e) {
       dispatch({ type: "error", message: `Creating the shot failed. ${describe(e)}` });
     } finally { setBusy(false); }
-  }, []);
+  }, [api]);
   const onNewShot = useCallback(() => {
     const s = stateRef.current;
     const mode = currentShot?.mode ?? DEFAULT_MODE;
@@ -292,19 +298,26 @@ export function App() {
     setAlignBusy(true);
     try {
       if (isTimingDirty(s)) await saveNow();
-      const { report, story } = await postAlign({ startSample: first.startSample, endSample: last.endSample });
+      const { report, story } = await api.postAlign({ startSample: first.startSample, endSample: last.endSample });
       dispatch({ type: "story-loaded", story });
       dispatch({ type: "align-report-set", report });
     } catch (e) {
       dispatch({ type: "error", message: `Align failed. ${describe(e)}` });
     } finally { setAlignBusy(false); }
-  }, [saveNow]);
+  }, [api, saveNow]);
+  /** Switching stories remounts the editor, so anything unsaved (a failed save, or an edit inside the debounce) would be lost. */
+  const onPickStory = useCallback((id: string) => {
+    if (id === storyId) return;
+    if (isDirty(stateRef.current) && !window.confirm("This story has unsaved changes that will be lost. Switch story?")) return;
+    onSelectStory(id);
+  }, [storyId, onSelectStory]);
 
   return (
     <div className="app">
-      <audio ref={audioRef} src={AUDIO_URL} preload="auto" />
+      <audio ref={audioRef} src={api.audioUrl} preload="auto" />
       <header className="header">
-        <h1>{state.story ? `${state.story.story.title}` : "Story editor"}</h1>
+        <h1>Story editor</h1>
+        <StoryPicker stories={stories} value={storyId} onChange={onPickStory} />
         {state.story && <span className="muted">{state.story.story.bookTitle} · {state.story.clip.storyId} · {state.story.clip.sampleRateHz} Hz</span>}
         {state.error && <button type="button" className="error" onClick={() => dispatch({ type: "error-clear" })} title="Dismiss" data-testid="error">{state.error}</button>}
       </header>

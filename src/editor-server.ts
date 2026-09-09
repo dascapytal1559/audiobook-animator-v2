@@ -7,8 +7,8 @@ import { StoryPlanningError } from "./modules/story-planning/index.js";
 
 const usage = `Usage: node dist/editor-server.js --config config/editor-server.json --port 63620 [--static <dir>]
 
-Serve the verified story selected by the visual-timeline config on 127.0.0.1 with no authentication:
-  /api/story /api/timeline /api/decisions /api/shots /api/shots/:id/image /api/audio /api/peaks /api/events
+Serve every story under the config's storiesDirectory on 127.0.0.1 with no authentication. The story-planning config names the default:
+  /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /audio /peaks /speech /events
 With --static, files under <dir> are served at / with index.html as the fallback for unknown non-API paths.
 Config paths resolve from the config file. The listening URL, help, and errors go to stderr. Ctrl-C stops the server.`;
 const invalid = (message: string) => new EditorServerError({ code: "InvalidRequest", message });

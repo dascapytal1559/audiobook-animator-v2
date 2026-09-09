@@ -25,13 +25,13 @@ function decode<S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, 
 const writeAtomic = (path: string, bytes: Uint8Array) => writeAtomicBytes(path, bytes).pipe(Effect.mapError(() => new VisualTimelineError({ code: "IoFailed", message: `Cannot write ${path}.` })));
 const sameClip = (a: ClipIdentity, b: ClipIdentity) => (Object.keys(ClipIdentity.fields) as Array<keyof ClipIdentity>).every(k => a[k] === b[k]);
 
-/** Config, verified clip identity from story-planning, and the story directory every timeline file lives in. */
-function loadContext(configPath: string) {
+/** Config, verified clip identity from story-planning, and the story directory every timeline file lives in. `storyDirectory` overrides the planning config's default story. */
+function loadContext(configPath: string, explicitStoryDirectory?: string) {
   return Effect.gen(function* () {
     if (!configPath || configPath.includes("\0")) return yield* fail("InvalidConfig", "Supply an explicit configuration path.");
     const path = resolve(configPath);
     const config = yield* decode(VisualTimelineConfig, yield* read(path, 65_536), "InvalidConfig", path);
-    const context = yield* loadStoryContext({ configPath: resolve(dirname(path), config.storyPlanningConfigPath) });
+    const context = yield* loadStoryContext({ configPath: resolve(dirname(path), config.storyPlanningConfigPath), ...(explicitStoryDirectory !== undefined ? { storyDirectory: explicitStoryDirectory } : {}) });
     const clip: ClipIdentity = { bookId: context.bookId, storyId: context.story.id, audioSha256: context.story.audioSha256,
       transcriptSha256: context.story.transcriptSha256, sampleRateHz: context.story.sampleRateHz, sampleCount: context.story.sampleCount };
     const storyDirectory = context.storyDirectory;
@@ -83,11 +83,12 @@ const wrap = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.map
 const NO_WORDS: ReadonlyMap<string, number> = new Map();
 /**
  * Records plus decisions, merged into candidate groups and a stitched timeline covering the whole clip. Read-only.
+ * `storyDirectory` opens that story instead of the planning config's default (A18).
  * `wordStarts` (word id to effective start sample) resolves shot anchors; without it every anchor is unresolved and falls back to its override or record.
  */
-export function loadVisualTimeline(options: { readonly configPath: string; readonly wordStarts?: ReadonlyMap<string, number> }) {
+export function loadVisualTimeline(options: { readonly configPath: string; readonly storyDirectory?: string; readonly wordStarts?: ReadonlyMap<string, number> }) {
   return wrap(Effect.gen(function* () {
-    const ctx = yield* loadContext(options.configPath);
+    const ctx = yield* loadContext(options.configPath, options.storyDirectory);
     const records = yield* loadRecords(ctx);
     const decisions = yield* loadDecisions(ctx);
     const { candidates, stitched, unresolvedAnchors } = yield* mergeTimeline(records, decisions, ctx.clip.sampleCount, ctx.decisionsPath, options.wordStarts ?? NO_WORDS);
@@ -97,7 +98,10 @@ export function loadVisualTimeline(options: { readonly configPath: string; reado
 export type VisualTimeline = Effect.Success<ReturnType<typeof loadVisualTimeline>>;
 
 export type AddShotRequest = {
-  readonly configPath: string; readonly startSample?: number; readonly startSeconds?: number; readonly mode: ShotMode;
+  readonly configPath: string;
+  /** The story to write into; the planning config's default story when absent (A18). */
+  readonly storyDirectory?: string;
+  readonly startSample?: number; readonly startSeconds?: number; readonly mode: ShotMode;
   /** Explicit ULID for reproducible imports; a fresh one is minted when absent. */
   readonly id?: string;
   /** Explicit ISO-8601 UTC instant for reproducible imports; the current time when absent. */
@@ -109,7 +113,7 @@ export type AddShotRequest = {
 export function addShot(request: AddShotRequest) {
   return wrap(Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const ctx = yield* loadContext(request.configPath);
+    const ctx = yield* loadContext(request.configPath, request.storyDirectory);
     if ((request.startSample === undefined) === (request.startSeconds === undefined)) return yield* fail("InvalidRequest", "Supply exactly one of startSample or startSeconds.");
     if (request.startSeconds !== undefined && !Number.isFinite(request.startSeconds)) return yield* fail("InvalidRequest", "startSeconds must be a finite number.");
     const startSample = request.startSample ?? Math.round(request.startSeconds! * ctx.clip.sampleRateHz);
@@ -140,10 +144,10 @@ export function addShot(request: AddShotRequest) {
   }));
 }
 
-/** Validate the overlay against the current records (and anchors against `wordStarts` when given), then replace `decisions.json` atomically with a fresh `updatedAt`. */
-export function writeDecisions(options: { readonly configPath: string; readonly decisions: DecisionsBody; readonly wordStarts?: ReadonlyMap<string, number> }) {
+/** Validate the overlay against the current records (and anchors against `wordStarts` when given), then replace `decisions.json` atomically with a fresh `updatedAt`. `storyDirectory` overrides the default story. */
+export function writeDecisions(options: { readonly configPath: string; readonly storyDirectory?: string; readonly decisions: DecisionsBody; readonly wordStarts?: ReadonlyMap<string, number> }) {
   return wrap(Effect.gen(function* () {
-    const ctx = yield* loadContext(options.configPath);
+    const ctx = yield* loadContext(options.configPath, options.storyDirectory);
     const records = yield* loadRecords(ctx);
     const bytes = encode({ schemaVersion: 1, kind: "visual-timeline-decisions", clip: ctx.clip, updatedAt: new Date().toISOString(), settings: options.decisions.settings, shots: options.decisions.shots });
     const decisions = yield* decode(Decisions, bytes, "InvalidDecisions", "the supplied decisions");

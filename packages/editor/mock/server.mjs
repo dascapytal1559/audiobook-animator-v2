@@ -1,6 +1,7 @@
 // Loopback mock of the editor API for smoke-testing the client without the real server. node:http only.
-// Serves a synthetic 2-second clip, echoes PUT /api/decisions and PUT /api/word-timing through the same merge rules, answers
-// POST /api/word-timing/align with a canned report, and records every PUT at GET /mock/puts.
+// Lists two stories at GET /api/stories that share one synthetic 2-second clip and one in-memory state (enough to exercise the story
+// selector); every other route lives under /api/stories/:storyId/. Echoes PUT .../decisions and PUT .../word-timing through the same merge
+// rules, answers POST .../word-timing/align with a canned report, and records every PUT at GET /mock/puts.
 import { createServer } from "node:http";
 
 const PORT = Number(process.env["MOCK_PORT"] ?? "63621");
@@ -10,6 +11,9 @@ const SAMPLES_PER_BUCKET = 256;
 const CHUNKING = { pauseBreakMs: 300, minSentenceBreakMs: 150 };
 const sha = (c) => c.repeat(64);
 const clip = { bookId: "exhalation", storyId: "the-great-silence", audioSha256: sha("a"), transcriptSha256: sha("b"), sampleRateHz: RATE, sampleCount: COUNT };
+const summary = (id, title, bookId, bookTitle) => ({ id, title, bookId, bookTitle, wordCount: 7, sampleRateHz: RATE, sampleCount: COUNT, durationSeconds: 2, durationDisplay: "00:00:02.000" });
+const STORIES = [summary("the-great-silence", "The Great Silence (mock)", "exhalation", "Exhalation"), summary("tower-of-babylon", "Tower of Babylon (mock)", "stories-of-your-life-and-others", "Stories of Your Life and Others")];
+const DEFAULT_STORY = "the-great-silence";
 const ms = (n) => Math.round((n / 1000) * RATE);
 
 // Words with a 400 ms pause between "we" and "would" (850 ms → 1250 ms), so a pause-midpoint snap target exists at 1050 ms.
@@ -43,10 +47,11 @@ function chunksOf(words) {
   });
   return out;
 }
-function story() {
+function story(storyId) {
   const words = effective();
   const inversions = words.filter((w, i) => i > 0 && w.startSample < words[i - 1].endSample).map(w => w.id);
-  return { clip, story: { title: "The Great Silence (mock)", bookTitle: "Exhalation" }, sourceStartSample: 123456789, words, chunks: chunksOf(words), chunking: { ...CHUNKING, mergedSentenceBreaks: [] }, timing: { inversions, autoRuns, manualCount: Object.keys(manual).length, autoCount: Object.keys(auto).length } };
+  const listed = STORIES.find(s => s.id === storyId);
+  return { clip: { ...clip, bookId: listed.bookId, storyId }, story: { title: listed.title, bookTitle: listed.bookTitle }, sourceStartSample: 123456789, words, chunks: chunksOf(words), chunking: { ...CHUNKING, mergedSentenceBreaks: [] }, timing: { inversions, autoRuns, manualCount: Object.keys(manual).length, autoCount: Object.keys(auto).length } };
 }
 // Speech regions (A44): the synthetic tone is silent only during the 850–1250 ms pause, so two regions with a deliberate 150 ms lead on the words.
 const speech = { schemaVersion: 1, audioSha256: clip.audioSha256, sampleRateHz: RATE, sampleCount: COUNT, frameSamples: ms(10), thresholdDbfs: -50, minSilenceMs: 150, minSpeechMs: 50, regions: [{ startSample: ms(250), endSample: ms(850) }, { startSample: ms(1250), endSample: ms(2000) }] };
@@ -75,10 +80,10 @@ const puts = [];
 const posts = [];
 const sseClients = new Set();
 
-const withUrl = (r) => (r.imagePath === undefined ? r : { ...r, imageUrl: `/api/shots/${r.id}/image` });
-function merge() {
+const withUrl = (storyId) => (r) => (r.imagePath === undefined ? r : { ...r, imageUrl: `/api/stories/${storyId}/shots/${r.id}/image` });
+function merge(storyId) {
   const groups = new Map();
-  for (const rec of records.map(withUrl)) {
+  for (const rec of records.map(withUrl(storyId))) {
     const d = decisions.shots[rec.id] ?? {};
     const { schemaVersion, kind, clip: _c, ...fields } = rec;
     const anchored = d.anchorWordId !== undefined ? wordsById().get(d.anchorWordId)?.startSample : undefined;
@@ -100,7 +105,7 @@ function merge() {
   if (firstStart > 0) stitched.unshift({ kind: "gap", startSample: 0, endSample: firstStart });
   return { candidates, stitched };
 }
-const timeline = () => ({ clip, storyDirectory: "/mock/stories/the-great-silence", records: records.map(withUrl), decisions, ...merge() });
+const timeline = (storyId) => ({ clip, storyDirectory: `/mock/stories/${storyId}`, records: records.map(withUrl(storyId)), decisions, ...merge(storyId) });
 
 // Synthetic audio: a 220 Hz tone with a slow amplitude sweep, silent during the 850–1250 ms pause.
 const pcm = new Int16Array(COUNT);
@@ -160,13 +165,18 @@ function parseMultipart(body, contentType) {
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
-  const path = url.pathname;
   try {
-    if (req.method === "GET" && path === "/api/story") return json(res, 200, story());
+    if (req.method === "GET" && url.pathname === "/mock/puts") return json(res, 200, { puts, posts });
+    if (req.method === "GET" && url.pathname === "/api/stories") return json(res, 200, { defaultStoryId: DEFAULT_STORY, stories: STORIES });
+    // Story-scoped routes: strip the prefix, then dispatch on the remainder as before.
+    const scoped = /^\/api\/stories\/([a-z0-9-]+)(\/.+)$/.exec(url.pathname);
+    if (!scoped || !STORIES.some(s => s.id === scoped[1])) return fail(res, 404, "NotFound", `No route for ${req.method} ${url.pathname}.`);
+    const storyId = scoped[1];
+    const path = `/api${scoped[2]}`;
+    if (req.method === "GET" && path === "/api/story") return json(res, 200, story(storyId));
     if (req.method === "GET" && path === "/api/speech") return json(res, 200, speech);
-    if (req.method === "GET" && path === "/api/timeline") return json(res, 200, timeline());
+    if (req.method === "GET" && path === "/api/timeline") return json(res, 200, timeline(storyId));
     if (req.method === "GET" && path === "/api/peaks") return json(res, 200, peaks);
-    if (req.method === "GET" && path === "/mock/puts") return json(res, 200, { puts, posts });
     if (req.method === "GET" && path === "/api/audio") {
       const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
       if (range) {
@@ -204,7 +214,7 @@ const server = createServer(async (req, res) => {
       decisions = { ...decisions, updatedAt: new Date().toISOString(), settings: body.settings, shots: body.shots };
       puts.push({ at: new Date().toISOString(), route: "/api/decisions", body });
       console.error(`PUT /api/decisions #${puts.length}: ${JSON.stringify(body)}`);
-      const response = timeline();
+      const response = timeline(storyId);
       json(res, 200, response);
       return broadcast("timeline-changed");
     }
@@ -218,7 +228,7 @@ const server = createServer(async (req, res) => {
       manual = { ...body.words };
       puts.push({ at: new Date().toISOString(), route: "/api/word-timing", body });
       console.error(`PUT /api/word-timing #${puts.length}: ${JSON.stringify(body)}`);
-      json(res, 200, story());
+      json(res, 200, story(storyId));
       return broadcast("timeline-changed");
     }
     if (req.method === "POST" && path === "/api/word-timing/align") {
@@ -232,7 +242,7 @@ const server = createServer(async (req, res) => {
       autoRuns.push({ startSample: body.startSample, endSample: body.endSample, ranAt: new Date().toISOString(), report });
       posts.push({ at: new Date().toISOString(), route: "/api/word-timing/align", body });
       console.error(`POST /api/word-timing/align: ${JSON.stringify(body)} → ${inRange.length} words`);
-      json(res, 200, { report, story: story() });
+      json(res, 200, { report, story: story(storyId) });
       return broadcast("timeline-changed");
     }
     if (req.method === "POST" && path === "/api/shots") {
@@ -245,7 +255,7 @@ const server = createServer(async (req, res) => {
       const created = addRecord(startSample, fields.mode, extra, files.image);
       posts.push({ at: new Date().toISOString(), fields, image: files.image ? { name: files.image.name, bytes: files.image.bytes.length } : null });
       console.error(`POST /api/shots #${posts.length}: ${JSON.stringify(posts[posts.length - 1])}`);
-      json(res, 200, withUrl(created));
+      json(res, 200, withUrl(storyId)(created));
       return broadcast("timeline-changed");
     }
     return fail(res, 404, "NotFound", `No route for ${req.method} ${path}.`);

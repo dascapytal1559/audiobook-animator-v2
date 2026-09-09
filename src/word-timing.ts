@@ -7,14 +7,15 @@ import { StoryPlanningError } from "./modules/story-planning/index.js";
 import { measureRange, WordTimingError } from "./modules/word-timing/index.js";
 
 const usage = `Usage:
-  node dist/word-timing.js align   --config config/editor-server.json (--from S --to S | --all) [--dry-run]
-  node dist/word-timing.js measure --config config/editor-server.json --from S --to S
+  node dist/word-timing.js align   --config config/editor-server.json [--story <id>] (--from S --to S | --all) [--dry-run]
+  node dist/word-timing.js measure --config config/editor-server.json [--story <id>] --from S --to S
 
 align    runs the energy-only pass (lead shift, phrase snap, interior scale) over the words whose original start lies in [--from, --to) seconds,
          merges the result into <story>/word-timing.auto.json, and prints the before/after report as JSON on stdout. --all is the explicit
          whole-clip flag; --dry-run prints the report and writes nothing. word-timing.json (the editor's manual overlay) is never touched.
 measure  prints the same statistics for the range without aligning: once for the original transcript timing and once for the effective timing.
 Both need the speech regions, computed once with ffmpeg beside the waveform peaks and cached as <story>/cache/speech.json.
+--story names a directory under the config's storiesDirectory; without it the story-planning config's default story is used.
 Config paths resolve from the config file. Help and errors go to stderr.`;
 const invalid = (message: string) => new EditorServerError({ code: "InvalidRequest", message });
 const seconds = (name: string, value: string | undefined) => {
@@ -26,7 +27,7 @@ const seconds = (name: string, value: string | undefined) => {
 
 const main = Effect.gen(function* () {
   const { values, positionals } = yield* Effect.try({
-    try: () => parseArgs({ options: { config: { type: "string" }, help: { type: "boolean" }, from: { type: "string" }, to: { type: "string" }, all: { type: "boolean" }, "dry-run": { type: "boolean" } }, strict: true, allowPositionals: true }),
+    try: () => parseArgs({ options: { config: { type: "string" }, story: { type: "string" }, help: { type: "boolean" }, from: { type: "string" }, to: { type: "string" }, all: { type: "boolean" }, "dry-run": { type: "boolean" } }, strict: true, allowPositionals: true }),
     catch: () => invalid("Invalid arguments. Run with --help for usage."),
   });
   if (values.help) return yield* Console.error(usage);
@@ -38,7 +39,8 @@ const main = Effect.gen(function* () {
   if (all && (from !== undefined || to !== undefined)) return yield* Effect.fail(invalid("--all excludes --from and --to."));
   if (!all && (from === undefined || to === undefined)) return yield* Effect.fail(invalid(command === "align" ? "Supply --from and --to in seconds, or --all for the whole clip." : "Supply --from and --to in seconds."));
   if (command === "measure" && all) return yield* Effect.fail(invalid("measure takes --from and --to, not --all."));
-  const ctx = yield* loadEditorContext({ configPath: values.config });
+  if (values.story !== undefined && values.story.trim() === "") return yield* Effect.fail(invalid("--story must name a story directory."));
+  const ctx = yield* loadEditorContext({ configPath: values.config, ...(values.story !== undefined ? { storyId: values.story } : {}) });
   const range = all ? { startSample: 0, endSample: ctx.clip.sampleCount } : { startSample: Math.round(from! * ctx.clip.sampleRateHz), endSample: Math.min(ctx.clip.sampleCount, Math.round(to! * ctx.clip.sampleRateHz)) };
   const caches = makeCaches(ctx);
   const stdio = yield* Stdio.Stdio;

@@ -50,10 +50,11 @@ export type CandidateGroup = { startSample: number; shots: EffectiveShot[]; sele
 export type StitchedEntry = (EffectiveShot & { kind: "shot"; endSample: number }) | { kind: "gap"; startSample: number; endSample: number };
 
 export type TimelineResponse = { clip: ClipIdentity; storyDirectory: string; records: ShotRecord[]; decisions: Decisions; candidates: CandidateGroup[]; stitched: StitchedEntry[] };
+/** One entry of `GET /api/stories`: the story's manifest identity and size, in directory order. */
+export type StorySummary = { id: string; title: string; bookId: string; bookTitle: string; wordCount: number; sampleRateHz: number; sampleCount: number; durationSeconds: number; durationDisplay: string };
+export type StoriesResponse = { defaultStoryId: string; stories: StorySummary[] };
 export type PeaksResponse = { schemaVersion: number; audioSha256: string; sampleRateHz: number; sampleCount: number; samplesPerBucket: number; min: number[]; max: number[] };
 export type NewShotRequest = { startSample: number; mode: ShotMode; label?: string; prompt?: string; notes?: string; image?: File };
-
-export const AUDIO_URL = "/api/audio";
 
 export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); this.name = "ApiError"; }
@@ -74,35 +75,44 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export const getStory = () => request<StoryResponse>("/api/story");
-export const getTimeline = () => request<TimelineResponse>("/api/timeline");
-export const getPeaks = () => request<PeaksResponse>("/api/peaks");
-export const getSpeech = () => request<SpeechResponse>("/api/speech");
-export const putWordTiming = (body: WordTimingBody) =>
-  request<StoryResponse>("/api/word-timing", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-export const postAlign = (body: AlignRequest) =>
-  request<AlignResponse>("/api/word-timing/align", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-export const putDecisions = (body: DecisionsBody) =>
-  request<TimelineResponse>("/api/decisions", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+export const getStories = () => request<StoriesResponse>("/api/stories");
 
-export function postShot(shot: NewShotRequest): Promise<ShotRecord> {
-  const form = new FormData();
-  form.set("startSample", String(shot.startSample));
-  form.set("mode", shot.mode);
-  if (shot.label !== undefined) form.set("label", shot.label);
-  if (shot.prompt !== undefined) form.set("prompt", shot.prompt);
-  if (shot.notes !== undefined) form.set("notes", shot.notes);
-  if (shot.image !== undefined) form.set("image", shot.image, shot.image.name);
-  return request<ShotRecord>("/api/shots", { method: "POST", body: form });
+/** Every request the editor makes for one story lives under `/api/stories/:storyId` (A18). One instance per opened story. */
+export function storyApi(storyId: string) {
+  const base = `/api/stories/${encodeURIComponent(storyId)}`;
+  const jsonInit = (method: string, body: unknown): RequestInit => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  return {
+    storyId,
+    audioUrl: `${base}/audio`,
+    eventsUrl: `${base}/events`,
+    getStory: () => request<StoryResponse>(`${base}/story`),
+    getTimeline: () => request<TimelineResponse>(`${base}/timeline`),
+    getPeaks: () => request<PeaksResponse>(`${base}/peaks`),
+    getSpeech: () => request<SpeechResponse>(`${base}/speech`),
+    putWordTiming: (body: WordTimingBody) => request<StoryResponse>(`${base}/word-timing`, jsonInit("PUT", body)),
+    postAlign: (body: AlignRequest) => request<AlignResponse>(`${base}/word-timing/align`, jsonInit("POST", body)),
+    putDecisions: (body: DecisionsBody) => request<TimelineResponse>(`${base}/decisions`, jsonInit("PUT", body)),
+    postShot(shot: NewShotRequest): Promise<ShotRecord> {
+      const form = new FormData();
+      form.set("startSample", String(shot.startSample));
+      form.set("mode", shot.mode);
+      if (shot.label !== undefined) form.set("label", shot.label);
+      if (shot.prompt !== undefined) form.set("prompt", shot.prompt);
+      if (shot.notes !== undefined) form.set("notes", shot.notes);
+      if (shot.image !== undefined) form.set("image", shot.image, shot.image.name);
+      return request<ShotRecord>(`${base}/shots`, { method: "POST", body: form });
+    },
+  };
 }
+export type StoryApi = ReturnType<typeof storyApi>;
 
 export type ServerEventHandlers = { onReady?: () => void; onTimelineChanged: () => void; onStatus?: (connected: boolean) => void };
 
-/** Subscribes to /api/events for the component's lifetime. EventSource reconnects on its own after a drop. */
-export function useServerEvents(handlers: ServerEventHandlers): void {
+/** Subscribes to the story's events route for the component's lifetime. EventSource reconnects on its own after a drop. */
+export function useServerEvents(url: string, handlers: ServerEventHandlers): void {
   const { onReady, onTimelineChanged, onStatus } = handlers;
   useEffect(() => {
-    const source = new EventSource("/api/events");
+    const source = new EventSource(url);
     const ready = () => { onStatus?.(true); onReady?.(); };
     const changed = () => onTimelineChanged();
     const error = () => onStatus?.(false);
@@ -110,5 +120,5 @@ export function useServerEvents(handlers: ServerEventHandlers): void {
     source.addEventListener("timeline-changed", changed);
     source.addEventListener("error", error);
     return () => { source.close(); };
-  }, [onReady, onTimelineChanged, onStatus]);
+  }, [url, onReady, onTimelineChanged, onStatus]);
 }

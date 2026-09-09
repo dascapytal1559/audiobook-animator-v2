@@ -18,6 +18,15 @@ test("planning context preserves complete paired input including raw words, punc
   assert.equal(result.paths.audioPath, join(f.dir, "audio.flac"));
   assert.deepEqual(await readFile(join(f.dir, "transcript.json")), before);
 });
+test("an explicit storyDirectory replaces the config's default story while the config still supplies the limits", async t => {
+  const f = await fixture(t);
+  f.config.storyDirectory = "nowhere";
+  await f.save();
+  await assert.rejects(run(f.configPath), code("IoFailed"), "the config's story does not exist");
+  const result = await Effect.runPromise(loadStoryContext({ configPath: f.configPath, storyDirectory: f.dir }).pipe(Effect.provide(NodeServices.layer)));
+  assert.deepEqual([result.story.id, result.storyDirectory], ["pilot", f.dir]);
+  await assert.rejects(Effect.runPromise(loadStoryContext({ configPath: f.configPath, storyDirectory: "" }).pipe(Effect.provide(NodeServices.layer))), code("InvalidConfig"));
+});
 test("a manifest whose id, duration, links, or origin disagree with its directory and transcript fails; so do stale or malformed files", async t => {
   const cases: ReadonlyArray<[string, string]> = [["id", "InvalidManifest"], ["duration", "InvalidManifest"], ["outside", "InvalidManifest"], ["origin", "TranscriptMismatch"], ["kind", "TranscriptMismatch"], ["manifest", "InvalidManifest"], ["transcript", "TranscriptMismatch"]];
   for (const [issue, expected] of cases) {

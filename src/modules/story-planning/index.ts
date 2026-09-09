@@ -70,13 +70,17 @@ export function loadStoryManifest(options: { readonly storyDirectory: string; re
 }
 export type LoadedStoryManifest = Effect.Success<ReturnType<typeof loadStoryManifest>>;
 
-/** Read-only planning input: the manifest-verified story plus its complete paired transcript, checked element by element. Historical evidence locators are retained, not reopened. */
-export function loadStoryContext(options: { readonly configPath: string }) {
+/**
+ * Read-only planning input: the manifest-verified story plus its complete paired transcript, checked element by element. Historical evidence locators are retained, not reopened.
+ * The story is the config's `storyDirectory` (the default story, A18) unless an explicit `storyDirectory` is given; the config always supplies the limits.
+ */
+export function loadStoryContext(options: { readonly configPath: string; readonly storyDirectory?: string }) {
   return Effect.gen(function* () {
     if (!options.configPath || options.configPath.includes("\0")) return yield* fail("InvalidConfig", "Supply an explicit configuration path.");
+    if (options.storyDirectory !== undefined && (options.storyDirectory === "" || options.storyDirectory.includes("\0"))) return yield* fail("InvalidConfig", "An explicit story directory must be a non-empty path.");
     const configPath = resolve(options.configPath);
     const config = yield* decode(StoryPlanningConfig, yield* readBounded(configPath, 65_536), "InvalidConfig", configPath, true);
-    const loaded = yield* loadStoryManifest({ storyDirectory: resolve(dirname(configPath), config.storyDirectory), limits: config.limits });
+    const loaded = yield* loadStoryManifest({ storyDirectory: options.storyDirectory ?? resolve(dirname(configPath), config.storyDirectory), limits: config.limits });
     const { manifest: story, paths, storyDirectory } = loaded;
     const transcript = yield* decode(PlanningTranscript, loaded.transcriptBytes, "TranscriptMismatch", paths.transcriptPath, true);
     const { segment, audio, provenance, timing } = transcript;

@@ -1,5 +1,6 @@
 {
   "schemaVersion": 1,
+  "storiesDirectory": "../data/stories",
   "visualTimelineConfigPath": "visual-timeline.json",
   "ffmpegPath": "ffmpeg",
   "peaks": {

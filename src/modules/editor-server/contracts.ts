@@ -5,9 +5,13 @@ const NonNegative = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Num
 const Positive = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
 const Int16 = Schema.Int.check(Schema.isBetween({ minimum: -32768, maximum: 32767 }));
 
-/** `config/editor-server.json`. Paths resolve from the config file; the port and static directory are command-line arguments. */
+/**
+ * `config/editor-server.json`. Paths resolve from the config file; the port and static directory are command-line arguments.
+ * Every directory under `storiesDirectory` is a story the server can open (A55); the story-planning config reached through the visual-timeline config names the default one (A18) and must live directly under it.
+ */
 export const EditorServerConfig = Schema.Struct({
   schemaVersion: Schema.Literal(1),
+  storiesDirectory: Path,
   visualTimelineConfigPath: Path,
   ffmpegPath: Path,
   peaks: Schema.Struct({ samplesPerBucket: Positive, maxCacheBytes: Positive }),
