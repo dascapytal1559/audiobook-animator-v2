@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "sourcePath": "../data/books/stories-of-your-life-and-others/input/book.mp3",
+  "artifactDirectory": "../data/books/stories-of-your-life-and-others/artifacts",
+  "expectedSource": {
+    "sha256": "cb7b97dd6bda3c1fd45237b65b6181d93f8fb9182fb27ac3c1b4513fd11ed3e6",
+    "byteLength": 209581343
+  },
+  "maxInputBytes": 2000000000,
+  "maxDurationSeconds": 61200,
+  "maxTranscriptBytes": 67108864,
+  "maxNormalizedTranscriptBytes": 536870912,
+  "timestampToleranceSeconds": 0.1,
+  "inspection": {
+    "ffprobePath": "ffprobe",
+    "probeTimeoutMs": 30000,
+    "maxProbeOutputBytes": 8388608,
+    "maxProbeErrorBytes": 65536,
+    "hashChunkBytes": 1048576,
+    "cueChapterToleranceSeconds": 0.02,
+    "audioStreamIndex": 0
+  }
+}

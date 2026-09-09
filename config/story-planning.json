@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "bookId": "exhalation",
+  "bookTitle": "Exhalation",
+  "storyId": "the-great-silence",
+  "inventoryPath": "../data/books/exhalation/split/inventory.json",
+  "inventorySha256": "645ef417223c5b9aef13c75567e8c2aa9c70c3fe8fb3cd99a564c6b1457a2f6e",
+  "limits": {
+    "maxInventoryBytes": 1048576,
+    "maxTranscriptBytes": 16777216,
+    "maxAudioManifestBytes": 1048576,
+    "maxElements": 100000
+  }
+}

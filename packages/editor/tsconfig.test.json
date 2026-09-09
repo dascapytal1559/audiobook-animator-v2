@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "rootDir": "src",
+    "outDir": "test-dist",
+    "types": ["vite/client", "node"],
+    "sourceMap": true
+  },
+  "include": ["src/time.ts", "src/time.test.ts", "src/snap.ts", "src/snap.test.ts", "src/state.ts", "src/state.test.ts", "src/merge.ts", "src/merge.test.ts", "src/playback.ts", "src/playback.test.ts", "src/api.ts"]
+}

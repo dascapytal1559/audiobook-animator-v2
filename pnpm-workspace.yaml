@@ -1,0 +1,16 @@
+packages:
+  - .
+  - packages/*
+
+saveExact: true
+engineStrict: true
+strictPeerDependencies: true
+autoInstallPeers: false
+nodeLinker: isolated
+preferFrozenLockfile: true
+pmOnFail: download
+verifyDepsBeforeRun: error
+ignoreScripts: false
+strictDepBuilds: true
+allowBuilds:
+  msgpackr-extract@3.0.4: true

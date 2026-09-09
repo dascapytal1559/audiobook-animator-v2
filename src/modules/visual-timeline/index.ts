@@ -1,0 +1,160 @@
+import { randomBytes } from "node:crypto";
+import { basename, dirname, extname, join, resolve } from "node:path";
+import { Effect, FileSystem, Schema } from "effect";
+import { loadStoryContext, StoryPlanningError } from "../story-planning/index.js";
+import { readBounded } from "../story-planning/io.js";
+import { ClipIdentity, DEFAULT_SETTINGS, Decisions, type DecisionsBody, type ShotMode, ShotRecord, VisualTimelineConfig, VisualTimelineError } from "./contracts.js";
+import { mergeTimeline } from "./merge.js";
+import { isUlid, mintUlid } from "./ulid.js";
+export { ClipIdentity, Decisions, DEFAULT_SETTINGS, type DecisionsBody, ShotDecision, ShotMode, ShotRecord, TimelineSettings, VisualTimelineConfig, VisualTimelineError } from "./contracts.js";
+export { type CandidateGroup, type EffectiveShot, mergeTimeline, type StitchedEntry } from "./merge.js";
+export { isUlid, mintUlid, ULID_PATTERN } from "./ulid.js";
+type Code = VisualTimelineError["code"];
+const fail = (code: Code, message: string) => Effect.fail(new VisualTimelineError({ code, message }));
+const encode = (value: unknown) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+/** Reuse story-planning's bounded reader; keep its message, own the error type. */
+const read = (path: string, limit: number) => readBounded(path, limit).pipe(Effect.mapError(e => new VisualTimelineError({ code: "IoFailed", message: e.message })));
+const io = <A>(effect: Effect.Effect<A, unknown>, message: string) => effect.pipe(Effect.mapError(e => e instanceof VisualTimelineError ? e : new VisualTimelineError({ code: "IoFailed", message })));
+function decode<S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) {
+  return Effect.gen(function* () {
+    const raw = yield* Effect.try({ try: () => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown,
+      catch: () => new VisualTimelineError({ code, message: `Input is not valid UTF-8 JSON: ${path}.` }) });
+    return yield* Schema.decodeUnknownEffect(schema, { onExcessProperty: "error" })(raw).pipe(
+      Effect.mapError(e => new VisualTimelineError({ code, message: `Input does not match the required schema: ${path}. ${e.message.replace(/\s+/g, " ")}` })));
+  });
+}
+/** Write bytes to a sibling temp file, then rename into place so readers never observe a partial file. */
+function writeAtomic(path: string, bytes: Uint8Array) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const temp = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString("hex")}.tmp`);
+    yield* fs.writeFile(temp, bytes, { flag: "wx" });
+    yield* fs.rename(temp, path).pipe(Effect.onError(() => fs.remove(temp).pipe(Effect.ignore)));
+  }).pipe(Effect.mapError(e => e instanceof VisualTimelineError ? e : new VisualTimelineError({ code: "IoFailed", message: `Cannot write ${path}.` })));
+}
+const sameClip = (a: ClipIdentity, b: ClipIdentity) => (Object.keys(ClipIdentity.fields) as Array<keyof ClipIdentity>).every(k => a[k] === b[k]);
+
+/** Config, verified clip identity from story-planning, and the resolved planning directory. */
+function loadContext(configPath: string) {
+  return Effect.gen(function* () {
+    if (!configPath || configPath.includes("\0")) return yield* fail("InvalidConfig", "Supply an explicit configuration path.");
+    const path = resolve(configPath);
+    const config = yield* decode(VisualTimelineConfig, yield* read(path, 65_536), "InvalidConfig", path);
+    const context = yield* loadStoryContext({ configPath: resolve(dirname(path), config.storyPlanningConfigPath) });
+    const clip: ClipIdentity = { bookId: context.bookId, storyId: context.story.id, audioSha256: context.story.audioSha256,
+      transcriptSha256: context.story.transcriptSha256, sampleRateHz: context.story.sampleRateHz, sampleCount: context.story.sampleCount };
+    const planningDirectory = resolve(dirname(path), config.planningDirectory);
+    return { config, clip, planningDirectory, shotsDirectory: join(planningDirectory, "shots"), decisionsPath: join(planningDirectory, "decisions.json") };
+  });
+}
+type Context = Effect.Success<ReturnType<typeof loadContext>>;
+
+/** Every `shots/<id>/record.json`, each checked against its directory name, the clip identity, the clip length, and its image on disk. Dot entries are ignored. */
+function loadRecords(ctx: Context) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    if (!(yield* io(fs.exists(ctx.shotsDirectory), `Cannot inspect ${ctx.shotsDirectory}.`))) return [] as ReadonlyArray<ShotRecord>;
+    const entries = (yield* io(fs.readDirectory(ctx.shotsDirectory), `Cannot list ${ctx.shotsDirectory}.`)).filter(e => !e.startsWith(".")).sort();
+    if (entries.length > ctx.config.limits.maxRecords) return yield* fail("InvalidRecord", `${ctx.shotsDirectory} holds ${entries.length} entries, above the configured limit of ${ctx.config.limits.maxRecords}.`);
+    const records: ShotRecord[] = [];
+    for (const entry of entries) {
+      const directory = join(ctx.shotsDirectory, entry);
+      const path = join(directory, "record.json");
+      if (!isUlid(entry) || (yield* io(fs.stat(directory), `Cannot inspect ${directory}.`)).type !== "Directory") return yield* fail("InvalidRecord", `Unexpected entry in the shots directory; every entry must be a ULID-named directory: ${directory}.`);
+      const record = yield* decode(ShotRecord, yield* read(path, ctx.config.limits.maxRecordBytes), "InvalidRecord", path);
+      if (record.id !== entry) return yield* fail("InvalidRecord", `Record id ${record.id} does not match its directory name in ${path}.`);
+      if (!sameClip(record.clip, ctx.clip)) return yield* fail("IdentityMismatch", `Record is pinned to a different clip than the verified story: ${path}.`);
+      if (record.startSample >= ctx.clip.sampleCount) return yield* fail("InvalidRecord", `startSample ${record.startSample} is outside the clip's ${ctx.clip.sampleCount} samples in ${path}.`);
+      if (Number.isNaN(Date.parse(record.createdAt))) return yield* fail("InvalidRecord", `createdAt is not a real instant in ${path}.`);
+      if (record.imagePath !== undefined) {
+        const image = join(directory, record.imagePath);
+        const info = yield* fs.stat(image).pipe(Effect.mapError(() => new VisualTimelineError({ code: "InvalidRecord", message: `Image referenced by ${path} does not exist: ${image}.` })));
+        if (info.type !== "File") return yield* fail("InvalidRecord", `Image referenced by ${path} is not a regular file: ${image}.`);
+      }
+      records.push(record);
+    }
+    return records as ReadonlyArray<ShotRecord>;
+  });
+}
+function loadDecisions(ctx: Context) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    if (!(yield* io(fs.exists(ctx.decisionsPath), `Cannot inspect ${ctx.decisionsPath}.`))) {
+      return { schemaVersion: 1, kind: "visual-timeline-decisions", clip: ctx.clip, updatedAt: new Date(0).toISOString(), settings: DEFAULT_SETTINGS, shots: {} } as Decisions;
+    }
+    const decisions = yield* decode(Decisions, yield* read(ctx.decisionsPath, ctx.config.limits.maxDecisionsBytes), "InvalidDecisions", ctx.decisionsPath);
+    if (!sameClip(decisions.clip, ctx.clip)) return yield* fail("IdentityMismatch", `Decisions are pinned to a different clip than the verified story: ${ctx.decisionsPath}.`);
+    return decisions;
+  });
+}
+const wrap = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.mapError(e => e instanceof VisualTimelineError || e instanceof StoryPlanningError ? e : new VisualTimelineError({ code: "IoFailed", message: "Cannot read the visual timeline." })));
+
+/** Records plus decisions, merged into candidate groups and a stitched timeline covering the whole clip. Read-only. */
+export function loadVisualTimeline(options: { readonly configPath: string }) {
+  return wrap(Effect.gen(function* () {
+    const ctx = yield* loadContext(options.configPath);
+    const records = yield* loadRecords(ctx);
+    const decisions = yield* loadDecisions(ctx);
+    const { candidates, stitched } = yield* mergeTimeline(records, decisions, ctx.clip.sampleCount, ctx.decisionsPath);
+    return { clip: ctx.clip, planningDirectory: ctx.planningDirectory, records, decisions, candidates, stitched };
+  }));
+}
+export type VisualTimeline = Effect.Success<ReturnType<typeof loadVisualTimeline>>;
+
+export type AddShotRequest = {
+  readonly configPath: string; readonly startSample?: number; readonly startSeconds?: number; readonly mode: ShotMode;
+  /** Explicit ULID for reproducible imports; a fresh one is minted when absent. */
+  readonly id?: string;
+  /** Explicit ISO-8601 UTC instant for reproducible imports; the current time when absent. */
+  readonly createdAt?: string;
+  readonly label?: string; readonly prompt?: string; readonly imageSourcePath?: string; readonly notes?: string;
+  readonly producer: { readonly name: string; readonly version: string };
+};
+/** Mint or take an id, create `shots/<id>/`, copy the image beside the record, and write `record.json` atomically. Never overwrites. */
+export function addShot(request: AddShotRequest) {
+  return wrap(Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const ctx = yield* loadContext(request.configPath);
+    if ((request.startSample === undefined) === (request.startSeconds === undefined)) return yield* fail("InvalidRequest", "Supply exactly one of startSample or startSeconds.");
+    if (request.startSeconds !== undefined && !Number.isFinite(request.startSeconds)) return yield* fail("InvalidRequest", "startSeconds must be a finite number.");
+    const startSample = request.startSample ?? Math.round(request.startSeconds! * ctx.clip.sampleRateHz);
+    if (!Number.isSafeInteger(startSample) || startSample < 0 || startSample >= ctx.clip.sampleCount) return yield* fail("InvalidRequest", `Start ${startSample} is outside the clip's ${ctx.clip.sampleCount} samples.`);
+    let image: { readonly name: string; readonly bytes: Uint8Array } | undefined;
+    if (request.imageSourcePath !== undefined) {
+      const source = resolve(request.imageSourcePath);
+      const bytes = yield* read(source, ctx.config.limits.maxImageBytes);
+      image = { name: `image${extname(source).toLowerCase()}`, bytes };
+    }
+    if (request.id !== undefined && !isUlid(request.id)) return yield* fail("InvalidRequest", `Explicit id is not a ULID: ${request.id}.`);
+    if (request.createdAt !== undefined && Number.isNaN(Date.parse(request.createdAt))) return yield* fail("InvalidRequest", `Explicit createdAt is not a real instant: ${request.createdAt}.`);
+    const id = request.id ?? mintUlid();
+    const directory = join(ctx.shotsDirectory, id);
+    if (yield* io(fs.exists(directory), `Cannot inspect ${directory}.`)) return yield* fail("RecordExists", `A record directory already exists: ${directory}.`);
+    const record = { schemaVersion: 1, kind: "visual-shot-generation", id, clip: ctx.clip, startSample, mode: request.mode,
+      ...(request.label !== undefined ? { label: request.label } : {}), ...(request.prompt !== undefined ? { prompt: request.prompt } : {}),
+      ...(image ? { imagePath: image.name } : {}), ...(request.notes !== undefined ? { notes: request.notes } : {}),
+      createdAt: request.createdAt ?? new Date().toISOString(), producer: request.producer };
+    const bytes = encode(record);
+    const decoded = yield* decode(ShotRecord, bytes, "InvalidRequest", `the new record ${id}`);
+    if (bytes.byteLength > ctx.config.limits.maxRecordBytes) return yield* fail("InvalidRequest", `The new record would exceed maxRecordBytes (${ctx.config.limits.maxRecordBytes}).`);
+    yield* io(fs.makeDirectory(ctx.shotsDirectory, { recursive: true }), `Cannot create ${ctx.shotsDirectory}.`);
+    yield* fs.makeDirectory(directory).pipe(Effect.mapError(() => new VisualTimelineError({ code: "RecordExists", message: `Cannot create a fresh record directory: ${directory}.` })));
+    if (image) yield* io(fs.writeFile(join(directory, image.name), image.bytes, { flag: "wx" }), `Cannot copy the image into ${directory}.`);
+    yield* writeAtomic(join(directory, "record.json"), bytes);
+    return decoded;
+  }));
+}
+
+/** Validate the overlay against the current records, then replace `decisions.json` atomically with a fresh `updatedAt`. */
+export function writeDecisions(options: { readonly configPath: string; readonly decisions: DecisionsBody }) {
+  return wrap(Effect.gen(function* () {
+    const ctx = yield* loadContext(options.configPath);
+    const records = yield* loadRecords(ctx);
+    const bytes = encode({ schemaVersion: 1, kind: "visual-timeline-decisions", clip: ctx.clip, updatedAt: new Date().toISOString(), settings: options.decisions.settings, shots: options.decisions.shots });
+    const decisions = yield* decode(Decisions, bytes, "InvalidDecisions", "the supplied decisions");
+    if (bytes.byteLength > ctx.config.limits.maxDecisionsBytes) return yield* fail("InvalidDecisions", `The decisions would exceed maxDecisionsBytes (${ctx.config.limits.maxDecisionsBytes}).`);
+    yield* mergeTimeline(records, decisions, ctx.clip.sampleCount, "the supplied decisions");
+    yield* writeAtomic(ctx.decisionsPath, bytes);
+    return decisions;
+  }));
+}

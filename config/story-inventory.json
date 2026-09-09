@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "books": [
+    {
+      "bookId": "exhalation",
+      "inventoryPath": "../data/books/exhalation/split/inventory.json",
+      "synopsisPath": "../data/books/exhalation/synopses.json",
+      "outputMarkdownPath": "../data/books/exhalation/inventory.md"
+    },
+    {
+      "bookId": "stories-of-your-life-and-others",
+      "inventoryPath": "../data/books/stories-of-your-life-and-others/split/inventory.json",
+      "synopsisPath": "../data/books/stories-of-your-life-and-others/synopses.json",
+      "outputMarkdownPath": "../data/books/stories-of-your-life-and-others/inventory.md"
+    }
+  ],
+  "outputMarkdownPath": "../data/books/inventory.md",
+  "outputJsonPath": "../data/books/inventory.json",
+  "limits": {
+    "maxBooks": 16,
+    "maxStoriesPerBook": 128,
+    "maxInventoryBytes": 4194304,
+    "maxSynopsisBytes": 1048576,
+    "maxTranscriptBytes": 134217728,
+    "maxAudioManifestBytes": 1048576,
+    "maxOutputBytes": 4194304
+  }
+}

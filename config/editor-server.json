@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "visualTimelineConfigPath": "visual-timeline.json",
+  "ffmpegPath": "ffmpeg",
+  "peaks": {
+    "samplesPerBucket": 1024,
+    "maxCacheBytes": 16777216
+  },
+  "watch": {
+    "debounceMs": 200
+  },
+  "limits": {
+    "maxUploadBytes": 52428800,
+    "requestTimeoutMs": 30000
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "storyPlanningConfigPath": "story-planning.json",
+  "planningDirectory": "../data/books/exhalation/planning/the-great-silence",
+  "limits": {
+    "maxRecordBytes": 65536,
+    "maxDecisionsBytes": 1048576,
+    "maxRecords": 5000,
+    "maxImageBytes": 52428800
+  }
+}

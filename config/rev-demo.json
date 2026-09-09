@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "apiBaseUrl": "https://api.rev.ai/speechtotext/v1",
+  "transcriber": "machine",
+  "language": "en",
+  "inputPath": "../data/demo/rev-ai/input.flac",
+  "provenancePath": "../data/demo/rev-ai/input-provenance.json",
+  "artifactDirectory": "../data/demo/rev-ai/artifacts",
+  "maxInputBytes": 16777216,
+  "maxClipDurationSeconds": 120,
+  "requestTimeoutMs": 30000,
+  "pollTimeoutMs": 180000,
+  "pollIntervalMs": 2000,
+  "maxResponseBytes": 2097152,
+  "timestampToleranceSeconds": 0.1
+}

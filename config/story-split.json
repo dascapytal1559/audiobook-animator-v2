@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "concurrency": 2,
+  "maxSegments": 128,
+  "maxPlanBytes": 4194304,
+  "maxTranscriptBytes": 536870912,
+  "maxEvidenceBytes": 67108864,
+  "maxSegmentTranscriptBytes": 134217728,
+  "maxInventoryBytes": 4194304,
+  "maxRunManifestBytes": 1048576,
+  "wordTimingToleranceSeconds": 0.1,
+  "audio": {
+    "ffmpegPath": "ffmpeg",
+    "inspection": {
+      "ffprobePath": "ffprobe",
+      "probeTimeoutMs": 30000,
+      "maxProbeOutputBytes": 8388608,
+      "maxProbeErrorBytes": 65536,
+      "hashChunkBytes": 1048576,
+      "cueChapterToleranceSeconds": 0.02
+    },
+    "extractionTimeoutMs": 1800000,
+    "verificationTimeoutMs": 900000,
+    "maxProcessOutputBytes": 8388608,
+    "maxProcessErrorBytes": 65536,
+    "maxOutputBytes": 4000000000,
+    "maxManifestBytes": 1048576
+  }
+}

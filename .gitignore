@@ -4,3 +4,7 @@ data/
 .env
 *.js.map
 .DS_Store
+/book_Exhalation.mp3
+/book_Stories.mp3
+/input.json
+/book_Stories.json
