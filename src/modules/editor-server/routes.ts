@@ -23,6 +23,8 @@ export type EditorContext = {
   readonly configPath: string; readonly config: EditorServerConfig;
   readonly timelineConfigPath: string; readonly timelineConfig: VisualTimelineConfig;
   readonly story: StoryContext; readonly clip: ClipIdentity; readonly storyDirectory: string;
+  /** Regenerable caches live here, apart from source and work files; the watcher ignores it. */
+  readonly cacheDirectory: string;
   readonly peaksPath: string; readonly peaksIdentity: PeaksIdentity; readonly speechPath: string; readonly speechIdentity: SpeechIdentity;
   /** Transcript elements (words with original timing, plus punctuation) in order, for chunking. */
   readonly elements: ReadonlyArray<ChunkElement>;
@@ -58,7 +60,7 @@ export function loadEditorContext(options: { readonly configPath: string }): Eff
     if (frameSamples < 1) return yield* fail("InvalidConfig", `speech.frameMs ${config.speech.frameMs} is shorter than one sample at ${clip.sampleRateHz} Hz in ${configPath}.`);
     const peaksIdentity: PeaksIdentity = { audioSha256: clip.audioSha256, sampleRateHz: clip.sampleRateHz, sampleCount: clip.sampleCount, samplesPerBucket: config.peaks.samplesPerBucket };
     const speechIdentity: SpeechIdentity = { audioSha256: clip.audioSha256, sampleRateHz: clip.sampleRateHz, sampleCount: clip.sampleCount, frameSamples, thresholdDbfs: config.speech.thresholdDbfs, minSilenceMs: config.speech.minSilenceMs, minSpeechMs: config.speech.minSpeechMs };
-    return { configPath, config, timelineConfigPath, timelineConfig, story, clip, storyDirectory, peaksPath: join(storyDirectory, "peaks.json"), peaksIdentity, speechPath: join(storyDirectory, "speech.json"), speechIdentity, elements, words };
+    return { configPath, config, timelineConfigPath, timelineConfig, story, clip, storyDirectory, cacheDirectory: join(storyDirectory, "cache"), peaksPath: join(storyDirectory, "cache", "peaks.json"), peaksIdentity, speechPath: join(storyDirectory, "cache", "speech.json"), speechIdentity, elements, words };
   });
 }
 
@@ -128,7 +130,7 @@ export function makeEditorRoutes(ctx: EditorContext, options: EditorRouteOptions
     return value.trim() === "" || !Number.isFinite(parsed) ? fail("InvalidRequest", `${name} must be a finite number.`) : Effect.succeed(parsed);
   };
   const sse = (event: string) => Sse.encoder.write({ _tag: "Event", event, id: undefined, data: JSON.stringify({ at: new Date().toISOString() }) });
-  const ignoredChange = (path: string) => basename(path).startsWith(".") || path === ctx.peaksPath || path === ctx.speechPath;
+  const ignoredChange = (path: string) => basename(path).startsWith(".") || path === ctx.cacheDirectory || path.startsWith(ctx.cacheDirectory + "/");
 
   const story = HttpRouter.add("GET", "/api/story", handle(storyJson));
   const timelineRoute = HttpRouter.add("GET", "/api/timeline", handle(Effect.map(timeline, t => json(t))));

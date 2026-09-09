@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 import { Effect, FileSystem, Fiber, Option, Schema, Stream } from "effect";
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process";
 import { readBounded, writeAtomic } from "../story-planning/io.js";
@@ -112,5 +113,9 @@ export function readPeaksCache(path: string, maxBytes: number, identity: PeaksId
 
 /** Compact JSON through a sibling temp file and rename; a reader never sees a partial cache. */
 export function writeCache(path: string, value: PeaksFile | SpeechFile): Effect.Effect<void, EditorServerError, FileSystem.FileSystem> {
-  return writeAtomic(path, Buffer.from(`${JSON.stringify(value)}\n`)).pipe(Effect.mapError(e => new EditorServerError({ code: "IoFailed", message: e.message })));
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(dirname(path), { recursive: true });
+    yield* writeAtomic(path, Buffer.from(`${JSON.stringify(value)}\n`));
+  }).pipe(Effect.mapError(e => new EditorServerError({ code: "IoFailed", message: e.message })));
 }

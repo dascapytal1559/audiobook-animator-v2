@@ -18,6 +18,7 @@ async function serve(t: TestContext, options: { readonly staticDirectory?: strin
   const story = await fixture(t, options.words ? { words: options.words } : {});
   const planningDirectory = story.dir;
   await mkdir(join(planningDirectory, "shots"), { recursive: true });
+  await mkdir(join(planningDirectory, "cache"), { recursive: true });
   await writeFile(join(story.root, "visual-timeline.json"), encode({ schemaVersion: 1, storyPlanningConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } }));
   const configPath = join(story.root, "editor-server.json");
   // At 10 Hz a 100 ms frame is one sample; the lead is 2 samples.
@@ -30,7 +31,7 @@ async function serve(t: TestContext, options: { readonly staticDirectory?: strin
   const run = <A, E>(effect: Effect.Effect<A, E, Layer.Success<typeof layer>>) => Effect.runPromise(effect.pipe(Effect.provide(layer)));
   const clip = ctx.clip;
   const speechFile = (regions: ReadonlyArray<{ startSample: number; endSample: number }>, extra: Record<string, unknown> = {}) =>
-    writeFile(join(planningDirectory, "speech.json"), JSON.stringify({ schemaVersion: 1, kind: "speech-regions", audioSha256: clip.audioSha256, sampleRateHz: 10, sampleCount: 100, frameSamples: 1, thresholdDbfs: -50, minSilenceMs: 200, minSpeechMs: 100, regions, ...extra }));
+    writeFile(join(planningDirectory, "cache", "speech.json"), JSON.stringify({ schemaVersion: 1, kind: "speech-regions", audioSha256: clip.audioSha256, sampleRateHz: 10, sampleCount: 100, frameSamples: 1, thresholdDbfs: -50, minSilenceMs: 200, minSpeechMs: 100, regions, ...extra }));
   return { story, ctx, clip, planningDirectory, run, speechFile };
 }
 /** Three more words on the 10 Hz clip: 30..35, 35..40, then 60..70 after a 2-second pause. */
@@ -71,14 +72,14 @@ test("/api/speech serves a cache pinned to the clip and its parameters; a stale 
   }));
   const stale = await serve(t);
   const peaks = { schemaVersion: 1, audioSha256: stale.clip.audioSha256, sampleRateHz: 10, sampleCount: 100, samplesPerBucket: 16, min: [-7, -6, -5, -4, -3, -2, -1], max: [7, 6, 5, 4, 3, 2, 1] };
-  await writeFile(join(stale.planningDirectory, "peaks.json"), JSON.stringify(peaks));
+  await writeFile(join(stale.planningDirectory, "cache", "peaks.json"), JSON.stringify(peaks));
   await stale.speechFile([{ startSample: 10, endSample: 30 }], { thresholdDbfs: -40 });
   await stale.run(Effect.gen(function* () {
     assert.deepEqual(yield* bodyJson(yield* get("/api/peaks")), peaks, "the valid peaks cache is served without decoding");
     const miss = yield* get("/api/speech");
     assert.equal(miss.status, 500);
     assert.equal((yield* bodyJson(miss))["code"], "PeaksFailed");
-    assert.equal((yield* readJson(join(stale.planningDirectory, "speech.json")))["thresholdDbfs"], -40, "a failed decode leaves the old file untouched");
+    assert.equal((yield* readJson(join(stale.planningDirectory, "cache", "speech.json")))["thresholdDbfs"], -40, "a failed decode leaves the old file untouched");
   }));
 });
 
@@ -331,21 +332,21 @@ test("/api/events sends ready on connect and pushes timeline-changed after a fil
 test("/api/peaks serves a cache pinned to the clip and recomputes when the pin differs, surfacing a decode failure as 500 PeaksFailed", async t => {
   const s = await serve(t);
   const peaks = { schemaVersion: 1, audioSha256: s.clip.audioSha256, sampleRateHz: 10, sampleCount: 100, samplesPerBucket: 16, min: [-7, -6, -5, -4, -3, -2, -1], max: [7, 6, 5, 4, 3, 2, 1] };
-  await writeFile(join(s.planningDirectory, "peaks.json"), JSON.stringify(peaks));
+  await writeFile(join(s.planningDirectory, "cache", "peaks.json"), JSON.stringify(peaks));
   await s.run(Effect.gen(function* () {
     const hit = yield* get("/api/peaks");
     assert.equal(hit.status, 200);
     assert.deepEqual(yield* bodyJson(hit), peaks);
   }));
   const stale = await serve(t);
-  await writeFile(join(stale.planningDirectory, "peaks.json"), JSON.stringify({ ...peaks, audioSha256: "b".repeat(64) }));
+  await writeFile(join(stale.planningDirectory, "cache", "peaks.json"), JSON.stringify({ ...peaks, audioSha256: "b".repeat(64) }));
   await stale.run(Effect.gen(function* () {
     // The fixture's "audio" is 12 opaque bytes, so a recompute (with or without ffmpeg installed) must fail loudly rather than serve the stale cache.
     const miss = yield* get("/api/peaks");
     assert.equal(miss.status, 500);
     const body = yield* bodyJson(miss);
     assert.equal(body["code"], "PeaksFailed");
-    assert.deepEqual(JSON.parse(yield* Effect.promise(() => readFile(join(stale.planningDirectory, "peaks.json"), "utf8"))), { ...peaks, audioSha256: "b".repeat(64) }, "a failed recompute leaves the old file untouched");
+    assert.deepEqual(JSON.parse(yield* Effect.promise(() => readFile(join(stale.planningDirectory, "cache", "peaks.json"), "utf8"))), { ...peaks, audioSha256: "b".repeat(64) }, "a failed recompute leaves the old file untouched");
   }));
 });
 

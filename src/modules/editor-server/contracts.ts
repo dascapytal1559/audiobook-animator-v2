@@ -22,7 +22,7 @@ export const EditorServerConfig = Schema.Struct({
 });
 export type EditorServerConfig = typeof EditorServerConfig.Type;
 
-/** `<story>/peaks.json`: int16 min/max per bucket of decoded mono samples, pinned to the clip's audio hash. The last bucket may be partial. */
+/** `<story>/cache/peaks.json`: int16 min/max per bucket of decoded mono samples, pinned to the clip's audio hash. The last bucket may be partial. */
 export const PeaksFile = Schema.Struct({
   schemaVersion: Schema.Literal(1), audioSha256: Sha256, sampleRateHz: Positive, sampleCount: Positive, samplesPerBucket: Positive,
   min: Schema.Array(Int16), max: Schema.Array(Int16),
@@ -30,7 +30,7 @@ export const PeaksFile = Schema.Struct({
 export type PeaksFile = typeof PeaksFile.Type;
 
 const Index = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }));
-/** `<story>/speech.json`: detected speech regions on the clip clock, pinned to the audio hash and the detection parameters. Computed in the same decode as peaks (A46). */
+/** `<story>/cache/speech.json`: detected speech regions on the clip clock, pinned to the audio hash and the detection parameters. Computed in the same decode as peaks (A46). */
 export const SpeechFile = Schema.Struct({
   schemaVersion: Schema.Literal(1), kind: Schema.Literal("speech-regions"), audioSha256: Sha256, sampleRateHz: Positive, sampleCount: Positive,
   frameSamples: Positive, thresholdDbfs: Schema.Number, minSilenceMs: Positive, minSpeechMs: Positive,

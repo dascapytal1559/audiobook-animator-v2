@@ -14,7 +14,7 @@ align    runs the energy-only pass (lead shift, phrase snap, interior scale) ove
          merges the result into <story>/word-timing.auto.json, and prints the before/after report as JSON on stdout. --all is the explicit
          whole-clip flag; --dry-run prints the report and writes nothing. word-timing.json (the editor's manual overlay) is never touched.
 measure  prints the same statistics for the range without aligning: once for the original transcript timing and once for the effective timing.
-Both need the speech regions, computed once with ffmpeg beside the waveform peaks and cached as <story>/speech.json.
+Both need the speech regions, computed once with ffmpeg beside the waveform peaks and cached as <story>/cache/speech.json.
 Config paths resolve from the config file. Help and errors go to stderr.`;
 const invalid = (message: string) => new EditorServerError({ code: "InvalidRequest", message });
 const seconds = (name: string, value: string | undefined) => {
