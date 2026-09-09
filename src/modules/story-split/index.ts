@@ -2,7 +2,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { Effect, FileSystem, Schema } from "effect";
 import { inspectSourceMedia } from "../source-media/index.js";
 import { extractStoryAudio } from "../story-audio/index.js";
-import { sha256 } from "../transcription/artifacts.js";
+import { sha256 } from "../transcription/content-hash.js";
 import { jsonBytes, readBookArtifact, retainBookArtifact } from "../transcription/book-artifacts.js";
 import { BookTranscriptForSplit, StorySplitConfig, StorySplitError, StorySplitPlan, type SplitInventoryEntry, type StorySplitResult, type StorySplitSegment } from "./contracts.js";
 

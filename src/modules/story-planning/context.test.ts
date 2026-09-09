@@ -14,18 +14,23 @@ test("planning context preserves complete paired input including raw words, punc
   const result = await run(f.configPath);
   assert.deepEqual(result.transcript, f.transcript);
   assert.equal(result.story.durationSeconds, 10);
+  assert.deepEqual([result.bookId, result.bookTitle, result.story.synopsis, result.storyDirectory], ["book", "Book", "A synthetic pilot story.", f.dir]);
   assert.equal(result.paths.audioPath, join(f.dir, "audio.flac"));
   assert.deepEqual(await readFile(join(f.dir, "transcript.json")), before);
 });
-test("wrong story, book, kind and stale inventory or transcript fail", async t => {
-  for (const issue of ["story", "book", "kind", "inventory", "transcript"]) {
+test("a manifest whose id, duration, links, or origin disagree with its directory and transcript fails; so do stale or malformed files", async t => {
+  const cases: ReadonlyArray<[string, string]> = [["id", "InvalidManifest"], ["duration", "InvalidManifest"], ["outside", "InvalidManifest"], ["origin", "TranscriptMismatch"], ["kind", "TranscriptMismatch"], ["manifest", "InvalidManifest"], ["transcript", "TranscriptMismatch"]];
+  for (const [issue, expected] of cases) {
     const f = await fixture(t);
-    if (issue === "story") f.config.storyId = "missing";
-    if (issue === "book") f.config.bookTitle = "Wrong book";
+    if (issue === "id") f.story.id = "missing";
+    if (issue === "duration") f.story.durationSeconds = 11;
+    if (issue === "outside") f.story.audioPath = "../audio.flac";
+    if (issue === "origin") f.story.origin.providerJobId = "other";
     if (issue === "kind") f.transcript.segment.kind = "author-note";
     await f.save();
-    if (issue === "inventory" || issue === "transcript") await writeFile(join(f.dir, `${issue}.json`), "{}");
-    await assert.rejects(run(f.configPath), code(issue === "kind" || issue === "transcript" ? "TranscriptMismatch" : "InvalidInventory"));
+    if (issue === "manifest") await writeFile(join(f.dir, "story.json"), "{}");
+    if (issue === "transcript") await writeFile(join(f.dir, "transcript.json"), "{}");
+    await assert.rejects(run(f.configPath), code(expected), issue);
   }
 });
 test("malformed stable references, timing, word count and audio links fail even with updated document hashes", async t => {
@@ -38,7 +43,7 @@ test("malformed stable references, timing, word count and audio links fail even 
     if (issue === "count") f.transcript.wordCount = 2;
     if (issue === "link") f.transcript.audio.path = "different.flac";
     await f.save();
-    await assert.rejects(run(f.configPath), code("TranscriptMismatch"));
+    await assert.rejects(run(f.configPath), code("TranscriptMismatch"), issue);
   }
 });
 test("missing linked files, changed audio size, and explicit read limits fail", async t => {
@@ -48,5 +53,7 @@ test("missing linked files, changed audio size, and explicit read limits fail", 
   await rm(join(f.dir, "audio.flac"));
   await assert.rejects(run(f.configPath), code("IoFailed"));
   f.config.limits.maxTranscriptBytes = 10; await f.save();
+  await assert.rejects(run(f.configPath), code("IoFailed"));
+  f.config.limits.maxTranscriptBytes = 65536; f.config.limits.maxManifestBytes = 10; await f.save();
   await assert.rejects(run(f.configPath), code("IoFailed"));
 });

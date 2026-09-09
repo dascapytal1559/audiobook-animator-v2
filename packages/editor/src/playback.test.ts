@@ -7,7 +7,7 @@ import { planTick } from "./playback.js";
 const clip: ClipIdentity = { bookId: "b", storyId: "s", audioSha256: "a".repeat(64), transcriptSha256: "b".repeat(64), sampleRateHz: 48000, sampleCount: 96000 };
 const record = (id: string, startSample: number): ShotRecord =>
   ({ schemaVersion: 1, kind: "visual-shot-generation", id, clip, startSample, mode: "graphic-illustration", createdAt: "2026-01-01T00:00:00Z", producer: { name: "t", version: "1" } });
-const { stitched } = mergeTimeline([record("aaa", 0), record("bbb", 33600), record("ccc", 50400)], { settings: { frameAspect: { width: 16, height: 9 } }, shots: {} }, clip.sampleCount);
+const { stitched } = mergeTimeline([record("aaa", 0), record("bbb", 33600), record("ccc", 50400)], { settings: { frameAspect: { width: 16, height: 9 } }, shots: {} }, clip.sampleCount, new Map());
 const base = { sampleCount: clip.sampleCount, toleranceSamples: 48, stitched, region: null };
 
 test("without loop or region playback advances until the clip end, then stops there", () => {

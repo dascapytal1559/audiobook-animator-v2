@@ -14,15 +14,15 @@ const failsWith = (code: string, pattern?: RegExp) => (error: unknown) =>
   error instanceof VisualTimelineError && error.code === code && (pattern === undefined || pattern.test(error.message));
 const T = (ms: number) => new Date(Date.UTC(2026, 8, 8, 0, 0, 0, ms)).toISOString();
 
-/** A planning directory beside the synthetic story (10 Hz, 100 samples) with helpers for hand-written records. */
+/** The synthetic story directory (10 Hz, 100 samples) with helpers for hand-written records. Timeline files live beside the story's manifest. */
 async function planning(t: TestContext) {
   const story = await fixture(t);
-  const planningDirectory = join(story.dir, "planning");
+  const planningDirectory = story.dir;
   await mkdir(join(planningDirectory, "shots"), { recursive: true });
-  const configPath = join(story.dir, "visual-timeline.json");
-  const config = { schemaVersion: 1, storyPlanningConfigPath: "config.json", planningDirectory: "planning", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } };
+  const configPath = join(story.root, "visual-timeline.json");
+  const config = { schemaVersion: 1, storyPlanningConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } };
   await writeFile(configPath, encode(config));
-  const clip = { bookId: "book", storyId: "pilot", audioSha256: story.inventory.stories[0]!.audioSha256, transcriptSha256: story.inventory.stories[0]!.transcriptSha256, sampleRateHz: 10, sampleCount: 100 };
+  const clip = { bookId: "book", storyId: "pilot", audioSha256: story.story.audioSha256, transcriptSha256: story.story.transcriptSha256, sampleRateHz: 10, sampleCount: 100 };
   const producer = { name: "test", version: "0" };
   let counter = 0;
   async function record(fields: Record<string, unknown>, directoryName?: string) {
@@ -35,7 +35,7 @@ async function planning(t: TestContext) {
   }
   const decisions = (shots: DecisionsBody["shots"], extra: Record<string, unknown> = {}) =>
     writeFile(join(planningDirectory, "decisions.json"), encode({ schemaVersion: 1, kind: "visual-timeline-decisions", clip, updatedAt: T(0), settings: { frameAspect: { width: 16, height: 9 } }, shots, ...extra }));
-  return { story, configPath, planningDirectory, clip, producer, record, decisions, load: () => provide(loadVisualTimeline({ configPath })) };
+  return { story, configPath, planningDirectory, clip, producer, record, decisions, load: (wordStarts?: ReadonlyMap<string, number>) => provide(loadVisualTimeline({ configPath, ...(wordStarts ? { wordStarts } : {}) })) };
 }
 
 test("ULIDs are 26 Crockford characters, timestamp-prefixed, and unique", () => {
@@ -142,6 +142,34 @@ test("decision overrides move a shot into another group; hidden shots are never 
   await assert.rejects(p.load(), failsWith("InvalidDecisions", /outside the clip/));
 });
 
+test("an anchored shot follows its word's effective start over any startSample override; without known words the anchor is unresolved and falls back; a stale anchor is rejected", async t => {
+  const p = await planning(t);
+  const a = await p.record({ startSample: 0, createdAt: T(1) });
+  const b = await p.record({ startSample: 50, createdAt: T(2) });
+  await p.decisions({ [b.id]: { anchorWordId: "m2:e0", startSample: 30 } });
+  const words = new Map([["m2:e0", 13]]);
+  let result = await p.load(words);
+  assert.deepEqual(result.unresolvedAnchors, []);
+  assert.deepEqual(result.candidates.map(g => [g.startSample, g.selectedId]), [[0, a.id], [13, b.id]], "the anchor beats the startSample override");
+  assert.equal(result.candidates[1]!.shots[0]!.anchorWordId, "m2:e0");
+  assert.deepEqual(result.stitched.map(e => [e.kind, e.startSample, e.endSample]), [["shot", 0, 13], ["shot", 13, 100]]);
+  result = await p.load(new Map([["m2:e0", 60]]));
+  assert.deepEqual(result.candidates.map(g => [g.startSample, g.selectedId]), [[0, a.id], [60, b.id]], "the shot moves with the word");
+  result = await p.load();
+  assert.deepEqual(result.unresolvedAnchors, [b.id]);
+  assert.deepEqual(result.candidates.map(g => [g.startSample, g.selectedId]), [[0, a.id], [30, b.id]], "without words the override applies");
+  assert.equal(result.candidates[1]!.shots[0]!.anchorWordId, "m2:e0", "the anchor is still reported so a client can show it");
+  await p.decisions({ [b.id]: { anchorWordId: "m2:e0" } });
+  result = await p.load();
+  assert.deepEqual(result.candidates.map(g => [g.startSample, g.selectedId]), [[0, a.id], [50, b.id]], "without words or an override the record start applies");
+  await p.decisions({ [b.id]: { anchorWordId: "m9:e9" } });
+  await assert.rejects(p.load(words), failsWith("InvalidDecisions", /anchored to a word that is not in the transcript: m9:e9/));
+  assert.deepEqual((await p.load()).unresolvedAnchors, [b.id], "with unknown words a stale anchor is merely unresolved");
+  await assert.rejects(provide(writeDecisions({ configPath: p.configPath, decisions: { settings: { frameAspect: { width: 16, height: 9 } }, shots: { [b.id]: { anchorWordId: "m9:e9" } } }, wordStarts: words })), failsWith("InvalidDecisions", /m9:e9/));
+  await provide(writeDecisions({ configPath: p.configPath, decisions: { settings: { frameAspect: { width: 16, height: 9 } }, shots: { [b.id]: { anchorWordId: "m2:e0" } } }, wordStarts: words }));
+  assert.deepEqual((await p.load(words)).candidates.map(g => [g.startSample, g.selectedId]), [[0, a.id], [13, b.id]]);
+});
+
 test("addShot mints a record, copies the image, converts seconds to samples, and refuses an existing directory or oversized image", async t => {
   const p = await planning(t);
   const source = join(p.story.dir, "source.PNG");
@@ -207,12 +235,12 @@ test("a broken story identity surfaces as the story-planning error, not a timeli
 test("show on The Great Silence loads the real verified clip", async t => {
   const configPath = fileURLToPath(new URL("../../../config/visual-timeline.json", import.meta.url));
   const storyPlanningPath = fileURLToPath(new URL("../../../config/story-planning.json", import.meta.url));
-  const inventory = fileURLToPath(new URL("../../../data/books/exhalation/split/inventory.json", import.meta.url));
-  if (!(await access(inventory).then(() => true, () => false))) return t.skip("local story data is not present");
+  const manifest = fileURLToPath(new URL("../../../data/stories/the-great-silence/story.json", import.meta.url));
+  if (!(await access(manifest).then(() => true, () => false))) return t.skip("local story data is not present");
   assert.ok(await access(storyPlanningPath).then(() => true, () => false));
   const result = await provide(loadVisualTimeline({ configPath }));
   assert.deepEqual([result.clip.bookId, result.clip.storyId, result.clip.sampleRateHz, result.clip.sampleCount], ["exhalation", "the-great-silence", 44100, 21608368]);
-  assert.match(result.planningDirectory, /data\/books\/exhalation\/planning\/the-great-silence$/);
+  assert.match(result.storyDirectory, /data\/stories\/the-great-silence$/);
   const last = result.stitched.at(-1)!;
   assert.equal(last.endSample, 21608368);
   assert.equal(result.stitched[0]!.startSample, 0);

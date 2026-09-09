@@ -7,6 +7,9 @@ type ShotEntry = Extract<StitchedEntry, { kind: "shot" }>;
 type Props = {
   entry: StitchedEntry | null; group: CandidateGroup | null; next: ShotEntry | null; sampleRateHz: number; playhead: number;
   aspect: { width: number; height: number }; busy: boolean;
+  /** The word the current shot is anchored to (A51), resolved by the owner; null when the shot is not anchored. */
+  anchorWord: { id: string; value: string } | null;
+  onDetach: (id: string) => void;
   onSelect: (id: string) => void; onMode: (id: string, mode: ShotMode) => void; onNotes: (id: string, notes: string) => void; onHide: (id: string) => void;
   onAttachImage: (file: File) => void; onNewShot: () => void; onMergeNext: () => void; onAspect: (width: number, height: number) => void;
 };
@@ -54,6 +57,12 @@ export function ShotPanel(p: Props) {
             <h2 style={{ color: MODE_COLORS[shot.mode] }}>{shot.label ?? "Untitled shot"}</h2>
             <div className="muted mono">{shot.id}</div>
             <div className="muted">{formatSampleClock(shot.startSample, p.sampleRateHz)} → {formatSampleClock(shot.endSample, p.sampleRateHz)} · {shot.producer.name} {shot.producer.version}</div>
+            {p.anchorWord !== null && (
+              <div className="anchor-row" data-testid="anchor-row">
+                <span className="muted">anchored to “{p.anchorWord.value}”</span>
+                <button type="button" onClick={() => p.onDetach(shot.id)} disabled={p.busy} title="Keep the current start as a plain sample position" data-testid="detach-anchor">Detach</button>
+              </div>
+            )}
           </div>
           <div className="panel-section">
             <div className="field-label">Mode</div>

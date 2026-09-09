@@ -1,19 +1,56 @@
 // Loopback mock of the editor API for smoke-testing the client without the real server. node:http only.
-// Serves a synthetic 2-second clip, echoes PUT /api/decisions through the same merge rules, and records every PUT at GET /mock/puts.
+// Serves a synthetic 2-second clip, echoes PUT /api/decisions and PUT /api/word-timing through the same merge rules, answers
+// POST /api/word-timing/align with a canned report, and records every PUT at GET /mock/puts.
 import { createServer } from "node:http";
 
 const PORT = Number(process.env["MOCK_PORT"] ?? "63621");
 const RATE = 48000;
 const COUNT = RATE * 2;
 const SAMPLES_PER_BUCKET = 256;
+const CHUNKING = { pauseBreakMs: 300, minSentenceBreakMs: 150 };
 const sha = (c) => c.repeat(64);
 const clip = { bookId: "exhalation", storyId: "the-great-silence", audioSha256: sha("a"), transcriptSha256: sha("b"), sampleRateHz: RATE, sampleCount: COUNT };
 const ms = (n) => Math.round((n / 1000) * RATE);
 
 // Words with a 400 ms pause between "we" and "would" (850 ms → 1250 ms), so a pause-midpoint snap target exists at 1050 ms.
 const wordSpec = [["The", 100, 250], ["humans", 260, 520], ["use", 530, 640], ["we", 650, 850], ["would", 1250, 1450], ["call", 1460, 1600], ["silence", 1620, 1950]];
-const words = wordSpec.map(([value, s, e], i) => ({ id: `w${i + 1}`, value, startSample: ms(s), endSample: ms(e) }));
-const story = { clip, story: { title: "The Great Silence (mock)", bookTitle: "Exhalation" }, sourceStartSample: 123456789, words };
+// Three timing layers (A42): the transcriber's original, the script's auto overlay, and the editor's manual overlay. The mock starts with
+// one auto entry ("use", shifted 150 ms later like the pilot's measured lead) and one manual entry ("silence").
+const original = wordSpec.map(([value, s, e], i) => ({ id: `w${i + 1}`, value, startSample: ms(s), endSample: ms(e) }));
+const autoRuns = [];
+let auto = { w3: { startSample: ms(680), endSample: ms(790) } };
+let manual = { w7: { startSample: ms(1640), endSample: ms(1970) } };
+const effective = () => original.map(w => {
+  const layer = manual[w.id] ?? auto[w.id] ?? { startSample: w.startSample, endSample: w.endSample };
+  return { id: w.id, value: w.value, startSample: layer.startSample, endSample: layer.endSample, original: { startSample: w.startSample, endSample: w.endSample }, ...(auto[w.id] ? { auto: auto[w.id] } : {}), ...(manual[w.id] ? { manual: manual[w.id] } : {}) };
+});
+// Chunks as the real server's chunks.ts would produce them for "The humans use we[400 ms pause]would call silence." with a 300 ms pause break
+// (shorter than the real config's 600 ms so the two-second clip shows both a pause break and an end break), recomputed on effective times (A37).
+function chunksOf(words) {
+  const out = [];
+  let open = null;
+  const pauseBreak = ms(CHUNKING.pauseBreakMs);
+  const minSentenceBreak = ms(CHUNKING.minSentenceBreakMs);
+  words.forEach((w, i) => {
+    if (open === null) open = { startSample: w.startSample, endSample: w.endSample, values: [], wordIds: [] };
+    open.values.push(w.value); open.wordIds.push(w.id); open.endSample = w.endSample;
+    const next = words[i + 1];
+    const gap = next === undefined ? 0 : next.startSample - w.endSample;
+    const reason = next === undefined ? "end" : w.id === "w7" && gap >= minSentenceBreak ? "sentence" : gap >= pauseBreak ? "pause" : null;
+    if (reason === null) return;
+    out.push({ id: `c${out.length}`, startSample: open.startSample, endSample: open.endSample, text: open.values.join(" ") + (w.id === "w7" ? "." : ""), wordIds: open.wordIds, breakReason: reason });
+    open = null;
+  });
+  return out;
+}
+function story() {
+  const words = effective();
+  const inversions = words.filter((w, i) => i > 0 && w.startSample < words[i - 1].endSample).map(w => w.id);
+  return { clip, story: { title: "The Great Silence (mock)", bookTitle: "Exhalation" }, sourceStartSample: 123456789, words, chunks: chunksOf(words), chunking: { ...CHUNKING, mergedSentenceBreaks: [] }, timing: { inversions, autoRuns, manualCount: Object.keys(manual).length, autoCount: Object.keys(auto).length } };
+}
+// Speech regions (A44): the synthetic tone is silent only during the 850–1250 ms pause, so two regions with a deliberate 150 ms lead on the words.
+const speech = { schemaVersion: 1, audioSha256: clip.audioSha256, sampleRateHz: RATE, sampleCount: COUNT, frameSamples: ms(10), thresholdDbfs: -50, minSilenceMs: 150, minSpeechMs: 50, regions: [{ startSample: ms(250), endSample: ms(850) }, { startSample: ms(1250), endSample: ms(2000) }] };
+const wordsById = () => new Map(effective().map(w => [w.id, w]));
 
 const svg = (color, text) => `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="${color}"/><text x="320" y="190" font-size="40" text-anchor="middle" fill="#fff" font-family="sans-serif">${text}</text></svg>`;
 const images = new Map();
@@ -44,7 +81,8 @@ function merge() {
   for (const rec of records.map(withUrl)) {
     const d = decisions.shots[rec.id] ?? {};
     const { schemaVersion, kind, clip: _c, ...fields } = rec;
-    const shot = { ...fields, startSample: d.startSample ?? rec.startSample, mode: d.mode ?? rec.mode, ...(d.notes !== undefined ? { notes: d.notes } : {}), hidden: d.hidden === true, selected: false, ...(d.selected === true ? { selectionSource: "decision" } : {}) };
+    const anchored = d.anchorWordId !== undefined ? wordsById().get(d.anchorWordId)?.startSample : undefined;
+    const shot = { ...fields, startSample: anchored ?? d.startSample ?? rec.startSample, mode: d.mode ?? rec.mode, ...(d.notes !== undefined ? { notes: d.notes } : {}), hidden: d.hidden === true, selected: false, ...(d.selected === true ? { selectionSource: "decision" } : {}) };
     const g = groups.get(shot.startSample) ?? []; g.push(shot); groups.set(shot.startSample, g);
   }
   const candidates = [];
@@ -62,7 +100,7 @@ function merge() {
   if (firstStart > 0) stitched.unshift({ kind: "gap", startSample: 0, endSample: firstStart });
   return { candidates, stitched };
 }
-const timeline = () => ({ clip, planningDirectory: "/mock/planning/the-great-silence", records: records.map(withUrl), decisions, ...merge() });
+const timeline = () => ({ clip, storyDirectory: "/mock/stories/the-great-silence", records: records.map(withUrl), decisions, ...merge() });
 
 // Synthetic audio: a 220 Hz tone with a slow amplitude sweep, silent during the 850–1250 ms pause.
 const pcm = new Int16Array(COUNT);
@@ -124,7 +162,8 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
   const path = url.pathname;
   try {
-    if (req.method === "GET" && path === "/api/story") return json(res, 200, story);
+    if (req.method === "GET" && path === "/api/story") return json(res, 200, story());
+    if (req.method === "GET" && path === "/api/speech") return json(res, 200, speech);
     if (req.method === "GET" && path === "/api/timeline") return json(res, 200, timeline());
     if (req.method === "GET" && path === "/api/peaks") return json(res, 200, peaks);
     if (req.method === "GET" && path === "/mock/puts") return json(res, 200, { puts, posts });
@@ -160,12 +199,40 @@ const server = createServer(async (req, res) => {
         if (!records.some(r => r.id === id)) return fail(res, 400, "InvalidDecisions", `Decision references a shot with no generation record: ${id}.`);
         if (d.selected === true && d.hidden === true) return fail(res, 400, "InvalidDecisions", `Shot ${id} is both selected and hidden.`);
         if (d.startSample !== undefined && (!Number.isInteger(d.startSample) || d.startSample < 0 || d.startSample >= COUNT)) return fail(res, 400, "InvalidDecisions", `startSample out of range for ${id}.`);
+        if (d.anchorWordId !== undefined && !original.some(w => w.id === d.anchorWordId)) return fail(res, 400, "InvalidDecisions", `Unknown anchor word ${d.anchorWordId} for ${id}.`);
       }
       decisions = { ...decisions, updatedAt: new Date().toISOString(), settings: body.settings, shots: body.shots };
-      puts.push({ at: new Date().toISOString(), body });
+      puts.push({ at: new Date().toISOString(), route: "/api/decisions", body });
       console.error(`PUT /api/decisions #${puts.length}: ${JSON.stringify(body)}`);
       const response = timeline();
       json(res, 200, response);
+      return broadcast("timeline-changed");
+    }
+    if (req.method === "PUT" && path === "/api/word-timing") {
+      const body = JSON.parse((await readBody(req)).toString());
+      if (typeof body?.words !== "object" || body.words === null) return fail(res, 400, "InvalidWordTiming", "Body must have words.");
+      for (const [id, span] of Object.entries(body.words)) {
+        if (!original.some(w => w.id === id)) return fail(res, 400, "InvalidWordTiming", `Unknown word ${id}.`);
+        if (!Number.isInteger(span?.startSample) || !Number.isInteger(span?.endSample) || span.startSample < 0 || span.endSample > COUNT || span.endSample <= span.startSample) return fail(res, 400, "InvalidWordTiming", `Bad span for ${id}.`);
+      }
+      manual = { ...body.words };
+      puts.push({ at: new Date().toISOString(), route: "/api/word-timing", body });
+      console.error(`PUT /api/word-timing #${puts.length}: ${JSON.stringify(body)}`);
+      json(res, 200, story());
+      return broadcast("timeline-changed");
+    }
+    if (req.method === "POST" && path === "/api/word-timing/align") {
+      const body = JSON.parse((await readBody(req)).toString());
+      if (!Number.isInteger(body?.startSample) || !Number.isInteger(body?.endSample) || body.endSample <= body.startSample) return fail(res, 400, "InvalidRequest", "startSample and endSample required.");
+      // Canned pass: every original word in the range gets an auto value 150 ms later (the pilot's measured lead).
+      const inRange = original.filter(w => w.startSample < body.endSample && w.endSample > body.startSample);
+      for (const w of inRange) auto[w.id] = { startSample: w.startSample + ms(150), endSample: w.endSample + ms(150) };
+      const stats = (median) => ({ boundaryMedianMs: median, boundaryP10Ms: median / 3, boundaryP90Ms: median * 1.8, insideSpeechFraction: median > 100 ? 0.86 : 0.94, wordCount: inRange.length });
+      const report = { before: stats(152), after: stats(38) };
+      autoRuns.push({ startSample: body.startSample, endSample: body.endSample, ranAt: new Date().toISOString(), report });
+      posts.push({ at: new Date().toISOString(), route: "/api/word-timing/align", body });
+      console.error(`POST /api/word-timing/align: ${JSON.stringify(body)} → ${inRange.length} words`);
+      json(res, 200, { report, story: story() });
       return broadcast("timeline-changed");
     }
     if (req.method === "POST" && path === "/api/shots") {

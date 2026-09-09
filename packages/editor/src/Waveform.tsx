@@ -1,10 +1,15 @@
 import { useEffect, useRef } from "react";
-import type { PeaksResponse } from "./api.js";
+import type { PeaksResponse, Span } from "./api.js";
 
-type Props = { peaks: PeaksResponse | null; viewStartSample: number; pxPerSample: number; width: number; height: number };
+type Props = { peaks: PeaksResponse | null; regions: ReadonlyArray<Span> | null; viewStartSample: number; pxPerSample: number; width: number; height: number };
 
-/** Draws only the visible window of the clip: one min/max column per device pixel from the server's peak buckets (A22). */
-export function Waveform({ peaks, viewStartSample, pxPerSample, width, height }: Props) {
+const SPEECH_BAND = "rgba(74, 222, 128, 0.16)";
+
+/**
+ * Draws only the visible window of the clip: one min/max column per device pixel from the server's peak buckets (A22), over a
+ * translucent band for every detected speech region in view (A44) when `regions` is given.
+ */
+export function Waveform({ peaks, regions, viewStartSample, pxPerSample, width, height }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current;
@@ -16,6 +21,16 @@ export function Waveform({ peaks, viewStartSample, pxPerSample, width, height }:
     if (ctx === null) return;
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
+    if (regions !== null) {
+      const viewEndSample = viewStartSample + width / pxPerSample;
+      ctx.fillStyle = SPEECH_BAND;
+      for (const region of regions) {
+        if (region.endSample < viewStartSample || region.startSample > viewEndSample) continue;
+        const x0 = (region.startSample - viewStartSample) * pxPerSample;
+        const x1 = (region.endSample - viewStartSample) * pxPerSample;
+        ctx.fillRect(x0, 0, Math.max(1, x1 - x0), height);
+      }
+    }
     if (peaks === null) return;
     const mid = height / 2;
     const scale = (height / 2 - 1) / 32768;
@@ -39,6 +54,6 @@ export function Waveform({ peaks, viewStartSample, pxPerSample, width, height }:
       const bottom = mid - lo * scale;
       ctx.fillRect(x, top, 1, Math.max(1, bottom - top));
     }
-  }, [peaks, viewStartSample, pxPerSample, width, height]);
+  }, [peaks, regions, viewStartSample, pxPerSample, width, height]);
   return <canvas ref={ref} className="waveform" style={{ width, height }} />;
 }

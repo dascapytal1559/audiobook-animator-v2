@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+import { basename, dirname, join } from "node:path";
 import { Effect, FileSystem, Option, Schema } from "effect";
 import { StoryPlanningError } from "./contracts.js";
 const fail = (code: StoryPlanningError["code"], message: string) => Effect.fail(new StoryPlanningError({ code, message }));
@@ -40,3 +42,13 @@ export function decode<S extends Schema.Top>(schema: S, bytes: Uint8Array, code:
   });
 }
 
+
+/** Write bytes to a sibling temp file, then rename into place so readers never observe a partial file. The temp file is removed if the rename fails. */
+export function writeAtomic(path: string, bytes: Uint8Array) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const temp = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString("hex")}.tmp`);
+    yield* fs.writeFile(temp, bytes, { flag: "wx" });
+    yield* fs.rename(temp, path).pipe(Effect.onError(() => fs.remove(temp).pipe(Effect.ignore)));
+  }).pipe(Effect.mapError(e => new StoryPlanningError({ code: "IoFailed", message: `Cannot write ${path}: ${e.message}` })));
+}

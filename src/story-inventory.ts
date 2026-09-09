@@ -9,7 +9,7 @@ const main = Effect.gen(function* () {
     catch: () => new StoryInventoryError({ code: "InvalidConfig", message: "Invalid arguments. Run with --help for usage." }),
   });
   if (values.help) {
-    yield* Console.error("Usage: node dist/story-inventory.js --config config/story-inventory.json\n\nBuild readable inventories from verified story splits and editable synopsis files. All configured paths resolve from the config file. No audio is decoded and no network request is made. JSON results go to stdout; help and errors go to stderr.");
+    yield* Console.error("Usage: node dist/story-inventory.js --config config/story-inventory.json\n\nBuild readable inventories from every story directory and its manifest. All configured paths resolve from the config file. No audio is decoded and no network request is made. JSON results go to stdout; help and errors go to stderr.");
     return;
   }
   if (!values.config) return yield* Effect.fail(new StoryInventoryError({ code: "InvalidConfig", message: "Supply an explicit --config path. Run with --help for usage." }));

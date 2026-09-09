@@ -55,7 +55,7 @@ test("the pilot invariants require 14 adjacent rows from 0 to the clip end", () 
 });
 
 test("the real treatment table parses to 14 rows satisfying the pilot invariants", async t => {
-  const path = fileURLToPath(new URL("../../../data/books/exhalation/planning/the-great-silence/visual-treatment.md", import.meta.url));
+  const path = fileURLToPath(new URL("../../../data/stories/the-great-silence/visual-treatment.md", import.meta.url));
   if (!(await access(path).then(() => true, () => false))) return t.skip("local planning data is not present");
   const rows = parseTreatmentTable(await readFile(path, "utf8"));
   checkTreatmentRows(rows, CLIP);

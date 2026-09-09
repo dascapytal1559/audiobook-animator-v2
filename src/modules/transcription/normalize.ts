@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import { TranscriptionError, type ParsedTranscript, type Punctuation, type TimedWord, type TranscriptionInput } from "./contracts.js";
+import { TranscriptionError, type Punctuation } from "./contracts.js";
 
 const Element = Schema.Union([
   Schema.Struct({
@@ -74,28 +74,5 @@ export function normalizeRevProviderTranscript(
     }
     if (wordCount === 0) return yield* Effect.fail(new TranscriptionError({ code: "InvalidResponse", message: "The spoken-audio input returned no timed words. Raw evidence is retained." }));
     return { elements, wordCount, text: transcript.monologues.map((monologue) => monologue.elements.map((element) => element.value).join("")).join("\n") };
-  });
-}
-
-/** Only the prepared FLAC demo has a verified mapping to the decoded source clock. */
-export function normalizeRevTranscript(
-  raw: unknown,
-  input: TranscriptionInput,
-  toleranceSeconds: number,
-): Effect.Effect<ParsedTranscript, TranscriptionError> {
-  return Effect.gen(function* () {
-    const parsed = yield* normalizeRevProviderTranscript(raw, input.durationSeconds, toleranceSeconds);
-    const elements: Array<TimedWord | Punctuation> = [];
-    for (const element of parsed.elements) {
-      if (element.kind === "punctuation") { elements.push(element); continue; }
-      const { providerStartSeconds, providerEndSeconds, ...word } = element;
-      const sourceStartSeconds = input.sourceStartSeconds + providerStartSeconds;
-      const sourceEndSeconds = input.sourceStartSeconds + providerEndSeconds;
-      if (!Number.isFinite(sourceStartSeconds) || !Number.isFinite(sourceEndSeconds)) {
-        return yield* Effect.fail(new TranscriptionError({ code: "InvalidTimestamps", message: "Source-relative times cannot be represented as finite seconds." }));
-      }
-      elements.push({ ...word, clipStartSeconds: providerStartSeconds, clipEndSeconds: providerEndSeconds, sourceStartSeconds, sourceEndSeconds });
-    }
-    return { ...parsed, elements };
   });
 }

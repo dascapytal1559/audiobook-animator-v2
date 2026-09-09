@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ApiError, AUDIO_URL, getPeaks, getStory, getTimeline, postShot, putDecisions, useServerEvents, type PeaksResponse, type ShotMode, type StitchedEntry, type Word } from "./api.js";
+import { ApiError, AUDIO_URL, getPeaks, getSpeech, getStory, getTimeline, postAlign, postShot, putDecisions, putWordTiming, useServerEvents, type PeaksResponse, type ShotMode, type SpeechResponse, type StitchedEntry, type Word } from "./api.js";
+import { referenceChunks, retimeChunks } from "./chunks.js";
 import { entryAt, mergeTimeline } from "./merge.js";
 import { planTick } from "./playback.js";
+import { selectItem, selectedRange, type SelectionItem } from "./selection.js";
 import type { SnapTarget } from "./snap.js";
 import { Preview } from "./Preview.js";
 import { ShotPanel } from "./ShotPanel.js";
-import { decisionsForView, initialState, isDirty, reduce, workingBounds } from "./state.js";
-import { Timeline } from "./Timeline.js";
+import { decisionsForView, initialState, isDecisionsDirty, isDirty, isTimingDirty, reduce, wordsForView, workingBounds } from "./state.js";
+import { Timeline, type TimingRowData } from "./Timeline.js";
+import { effectiveWords, wordStartMap } from "./timing.js";
 import { Transport } from "./Transport.js";
 import { clampSample, millisecondsToSamples, secondsToSamples } from "./time.js";
 
@@ -14,23 +17,46 @@ const SAVE_DEBOUNCE_MS = 300;
 const SEEK_TOLERANCE_MS = 1;
 const NUDGE_MS = 100;
 const BIG_NUDGE_MS = 1000;
+/** Comma and period move the selected words by this much (A39). */
+const TIMING_NUDGE_MS = 10;
 const DEFAULT_MODE: ShotMode = "graphic-illustration";
+const EMPTY_ROW: TimingRowData = { words: [], chunks: [] };
 
 const describe = (e: unknown) => (e instanceof ApiError ? `${e.code}: ${e.message}` : e instanceof Error ? e.message : String(e));
 
 export function App() {
   const [state, dispatch] = useReducer(reduce, initialState);
   const [peaks, setPeaks] = useState<PeaksResponse | null>(null);
+  const [speech, setSpeech] = useState<SpeechResponse | null>(null);
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [alignBusy, setAlignBusy] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
   const sampleRateHz = state.story?.clip.sampleRateHz ?? 0;
   const sampleCount = state.story?.clip.sampleCount ?? 0;
-  const words = useMemo<ReadonlyArray<Word>>(() => [...(state.story?.words ?? [])].sort((a, b) => a.startSample - b.startSample), [state.story]);
-  const merged = useMemo(() => mergeTimeline(state.records, decisionsForView(state), Math.max(1, sampleCount)), [state.records, state.decisions, state.drag, sampleCount]);
+  // Edited row (A52): the effective words in transcript order. `editedBase` is before any in-progress group move; `words` is the view.
+  const editedBase = useMemo<ReadonlyArray<Word>>(() => (state.story === null ? [] : effectiveWords(state.story.words, state.manual)), [state.story, state.manual]);
+  const words = useMemo<ReadonlyArray<Word>>(() => wordsForView(state), [state.story, state.manual, state.wordDrag, state.selection]);
+  const chunks = useMemo(() => retimeChunks(state.story?.chunks ?? [], words), [state.story, words]);
+  const sortedWords = useMemo(() => [...words].sort((a, b) => a.startSample - b.startSample), [words]);
+  // Read-only rows regroup their own times with the server's explicit settings and sentence marks (chunks.ts).
+  const originalRow = useMemo<TimingRowData>(() => {
+    if (state.story === null) return EMPTY_ROW;
+    const row = editedBase.map(w => ({ ...w, startSample: w.original.startSample, endSample: w.original.endSample }));
+    return { words: row, chunks: referenceChunks(row, state.story) };
+  }, [state.story, editedBase]);
+  const autoRow = useMemo<TimingRowData>(() => {
+    if (state.story === null) return EMPTY_ROW;
+    const row = editedBase.flatMap(w => (w.auto === undefined ? [] : [{ ...w, startSample: w.auto.startSample, endSample: w.auto.endSample }]));
+    return { words: row, chunks: referenceChunks(row, state.story) };
+  }, [state.story, editedBase]);
+  const selectionRange = useMemo(() => selectedRange(editedBase.map(w => w.id), state.selection), [editedBase, state.selection]);
+  const selectionLeadStart = selectionRange === null ? null : editedBase[selectionRange.first]?.startSample ?? null;
+  const wordStarts = useMemo(() => wordStartMap(words), [words]);
+  const merged = useMemo(() => mergeTimeline(state.records, decisionsForView(state), Math.max(1, sampleCount), wordStarts), [state.records, state.decisions, state.drag, sampleCount, wordStarts]);
   const tolerance = sampleRateHz > 0 ? millisecondsToSamples(SEEK_TOLERANCE_MS, sampleRateHz) : 0;
   const currentEntry = useMemo(() => entryAt(merged.stitched, state.playhead, tolerance), [merged.stitched, state.playhead, tolerance]);
   const currentShot = currentEntry?.kind === "shot" ? currentEntry : null;
@@ -41,7 +67,12 @@ export function App() {
     const next = merged.stitched.slice(index + 1).find((e): e is Extract<StitchedEntry, { kind: "shot" }> => e.kind === "shot");
     return next ?? null;
   }, [merged.stitched, currentEntry]);
-  const currentWordId = useMemo(() => wordAt(words, state.playhead)?.id ?? null, [words, state.playhead]);
+  const currentWordId = useMemo(() => wordAt(sortedWords, state.playhead)?.id ?? null, [sortedWords, state.playhead]);
+  const anchorWord = useMemo(() => {
+    const id = currentShot?.anchorWordId;
+    const word = id === undefined ? undefined : words.find(w => w.id === id);
+    return word === undefined ? null : { id: word.id, value: word.value };
+  }, [currentShot, words]);
   const mergedRef = useRef(merged);
   mergedRef.current = merged;
 
@@ -50,35 +81,48 @@ export function App() {
     try { dispatch({ type: "timeline-loaded", timeline: await getTimeline() }); }
     catch (e) { dispatch({ type: "error", message: `Timeline load failed. ${describe(e)}` }); }
   }, []);
+  const loadStory = useCallback(async () => {
+    try { dispatch({ type: "story-loaded", story: await getStory() }); return true; }
+    catch (e) { dispatch({ type: "error", message: `Story load failed. ${describe(e)}` }); return false; }
+  }, []);
   useEffect(() => {
     void (async () => {
-      try {
-        const story = await getStory();
-        dispatch({ type: "story-loaded", story });
-      } catch (e) { dispatch({ type: "error", message: `Story load failed. ${describe(e)}` }); return; }
+      if (!(await loadStory())) return;
       await loadTimeline();
       try { setPeaks(await getPeaks()); }
       catch (e) { dispatch({ type: "error", message: `Peaks load failed. ${describe(e)}` }); }
+      // A server without the speech route yet (404) just means no shading; anything else is reported.
+      try { setSpeech(await getSpeech()); }
+      catch (e) { if (!(e instanceof ApiError && e.status === 404)) dispatch({ type: "error", message: `Speech regions load failed. ${describe(e)}` }); }
     })();
-  }, [loadTimeline]);
+  }, [loadStory, loadTimeline]);
 
   // Live updates: a refetch never touches the audio element or an in-progress drag (the reducer keeps the drag and local edits).
-  const onTimelineChanged = useCallback(() => { void loadTimeline(); }, [loadTimeline]);
+  // The planning directory holds the timing overlays too, so the story is refetched with the timeline.
+  const onTimelineChanged = useCallback(() => { void loadTimeline(); void loadStory(); }, [loadTimeline, loadStory]);
   const onStatus = useCallback((ok: boolean) => setConnected(ok), []);
   useServerEvents({ onTimelineChanged, onStatus });
 
-  // Debounced persistence with one PUT in flight at a time. The effect re-runs when a save finishes, so edits made during a save get their own PUT.
+  // Debounced persistence with one save in flight at a time: decisions, then the word-timing overlay (A53), each only when dirty. The
+  // effect re-runs when a save finishes, so edits made during a save get their own PUT.
   const inFlightRef = useRef(false);
   const saveNow = useCallback(async () => {
     if (inFlightRef.current) return;
     const snapshot = stateRef.current;
     if (!isDirty(snapshot)) return;
     inFlightRef.current = true;
-    const version = snapshot.editVersion;
-    dispatch({ type: "save-started", version });
+    dispatch({ type: "save-started", version: snapshot.editVersion });
     try {
-      const timeline = await putDecisions(snapshot.decisions);
-      dispatch({ type: "save-succeeded", version, timeline });
+      if (isDecisionsDirty(snapshot)) {
+        const version = snapshot.editVersion;
+        const timeline = await putDecisions(snapshot.decisions);
+        dispatch({ type: "save-succeeded", version, timeline });
+      }
+      if (isTimingDirty(snapshot)) {
+        const version = snapshot.timingEditVersion;
+        const story = await putWordTiming({ words: snapshot.manual });
+        dispatch({ type: "timing-save-succeeded", version, story });
+      }
     } catch (e) {
       dispatch({ type: "save-failed", message: describe(e) });
     } finally {
@@ -86,10 +130,10 @@ export function App() {
     }
   }, []);
   useEffect(() => {
-    if (!isDirty(state) || state.drag !== null || state.save.status !== "saved") return;
+    if (!isDirty(state) || state.drag !== null || state.wordDrag !== null || state.save.status !== "saved") return;
     const timer = window.setTimeout(() => { void saveNow(); }, SAVE_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [state.editVersion, state.savedVersion, state.save.status, state.drag, saveNow]);
+  }, [state.editVersion, state.savedVersion, state.timingEditVersion, state.timingSavedVersion, state.save.status, state.drag, state.wordDrag, saveNow]);
   useEffect(() => { if (state.saveNonce > 0) void saveNow(); }, [state.saveNonce, saveNow]);
 
   // Audio: the element is the clock while playing; the reducer's playhead is the clock while paused.
@@ -167,8 +211,18 @@ export function App() {
       if (s.story === null) return;
       const rate = s.story.clip.sampleRateHz;
       const nudge = millisecondsToSamples(e.shiftKey ? BIG_NUDGE_MS : NUDGE_MS, rate);
+      const modifier = e.metaKey || e.ctrlKey;
+      if (modifier && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        dispatch({ type: e.shiftKey ? "timing-redo" : "timing-undo" });
+        return;
+      }
+      if (modifier) return;
       switch (e.key) {
         case " ": e.preventDefault(); togglePlay(); break;
+        case "Escape": if (s.drag === null && s.wordDrag === null) dispatch({ type: "selection-set", selection: null }); break;
+        case ",": e.preventDefault(); dispatch({ type: "timing-nudge", deltaSamples: -millisecondsToSamples(TIMING_NUDGE_MS, rate) }); break;
+        case ".": e.preventDefault(); dispatch({ type: "timing-nudge", deltaSamples: millisecondsToSamples(TIMING_NUDGE_MS, rate) }); break;
         case "ArrowLeft": e.preventDefault(); seek(s.playhead - nudge); break;
         case "ArrowRight": e.preventDefault(); seek(s.playhead + nudge); break;
         case "Home": e.preventDefault(); seek(0); break;
@@ -213,6 +267,38 @@ export function App() {
   const onDragMove = useCallback((startSample: number, snap: SnapTarget | null) => dispatch({ type: "drag-move", startSample, snap }), []);
   const onDragEnd = useCallback(() => dispatch({ type: "drag-end" }), []);
   const onDragCancel = useCallback(() => dispatch({ type: "drag-cancel" }), []);
+  /** Detaching keeps the shot where it is as a plain sample position (A51). */
+  const onDetach = useCallback((id: string) => {
+    const shot = mergedRef.current.stitched.find((e): e is Extract<StitchedEntry, { kind: "shot" }> => e.kind === "shot" && e.id === id);
+    if (shot !== undefined) dispatch({ type: "shot-moved", id, startSample: shot.startSample });
+  }, []);
+
+  // Word timing (A38–A41).
+  const onSelect = useCallback((item: SelectionItem, extend: boolean) => dispatch({ type: "selection-set", selection: selectItem(stateRef.current.selection, item, extend) }), []);
+  const onWordDragStart = useCallback(() => dispatch({ type: "word-drag-start" }), []);
+  const onWordDragMove = useCallback((delta: number, snap: SnapTarget | null) => dispatch({ type: "word-drag-move", delta, snap }), []);
+  const onWordDragEnd = useCallback(() => dispatch({ type: "word-drag-end" }), []);
+  const onWordDragCancel = useCallback(() => dispatch({ type: "word-drag-cancel" }), []);
+  const onDismissReport = useCallback(() => dispatch({ type: "align-report-set", report: null }), []);
+  /** Align the selection's span (A43): unsaved timing is flushed first so the server aligns what the user sees. */
+  const onAlign = useCallback(async () => {
+    const s = stateRef.current;
+    if (s.story === null) return;
+    const base = effectiveWords(s.story.words, s.manual);
+    const range = selectedRange(base.map(w => w.id), s.selection);
+    if (range === null) return;
+    const first = base[range.first]!;
+    const last = base[range.last]!;
+    setAlignBusy(true);
+    try {
+      if (isTimingDirty(s)) await saveNow();
+      const { report, story } = await postAlign({ startSample: first.startSample, endSample: last.endSample });
+      dispatch({ type: "story-loaded", story });
+      dispatch({ type: "align-report-set", report });
+    } catch (e) {
+      dispatch({ type: "error", message: `Align failed. ${describe(e)}` });
+    } finally { setAlignBusy(false); }
+  }, [saveNow]);
 
   return (
     <div className="app">
@@ -234,16 +320,20 @@ export function App() {
           />
           {state.story && (
             <Timeline
-              words={words} sampleRateHz={sampleRateHz} sampleCount={sampleCount} peaks={peaks} stitched={merged.stitched} candidates={merged.candidates}
+              words={words} chunks={chunks} original={originalRow} auto={autoRow} selectionLeadStart={selectionLeadStart}
+              sampleRateHz={sampleRateHz} sampleCount={sampleCount} peaks={peaks} speech={speech?.regions ?? null} stitched={merged.stitched} candidates={merged.candidates}
               playhead={state.playhead} playing={state.playing} follow={state.follow} currentWordId={currentWordId} currentShotId={currentShot?.id ?? null}
               working={workingBounds(state, sampleCount)} drag={state.drag}
+              selection={state.selection} wordDrag={state.wordDrag} alignReport={state.alignReport} alignBusy={alignBusy}
               onSeek={onSeek} onDragStart={onDragStart} onDragMove={onDragMove} onDragEnd={onDragEnd} onDragCancel={onDragCancel}
+              onSelect={onSelect} onWordDragStart={onWordDragStart} onWordDragMove={onWordDragMove} onWordDragEnd={onWordDragEnd} onWordDragCancel={onWordDragCancel}
+              onAlign={() => { void onAlign(); }} onDismissReport={onDismissReport}
             />
           )}
         </section>
         <ShotPanel
           entry={currentEntry} group={currentGroup} next={nextShot} sampleRateHz={Math.max(1, sampleRateHz)} playhead={state.playhead}
-          aspect={state.decisions.settings.frameAspect} busy={busy}
+          aspect={state.decisions.settings.frameAspect} busy={busy} anchorWord={anchorWord} onDetach={onDetach}
           onSelect={id => { if (currentGroup) dispatch({ type: "shot-selected", id, groupIds: currentGroup.shots.map(s => s.id) }); }}
           onMode={(id, mode) => dispatch({ type: "shot-edited", id, patch: { mode } })}
           onNotes={(id, notes) => dispatch({ type: "shot-edited", id, patch: { notes } })}

@@ -1,6 +1,7 @@
 :root {
   color-scheme: dark;
   --bg: #0f1115; --bg-2: #171a21; --bg-3: #1f2330; --line: #2a2f3d; --text: #e6e8ee; --muted: #8b93a7; --accent: #f5c542; --danger: #ef5350; --ok: #4caf50;
+  --row-original: #9b8cf0; --row-auto: #37c6a3; --row-edited: #f5a524; --row-speech: #4caf50;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 14px;
 }
 * { box-sizing: border-box; }
@@ -10,6 +11,10 @@ button { background: var(--bg-3); border: 1px solid var(--line); border-radius: 
 button:hover:not(:disabled) { border-color: var(--muted); }
 button:disabled { opacity: 0.5; cursor: default; }
 button.toggle.on { background: #2b3a55; border-color: #4f9cf9; }
+button.toggle.on[data-testid="toggle-speech"] { border-color: var(--row-speech); color: var(--row-speech); background: color-mix(in srgb, var(--row-speech) 15%, var(--bg-3)); }
+button.toggle.on[data-testid="toggle-original"] { border-color: var(--row-original); color: var(--row-original); background: color-mix(in srgb, var(--row-original) 15%, var(--bg-3)); }
+button.toggle.on[data-testid="toggle-auto"] { border-color: var(--row-auto); color: var(--row-auto); background: color-mix(in srgb, var(--row-auto) 15%, var(--bg-3)); }
+button.toggle.on[data-testid="toggle-edited"] { border-color: var(--row-edited); color: var(--row-edited); background: color-mix(in srgb, var(--row-edited) 15%, var(--bg-3)); }
 input[type="text"], textarea, select { background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; width: 100%; }
 textarea { resize: vertical; }
 input:read-only, textarea:read-only { color: var(--muted); }
@@ -47,6 +52,9 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .timeline-toolbar { display: flex; align-items: center; gap: 6px; padding: 4px 14px; font-size: 12px; color: var(--muted); }
 .zoom-value { min-width: 64px; text-align: center; font-family: ui-monospace, Menlo, monospace; }
 .snap-hint { margin-left: 12px; color: var(--accent); }
+.align-button { margin-left: 12px; }
+.align-report { display: inline-flex; gap: 10px; align-items: center; margin-left: 12px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg-3); color: var(--text); font-family: ui-monospace, Menlo, monospace; font-size: 11px; white-space: nowrap; }
+.align-report button { padding: 0 6px; line-height: 16px; }
 .timeline-scroll { flex: 1; overflow-x: auto; overflow-y: hidden; position: relative; background: var(--bg-2); cursor: text; user-select: none; }
 .timeline-scroll.dragging { cursor: grabbing; }
 .timeline-content { position: relative; min-width: 100%; display: flex; flex-direction: column; }
@@ -56,9 +64,32 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .lane-waveform { border-bottom: 1px solid var(--line); }
 .sticky { position: sticky; height: 100%; }
 .waveform { display: block; }
-.lane-words { position: relative; height: 36px; border-bottom: 1px solid var(--line); }
-.word { position: absolute; top: 5px; height: 26px; padding: 0 3px; font-size: 12px; line-height: 24px; overflow: hidden; white-space: nowrap; text-overflow: clip; background: var(--bg-3); border: 1px solid var(--line); border-radius: 3px; text-align: left; }
-.word.current { background: #5a4a12; border-color: var(--accent); color: #fff; }
+.lane-chunks { position: relative; height: 36px; border-bottom: 1px solid var(--line); box-shadow: inset 3px 0 0 var(--row-color, transparent); }
+.row-original { --row-color: var(--row-original); background: color-mix(in srgb, var(--row-original) 6%, transparent); }
+.row-auto { --row-color: var(--row-auto); background: color-mix(in srgb, var(--row-auto) 6%, transparent); }
+.row-edited { --row-color: var(--row-edited); background: color-mix(in srgb, var(--row-edited) 6%, transparent); }
+.row-label { position: sticky; left: 6px; top: 2px; z-index: 2; float: left; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--row-color); background: var(--bg); padding: 0 4px; border-radius: 2px; pointer-events: none; }
+/* One box per chunk. The box clips with an ellipsis only when it is narrower than its text; the full text is in the title. */
+.chunk { position: absolute; top: 5px; height: 26px; width: max-content; box-sizing: border-box; padding: 0 4px; font-size: 12px; line-height: 24px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; background: var(--bg-3); border: 1px solid var(--line); border-radius: 3px; text-align: left; cursor: pointer; }
+.chunk.current-chunk { border-color: var(--accent); }
+.chunk.word-box { padding: 0 2px; }
+.chunk.word-box.current-chunk { background: #5a4a12; color: #fff; }
+.toolbar-group { display: inline-flex; gap: 4px; margin-left: 12px; }
+.chunk[data-break-reason="pause"] { border-right-style: dashed; }
+/* Timing rows (A52): Original is faint and read-only, Auto is read-only, Edited is the interactive row. */
+.row-original .chunk { opacity: 0.6; background: transparent; border-style: dotted; border-color: var(--row-original); }
+.row-auto .chunk { border-color: var(--row-auto); background: color-mix(in srgb, var(--row-auto) 12%, var(--bg-3)); }
+.row-edited .chunk { cursor: grab; border-color: color-mix(in srgb, var(--row-edited) 55%, var(--line)); }
+.timeline-scroll.dragging .row-edited .chunk { cursor: grabbing; }
+.chunk.selected, .word.selected { background: #2b3a55; outline: 1px solid #4f9cf9; }
+.chunk.word-box.selected.current-chunk { background: #3f4a3a; }
+/* Layer marks on the Edited row: a manual value shows as a yellow corner, an auto value as a blue underline. */
+.row-edited .chunk.has-manual, .row-edited .word.has-manual { box-shadow: inset 3px 0 0 var(--row-edited); }
+.row-edited .chunk.has-auto, .row-edited .word.has-auto { border-bottom: 2px solid var(--row-auto); }
+.word { display: inline; padding: 1px 2px; border-radius: 2px; cursor: pointer; }
+.word + .word { margin-left: 3px; }
+.word:hover { background: #2b3a55; }
+.word.current { background: #5a4a12; color: #fff; outline: 1px solid var(--accent); }
 .lane-shots { position: relative; height: 44px; }
 .shot { position: absolute; top: 4px; height: 36px; }
 .shot .hold { position: absolute; left: 0; right: 0; top: 22px; height: 10px; border-left: 2px solid; border-radius: 0 3px 3px 0; }
@@ -66,6 +97,9 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .marker { position: absolute; left: 0; top: 0; height: 22px; min-width: 14px; max-width: 220px; padding: 0 6px; border-radius: 3px; color: #0b0d12; font-size: 12px; font-weight: 600; line-height: 22px; white-space: nowrap; overflow: hidden; cursor: grab; display: flex; gap: 6px; align-items: center; }
 .shot.current .marker { outline: 2px solid #fff; }
 .shot.dragging .marker { cursor: grabbing; opacity: 0.85; }
+.anchor-glyph { font-size: 11px; line-height: 1; }
+.marker.anchored { outline: 1px dashed #0b0d12; outline-offset: -3px; }
+.anchor-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 12px; }
 .badge { background: #0b0d12; color: #fff; border-radius: 9px; padding: 0 5px; font-size: 10px; line-height: 16px; }
 .working-shade { position: absolute; top: 0; bottom: 0; background: rgba(0, 0, 0, 0.45); pointer-events: none; }
 .snap-line { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed var(--accent); pointer-events: none; }

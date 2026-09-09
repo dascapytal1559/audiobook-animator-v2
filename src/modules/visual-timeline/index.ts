@@ -1,12 +1,11 @@
-import { randomBytes } from "node:crypto";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 import { Effect, FileSystem, Schema } from "effect";
 import { loadStoryContext, StoryPlanningError } from "../story-planning/index.js";
-import { readBounded } from "../story-planning/io.js";
+import { readBounded, writeAtomic as writeAtomicBytes } from "../story-planning/io.js";
 import { ClipIdentity, DEFAULT_SETTINGS, Decisions, type DecisionsBody, type ShotMode, ShotRecord, VisualTimelineConfig, VisualTimelineError } from "./contracts.js";
 import { mergeTimeline } from "./merge.js";
 import { isUlid, mintUlid } from "./ulid.js";
-export { ClipIdentity, Decisions, DEFAULT_SETTINGS, type DecisionsBody, ShotDecision, ShotMode, ShotRecord, TimelineSettings, VisualTimelineConfig, VisualTimelineError } from "./contracts.js";
+export { ClipIdentity, Decisions, DEFAULT_SETTINGS, type DecisionsBody, IsoUtc, Producer, ShotDecision, ShotMode, ShotRecord, TimelineSettings, VisualTimelineConfig, VisualTimelineError } from "./contracts.js";
 export { type CandidateGroup, type EffectiveShot, mergeTimeline, type StitchedEntry } from "./merge.js";
 export { isUlid, mintUlid, ULID_PATTERN } from "./ulid.js";
 type Code = VisualTimelineError["code"];
@@ -23,18 +22,10 @@ function decode<S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, 
       Effect.mapError(e => new VisualTimelineError({ code, message: `Input does not match the required schema: ${path}. ${e.message.replace(/\s+/g, " ")}` })));
   });
 }
-/** Write bytes to a sibling temp file, then rename into place so readers never observe a partial file. */
-function writeAtomic(path: string, bytes: Uint8Array) {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const temp = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString("hex")}.tmp`);
-    yield* fs.writeFile(temp, bytes, { flag: "wx" });
-    yield* fs.rename(temp, path).pipe(Effect.onError(() => fs.remove(temp).pipe(Effect.ignore)));
-  }).pipe(Effect.mapError(e => e instanceof VisualTimelineError ? e : new VisualTimelineError({ code: "IoFailed", message: `Cannot write ${path}.` })));
-}
+const writeAtomic = (path: string, bytes: Uint8Array) => writeAtomicBytes(path, bytes).pipe(Effect.mapError(() => new VisualTimelineError({ code: "IoFailed", message: `Cannot write ${path}.` })));
 const sameClip = (a: ClipIdentity, b: ClipIdentity) => (Object.keys(ClipIdentity.fields) as Array<keyof ClipIdentity>).every(k => a[k] === b[k]);
 
-/** Config, verified clip identity from story-planning, and the resolved planning directory. */
+/** Config, verified clip identity from story-planning, and the story directory every timeline file lives in. */
 function loadContext(configPath: string) {
   return Effect.gen(function* () {
     if (!configPath || configPath.includes("\0")) return yield* fail("InvalidConfig", "Supply an explicit configuration path.");
@@ -43,8 +34,8 @@ function loadContext(configPath: string) {
     const context = yield* loadStoryContext({ configPath: resolve(dirname(path), config.storyPlanningConfigPath) });
     const clip: ClipIdentity = { bookId: context.bookId, storyId: context.story.id, audioSha256: context.story.audioSha256,
       transcriptSha256: context.story.transcriptSha256, sampleRateHz: context.story.sampleRateHz, sampleCount: context.story.sampleCount };
-    const planningDirectory = resolve(dirname(path), config.planningDirectory);
-    return { config, clip, planningDirectory, shotsDirectory: join(planningDirectory, "shots"), decisionsPath: join(planningDirectory, "decisions.json") };
+    const storyDirectory = context.storyDirectory;
+    return { config, clip, storyDirectory, shotsDirectory: join(storyDirectory, "shots"), decisionsPath: join(storyDirectory, "decisions.json") };
   });
 }
 type Context = Effect.Success<ReturnType<typeof loadContext>>;
@@ -89,14 +80,18 @@ function loadDecisions(ctx: Context) {
 }
 const wrap = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.mapError(e => e instanceof VisualTimelineError || e instanceof StoryPlanningError ? e : new VisualTimelineError({ code: "IoFailed", message: "Cannot read the visual timeline." })));
 
-/** Records plus decisions, merged into candidate groups and a stitched timeline covering the whole clip. Read-only. */
-export function loadVisualTimeline(options: { readonly configPath: string }) {
+const NO_WORDS: ReadonlyMap<string, number> = new Map();
+/**
+ * Records plus decisions, merged into candidate groups and a stitched timeline covering the whole clip. Read-only.
+ * `wordStarts` (word id to effective start sample) resolves shot anchors; without it every anchor is unresolved and falls back to its override or record.
+ */
+export function loadVisualTimeline(options: { readonly configPath: string; readonly wordStarts?: ReadonlyMap<string, number> }) {
   return wrap(Effect.gen(function* () {
     const ctx = yield* loadContext(options.configPath);
     const records = yield* loadRecords(ctx);
     const decisions = yield* loadDecisions(ctx);
-    const { candidates, stitched } = yield* mergeTimeline(records, decisions, ctx.clip.sampleCount, ctx.decisionsPath);
-    return { clip: ctx.clip, planningDirectory: ctx.planningDirectory, records, decisions, candidates, stitched };
+    const { candidates, stitched, unresolvedAnchors } = yield* mergeTimeline(records, decisions, ctx.clip.sampleCount, ctx.decisionsPath, options.wordStarts ?? NO_WORDS);
+    return { clip: ctx.clip, storyDirectory: ctx.storyDirectory, records, decisions, candidates, stitched, unresolvedAnchors };
   }));
 }
 export type VisualTimeline = Effect.Success<ReturnType<typeof loadVisualTimeline>>;
@@ -145,15 +140,15 @@ export function addShot(request: AddShotRequest) {
   }));
 }
 
-/** Validate the overlay against the current records, then replace `decisions.json` atomically with a fresh `updatedAt`. */
-export function writeDecisions(options: { readonly configPath: string; readonly decisions: DecisionsBody }) {
+/** Validate the overlay against the current records (and anchors against `wordStarts` when given), then replace `decisions.json` atomically with a fresh `updatedAt`. */
+export function writeDecisions(options: { readonly configPath: string; readonly decisions: DecisionsBody; readonly wordStarts?: ReadonlyMap<string, number> }) {
   return wrap(Effect.gen(function* () {
     const ctx = yield* loadContext(options.configPath);
     const records = yield* loadRecords(ctx);
     const bytes = encode({ schemaVersion: 1, kind: "visual-timeline-decisions", clip: ctx.clip, updatedAt: new Date().toISOString(), settings: options.decisions.settings, shots: options.decisions.shots });
     const decisions = yield* decode(Decisions, bytes, "InvalidDecisions", "the supplied decisions");
     if (bytes.byteLength > ctx.config.limits.maxDecisionsBytes) return yield* fail("InvalidDecisions", `The decisions would exceed maxDecisionsBytes (${ctx.config.limits.maxDecisionsBytes}).`);
-    yield* mergeTimeline(records, decisions, ctx.clip.sampleCount, "the supplied decisions");
+    yield* mergeTimeline(records, decisions, ctx.clip.sampleCount, "the supplied decisions", options.wordStarts ?? NO_WORDS);
     yield* writeAtomic(ctx.decisionsPath, bytes);
     return decisions;
   }));

@@ -7,7 +7,7 @@ import test, { type TestContext } from "node:test";
 import { promisify } from "node:util";
 import { NodeServices } from "@effect/platform-node";
 import { Effect, Option } from "effect";
-import { computePeaks, EditorServerError, PeakAccumulator, type PeaksIdentity, readPeaksCache, writePeaksCache } from "./index.js";
+import { computePeaksAndSpeech, EditorServerError, PeakAccumulator, type PeaksIdentity, readPeaksCache, readSpeechCache, type SpeechIdentity, writeCache } from "./index.js";
 const provide = <A, E>(effect: Effect.Effect<A, E, NodeServices.NodeServices>) => Effect.runPromise(effect.pipe(Effect.provide(NodeServices.layer)));
 const s16le = (samples: ReadonlyArray<number>) => { const b = Buffer.alloc(samples.length * 2); samples.forEach((s, i) => b.writeInt16LE(s, i * 2)); return b; };
 const reference = (samples: ReadonlyArray<number>, per: number) => {
@@ -45,7 +45,7 @@ test("the cache is used only when every pin matches; a differing audio hash or b
   const identity: PeaksIdentity = { audioSha256: "a".repeat(64), sampleRateHz: 10, sampleCount: 37, samplesPerBucket: 16 };
   const peaks = { schemaVersion: 1 as const, ...identity, min: [-3, -2, -1], max: [3, 2, 1] };
   assert.ok(Option.isNone(await provide(readPeaksCache(path, 65_536, identity))), "missing file");
-  await provide(writePeaksCache(path, peaks));
+  await provide(writeCache(path, peaks));
   assert.deepEqual(await readdir(dir), ["peaks.json"], "no temp file is left behind");
   assert.deepEqual(JSON.parse(await readFile(path, "utf8")), peaks);
   assert.deepEqual(Option.getOrNull(await provide(readPeaksCache(path, 65_536, identity))), peaks);
@@ -61,22 +61,46 @@ test("the cache is used only when every pin matches; a differing audio hash or b
   assert.ok(Option.isNone(await provide(readPeaksCache(path, 65_536, identity))), "out of int16 range");
 });
 
-test("computePeaks decodes a real FLAC through ffmpeg and refuses a sample count that differs from the verified clip", async t => {
+test("the speech cache pins the audio hash, the frame size, and the three detection parameters, and rejects unsorted or out-of-clip regions", async t => {
+  const dir = await temp(t);
+  const path = join(dir, "speech.json");
+  const identity: SpeechIdentity = { audioSha256: "a".repeat(64), sampleRateHz: 10, sampleCount: 37, frameSamples: 1, thresholdDbfs: -50, minSilenceMs: 200, minSpeechMs: 100 };
+  const speech = { schemaVersion: 1 as const, kind: "speech-regions" as const, ...identity, regions: [{ startSample: 2, endSample: 10 }, { startSample: 12, endSample: 37 }] };
+  assert.ok(Option.isNone(await provide(readSpeechCache(path, 65_536, identity))), "missing file");
+  await provide(writeCache(path, speech));
+  assert.deepEqual(Option.getOrNull(await provide(readSpeechCache(path, 65_536, identity))), speech);
+  for (const [label, changed] of [["audio hash", { audioSha256: "b".repeat(64) }], ["frame size", { frameSamples: 2 }], ["threshold", { thresholdDbfs: -40 }], ["min silence", { minSilenceMs: 150 }], ["min speech", { minSpeechMs: 50 }]] as const) {
+    assert.ok(Option.isNone(await provide(readSpeechCache(path, 65_536, { ...identity, ...changed }))), label);
+  }
+  await writeFile(path, JSON.stringify({ ...speech, regions: [{ startSample: 12, endSample: 37 }, { startSample: 2, endSample: 10 }] }));
+  assert.ok(Option.isNone(await provide(readSpeechCache(path, 65_536, identity))), "unsorted regions");
+  await writeFile(path, JSON.stringify({ ...speech, regions: [{ startSample: 2, endSample: 38 }] }));
+  assert.ok(Option.isNone(await provide(readSpeechCache(path, 65_536, identity))), "region past the clip");
+});
+
+test("computePeaksAndSpeech decodes a real FLAC through ffmpeg once, yields peaks and speech regions, and refuses a sample count that differs from the verified clip", async t => {
   if (!(await ffmpegAvailable())) return t.skip("ffmpeg is not installed; the decode integration test is skipped, the unit tests above still ran");
   const dir = await temp(t);
   const audioPath = join(dir, "tone.flac");
   await promisify(execFile)("ffmpeg", ["-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-ar", "8000", "-ac", "1", audioPath]);
   const identity: PeaksIdentity = { audioSha256: "c".repeat(64), sampleRateHz: 8000, sampleCount: 8000, samplesPerBucket: 1000 };
-  const peaks = await provide(computePeaks({ ffmpegPath: "ffmpeg", audioPath, identity }));
+  const speechIdentity: SpeechIdentity = { audioSha256: "c".repeat(64), sampleRateHz: 8000, sampleCount: 8000, frameSamples: 80, thresholdDbfs: -50, minSilenceMs: 150, minSpeechMs: 50 };
+  const compute = (options: { identity?: Partial<PeaksIdentity>; speech?: Partial<SpeechIdentity>; ffmpegPath?: string } = {}) =>
+    provide(computePeaksAndSpeech({ ffmpegPath: options.ffmpegPath ?? "ffmpeg", audioPath, identity: { ...identity, ...options.identity }, speech: { ...speechIdentity, ...options.speech } }));
+  const { peaks, speech } = await compute();
+  assert.deepEqual(speech.regions, [{ startSample: 0, endSample: 8000 }], "a continuous full-scale tone is one speech region over the whole clip");
+  assert.deepEqual([speech.kind, speech.frameSamples, speech.thresholdDbfs, speech.minSilenceMs, speech.minSpeechMs], ["speech-regions", 80, -50, 150, 50]);
   assert.equal(peaks.min.length, 8);
   assert.equal(peaks.max.length, 8);
   assert.ok(peaks.max.every(v => v > 1000) && peaks.min.every(v => v < -1000), "a full-scale sine swings both ways in every bucket");
   assert.deepEqual([peaks.audioSha256, peaks.sampleCount, peaks.samplesPerBucket], [identity.audioSha256, 8000, 1000]);
-  const wrongCount = await provide(computePeaks({ ffmpegPath: "ffmpeg", audioPath, identity: { ...identity, sampleCount: 8001 } }).pipe(Effect.flip));
+  const wrongCount = await compute({ identity: { sampleCount: 8001 }, speech: { sampleCount: 8001 } }).then(() => null, e => e as EditorServerError);
   assert.ok(wrongCount instanceof EditorServerError && wrongCount.code === "PeaksFailed" && /decoded 8000 samples but the verified clip has 8001/.test(wrongCount.message));
+  const mismatch = await compute({ speech: { audioSha256: "d".repeat(64) } }).then(() => null, e => e as EditorServerError);
+  assert.ok(mismatch instanceof EditorServerError && /different clips/.test(mismatch.message));
   await writeFile(audioPath, "not audio");
-  const garbage = await provide(computePeaks({ ffmpegPath: "ffmpeg", audioPath, identity }).pipe(Effect.flip));
-  assert.ok(garbage instanceof EditorServerError && garbage.code === "PeaksFailed" && /exited with code/.test(garbage.message), garbage.message);
-  const missing = await provide(computePeaks({ ffmpegPath: join(dir, "no-such-ffmpeg"), audioPath, identity }).pipe(Effect.flip));
-  assert.ok(missing instanceof EditorServerError && missing.code === "PeaksFailed", missing.message);
+  const garbage = await compute().then(() => null, e => e as EditorServerError);
+  assert.ok(garbage instanceof EditorServerError && garbage.code === "PeaksFailed" && /exited with code/.test(garbage.message), garbage?.message);
+  const missing = await compute({ ffmpegPath: join(dir, "no-such-ffmpeg") }).then(() => null, e => e as EditorServerError);
+  assert.ok(missing instanceof EditorServerError && missing.code === "PeaksFailed", missing?.message);
 });

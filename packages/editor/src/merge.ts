@@ -7,14 +7,20 @@ import type { CandidateGroup, DecisionsBody, EffectiveShot, ShotRecord, Stitched
 
 export type Merged = { candidates: ReadonlyArray<CandidateGroup>; stitched: ReadonlyArray<StitchedEntry> };
 
-export function mergeTimeline(records: ReadonlyArray<ShotRecord>, decisions: DecisionsBody, sampleCount: number): Merged {
+/**
+ * `wordStarts` maps word id to effective start (A51): an anchored shot starts where its word starts, else at its `startSample` override,
+ * else at the record. An anchor to an unknown word is ignored rather than failing, so a stale decision still renders.
+ */
+export function mergeTimeline(records: ReadonlyArray<ShotRecord>, decisions: DecisionsBody, sampleCount: number, wordStarts: ReadonlyMap<string, number>): Merged {
   const groups = new Map<number, EffectiveShot[]>();
   for (const record of records) {
     const d = decisions.shots[record.id] ?? {};
     const { schemaVersion: _v, kind: _k, clip: _c, ...fields } = record;
+    const anchored = d.anchorWordId !== undefined ? wordStarts.get(d.anchorWordId) : undefined;
     const shot: EffectiveShot = {
-      ...fields, startSample: d.startSample ?? record.startSample, mode: d.mode ?? record.mode, ...(d.notes !== undefined ? { notes: d.notes } : {}),
+      ...fields, startSample: anchored ?? d.startSample ?? record.startSample, mode: d.mode ?? record.mode, ...(d.notes !== undefined ? { notes: d.notes } : {}),
       hidden: d.hidden === true, selected: false, ...(d.selected === true ? { selectionSource: "decision" as const } : {}),
+      ...(anchored !== undefined && d.anchorWordId !== undefined ? { anchorWordId: d.anchorWordId } : {}),
     };
     const group = groups.get(shot.startSample) ?? [];
     group.push(shot);

@@ -8,7 +8,7 @@ type Props = {
   onMarkerPointerDown: (event: ReactPointerEvent<HTMLElement>, entry: Extract<StitchedEntry, { kind: "shot" }>) => void;
 };
 
-/** One marker per stitched shot with a hold bar to its end (Q18). Gaps render as dashed holds. Drag a marker to move its start (A34). */
+/** One marker per stitched shot with a hold bar to its end (Q18). Gaps render as dashed holds. Drag a marker to move its start (A34); an anchored marker (A51) carries a glyph. */
 export function ShotLane({ stitched, candidates, pxPerSample, currentId, drag, onMarkerPointerDown }: Props) {
   const countAt = new Map(candidates.map(g => [g.startSample, g.shots.filter(s => !s.hidden).length]));
   return (
@@ -23,7 +23,8 @@ export function ShotLane({ stitched, candidates, pxPerSample, currentId, drag, o
         return (
           <div key={entry.id} className={`shot${entry.id === currentId ? " current" : ""}${dragging ? " dragging" : ""}`} style={{ left, width }} data-shot-id={entry.id}>
             <div className="hold" style={{ background: `${color}55`, borderColor: color }} />
-            <div className="marker" style={{ background: color }} onPointerDown={e => onMarkerPointerDown(e, entry)} title={`${entry.label ?? entry.id} — drag to move (Alt: no snap)`} data-marker-id={entry.id}>
+            <div className={`marker${entry.anchorWordId !== undefined ? " anchored" : ""}`} style={{ background: color }} onPointerDown={e => onMarkerPointerDown(e, entry)} title={`${entry.label ?? entry.id}${entry.anchorWordId !== undefined ? ` — anchored to word ${entry.anchorWordId}` : ""} — drag to move (Alt: no snap)`} data-marker-id={entry.id} data-anchor-word-id={entry.anchorWordId}>
+              {entry.anchorWordId !== undefined && <span className="anchor-glyph" aria-label="Anchored to a word">⚓</span>}
               <span className="marker-label">{entry.label ?? entry.id.slice(-6)}</span>
               {count > 1 && <span className="badge" title={`${count} candidates`}>{count}</span>}
             </div>

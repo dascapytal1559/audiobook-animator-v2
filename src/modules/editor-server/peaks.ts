@@ -1,9 +1,8 @@
-import { randomBytes } from "node:crypto";
-import { basename, dirname, join } from "node:path";
 import { Effect, FileSystem, Fiber, Option, Schema, Stream } from "effect";
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process";
-import { readBounded } from "../story-planning/io.js";
-import { EditorServerError, PeaksFile } from "./contracts.js";
+import { readBounded, writeAtomic } from "../story-planning/io.js";
+import { detectRegions, SpeechAccumulator } from "../word-timing/speech.js";
+import { EditorServerError, PeaksFile, SpeechFile } from "./contracts.js";
 const fail = (code: EditorServerError["code"], message: string) => Effect.fail(new EditorServerError({ code, message }));
 const STDERR_TAIL_BYTES = 8192;
 
@@ -48,27 +47,53 @@ export class PeakAccumulator {
 }
 
 export type PeaksIdentity = { readonly audioSha256: string; readonly sampleRateHz: number; readonly sampleCount: number; readonly samplesPerBucket: number };
+export type SpeechIdentity = { readonly audioSha256: string; readonly sampleRateHz: number; readonly sampleCount: number; readonly frameSamples: number; readonly thresholdDbfs: number; readonly minSilenceMs: number; readonly minSpeechMs: number };
+export type DecodeOptions = { readonly ffmpegPath: string; readonly audioPath: string; readonly identity: PeaksIdentity; readonly speech: SpeechIdentity };
 
-/** Decode with ffmpeg to mono s16le on stdout and reduce it as it streams; nothing but the peaks and a bounded stderr tail is held in memory. */
-export function computePeaks(options: { readonly ffmpegPath: string; readonly audioPath: string; readonly identity: PeaksIdentity }): Effect.Effect<PeaksFile, EditorServerError, ChildProcessSpawner.ChildProcessSpawner> {
-  const { identity } = options;
+/**
+ * Decode with ffmpeg to mono s16le on stdout and reduce it as it streams into both the peaks and the speech accumulators (A46: one pass, two
+ * artifacts); nothing but the reductions and a bounded stderr tail is held in memory. Both identities must name the same clip.
+ */
+export function computePeaksAndSpeech(options: DecodeOptions): Effect.Effect<{ readonly peaks: PeaksFile; readonly speech: SpeechFile }, EditorServerError, ChildProcessSpawner.ChildProcessSpawner> {
+  const { identity, speech } = options;
   return Effect.scoped(Effect.gen(function* () {
+    if (speech.audioSha256 !== identity.audioSha256 || speech.sampleRateHz !== identity.sampleRateHz || speech.sampleCount !== identity.sampleCount) return yield* fail("PeaksFailed", "Peaks and speech identities name different clips.");
     const args = ["-nostdin", "-hide_banner", "-loglevel", "error", "-i", options.audioPath, "-f", "s16le", "-ac", "1", "-"];
     const handle = yield* ChildProcess.make(options.ffmpegPath, args).pipe(Effect.mapError(e => new EditorServerError({ code: "PeaksFailed", message: `Cannot start ${options.ffmpegPath}: ${e.message}` })));
     const stderr = yield* handle.stderr.pipe(
       Stream.runFold(() => Buffer.alloc(0), (tail, chunk) => Buffer.concat([tail, chunk]).subarray(-STDERR_TAIL_BYTES)),
       Effect.orElseSucceed(() => Buffer.from("(stderr unavailable)")), Effect.forkScoped);
-    const accumulator = new PeakAccumulator(identity.samplesPerBucket);
-    yield* handle.stdout.pipe(Stream.runForEach(chunk => Effect.sync(() => accumulator.push(chunk))),
+    const peaksAccumulator = new PeakAccumulator(identity.samplesPerBucket);
+    const speechAccumulator = new SpeechAccumulator(speech.frameSamples);
+    yield* handle.stdout.pipe(Stream.runForEach(chunk => Effect.sync(() => { peaksAccumulator.push(chunk); speechAccumulator.push(chunk); })),
       Effect.mapError(e => new EditorServerError({ code: "PeaksFailed", message: `Cannot read decoded audio from ffmpeg: ${e.message}` })));
     const exitCode = yield* handle.exitCode.pipe(Effect.mapError(e => new EditorServerError({ code: "PeaksFailed", message: `ffmpeg did not report an exit code: ${e.message}` })));
     const errorText = (yield* Fiber.join(stderr)).toString("utf8").trim();
     if (exitCode !== 0) return yield* fail("PeaksFailed", `ffmpeg exited with code ${exitCode} while decoding ${options.audioPath}. ${errorText}`);
-    const reduced = yield* Effect.try({ try: () => accumulator.finish(), catch: e => new EditorServerError({ code: "PeaksFailed", message: (e as Error).message }) });
-    if (reduced.sampleCount !== identity.sampleCount) return yield* fail("PeaksFailed", `ffmpeg decoded ${reduced.sampleCount} samples but the verified clip has ${identity.sampleCount}: ${options.audioPath}.`);
-    return { schemaVersion: 1, audioSha256: identity.audioSha256, sampleRateHz: identity.sampleRateHz, sampleCount: identity.sampleCount,
-      samplesPerBucket: identity.samplesPerBucket, min: reduced.min, max: reduced.max } satisfies PeaksFile;
+    const reduced = yield* Effect.try({ try: () => ({ peaks: peaksAccumulator.finish(), frames: speechAccumulator.finish() }), catch: e => new EditorServerError({ code: "PeaksFailed", message: (e as Error).message }) });
+    if (reduced.peaks.sampleCount !== identity.sampleCount) return yield* fail("PeaksFailed", `ffmpeg decoded ${reduced.peaks.sampleCount} samples but the verified clip has ${identity.sampleCount}: ${options.audioPath}.`);
+    const frameMs = (speech.frameSamples / speech.sampleRateHz) * 1000;
+    const regions = detectRegions(reduced.frames.framesDbfs, { frameSamples: speech.frameSamples, thresholdDbfs: speech.thresholdDbfs,
+      minSilenceFrames: Math.round(speech.minSilenceMs / frameMs), minSpeechFrames: Math.round(speech.minSpeechMs / frameMs) }, identity.sampleCount);
+    return {
+      peaks: { schemaVersion: 1, audioSha256: identity.audioSha256, sampleRateHz: identity.sampleRateHz, sampleCount: identity.sampleCount, samplesPerBucket: identity.samplesPerBucket, min: reduced.peaks.min, max: reduced.peaks.max } satisfies PeaksFile,
+      speech: { schemaVersion: 1, kind: "speech-regions", audioSha256: speech.audioSha256, sampleRateHz: speech.sampleRateHz, sampleCount: speech.sampleCount, frameSamples: speech.frameSamples,
+        thresholdDbfs: speech.thresholdDbfs, minSilenceMs: speech.minSilenceMs, minSpeechMs: speech.minSpeechMs, regions } satisfies SpeechFile,
+    };
   }));
+}
+
+/** A cached speech file, only when it parses and every pin (audio hash, clock, frame size, and the three detection parameters) matches; anything else means recompute. */
+export function readSpeechCache(path: string, maxBytes: number, identity: SpeechIdentity): Effect.Effect<Option.Option<SpeechFile>, never, FileSystem.FileSystem> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    if (!(yield* fs.exists(path))) return Option.none();
+    const raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(yield* readBounded(path, maxBytes))) as unknown;
+    const speech = yield* Schema.decodeUnknownEffect(SpeechFile, { onExcessProperty: "error" })(raw);
+    const pinned = (Object.keys(identity) as Array<keyof SpeechIdentity>).every(k => speech[k] === identity[k])
+      && speech.regions.every((r, i) => r.startSample < r.endSample && r.endSample <= speech.sampleCount && (i === 0 || r.startSample >= speech.regions[i - 1]!.endSample));
+    return pinned ? Option.some(speech) : Option.none<SpeechFile>();
+  }).pipe(Effect.catch(() => Effect.succeed(Option.none<SpeechFile>())), Effect.catchDefect(() => Effect.succeed(Option.none<SpeechFile>())));
 }
 
 /** A cached peaks file, only when it parses and every pin matches the expected identity; anything else means recompute. */
@@ -86,11 +111,6 @@ export function readPeaksCache(path: string, maxBytes: number, identity: PeaksId
 }
 
 /** Compact JSON through a sibling temp file and rename; a reader never sees a partial cache. */
-export function writePeaksCache(path: string, peaks: PeaksFile): Effect.Effect<void, EditorServerError, FileSystem.FileSystem> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const temp = join(dirname(path), `.${basename(path)}.${randomBytes(6).toString("hex")}.tmp`);
-    yield* fs.writeFile(temp, Buffer.from(`${JSON.stringify(peaks)}\n`), { flag: "wx" });
-    yield* fs.rename(temp, path).pipe(Effect.onError(() => fs.remove(temp).pipe(Effect.ignore)));
-  }).pipe(Effect.mapError(e => new EditorServerError({ code: "IoFailed", message: `Cannot write ${path}: ${e.message}` })));
+export function writeCache(path: string, value: PeaksFile | SpeechFile): Effect.Effect<void, EditorServerError, FileSystem.FileSystem> {
+  return writeAtomic(path, Buffer.from(`${JSON.stringify(value)}\n`)).pipe(Effect.mapError(e => new EditorServerError({ code: "IoFailed", message: e.message })));
 }

@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import { NodeServices } from "@effect/platform-node";
 import { Effect } from "effect";
-import { sha256 } from "./artifacts.js";
+import { sha256 } from "./content-hash.js";
 import { BookTranscriptionError, importRevBookTranscript, prepareRevBook, type RevBookConfig } from "./book.js";
 import { TranscriptionError } from "./contracts.js";
 

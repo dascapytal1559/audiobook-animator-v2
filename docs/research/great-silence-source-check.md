@@ -2,7 +2,7 @@
 
 Checked 2026-09-07 for the first moodboard film.
 
-Compared the local [paired transcript](../../data/books/exhalation/split/segments/the-great-silence/transcript.txt) with the author-credited [May 2015 publication](https://www.e-flux.com/journal/65/336684/the-great-silence). This is a terminology check, not a replacement transcription or a word-for-word edition comparison. Audio, provider text, timestamps, and completed split evidence remain unchanged. The alternate Supercommunity URL failed to load; findings use the accessible journal publication.
+Compared the local [paired transcript](../../data/stories/the-great-silence/transcript.txt) with the author-credited [May 2015 publication](https://www.e-flux.com/journal/65/336684/the-great-silence). This is a terminology check, not a replacement transcription or a word-for-word edition comparison. Audio, provider text, timestamps, and completed split evidence remain unchanged. The alternate Supercommunity URL failed to load; findings use the accessible journal publication.
 
 ## Canonical terms for planning
 

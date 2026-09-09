@@ -5,8 +5,28 @@ export type ShotMode = "graphic-illustration" | "poetic-abstraction";
 export const SHOT_MODES: ReadonlyArray<ShotMode> = ["graphic-illustration", "poetic-abstraction"];
 
 export type ClipIdentity = { bookId: string; storyId: string; audioSha256: string; transcriptSha256: string; sampleRateHz: number; sampleCount: number };
-export type Word = { id: string; value: string; startSample: number; endSample: number };
-export type StoryResponse = { clip: ClipIdentity; story: { title: string; bookTitle: string }; sourceStartSample: number; words: Word[] };
+export type Span = { startSample: number; endSample: number };
+/**
+ * A transcript word with its three timing layers (A42): `original` from the transcriber, `auto` from the align script, `manual` from this
+ * editor. The top-level `startSample`/`endSample` are the server's effective times (manual, else auto, else original).
+ */
+export type Word = { id: string; value: string; startSample: number; endSample: number; original: Span; auto?: Span; manual?: Span };
+/** A sentence, or a shorter run of words cut by a pause of at least the server's `chunking.pauseBreakMs`. Every word belongs to exactly one chunk. */
+export type Chunk = { id: string; startSample: number; endSample: number; text: string; wordIds: string[]; breakReason: "sentence" | "pause" | "end" };
+export type AlignStats = { boundaryMedianMs: number; boundaryP10Ms: number; boundaryP90Ms: number; insideSpeechFraction: number; wordCount: number };
+/** Before/after measurements of one align run (A48). Extra fields from the server are carried but not interpreted. */
+export type AlignReport = { before: AlignStats; after: AlignStats } & Record<string, unknown>;
+export type AutoRun = { startSample: number; endSample: number; ranAt: string; report: AlignReport };
+export type TimingSummary = { inversions: unknown; autoRuns: AutoRun[]; manualCount: number; autoCount: number };
+/** Explicit server grouping settings and sentence marks merged because the effective gap was too short. */
+export type StoryChunking = { pauseBreakMs: number; minSentenceBreakMs: number; mergedSentenceBreaks: Array<{ afterWordId: string; nextWordId: string; gapSamples: number; gapMs: number; text: string }> };
+export type StoryResponse = { clip: ClipIdentity; story: { title: string; bookTitle: string }; sourceStartSample: number; words: Word[]; chunks: Chunk[]; chunking: StoryChunking; timing?: TimingSummary };
+/** Detected speech regions on the clip clock (A45, A46). */
+export type SpeechResponse = { schemaVersion: number; audioSha256: string; sampleRateHz: number; sampleCount: number; frameSamples: number; thresholdDbfs: number; minSilenceMs: number; minSpeechMs: number; regions: Span[] };
+/** The complete manual overlay, keyed by word id (A36). A PUT replaces the file wholesale, like decisions. */
+export type WordTimingBody = { words: Record<string, Span> };
+export type AlignRequest = { startSample: number; endSample: number; wholeClip?: boolean };
+export type AlignResponse = { report: AlignReport; story: StoryResponse };
 
 export type ShotRecord = {
   schemaVersion: 1; kind: "visual-shot-generation"; id: string; clip: ClipIdentity; startSample: number; mode: ShotMode;
@@ -14,7 +34,8 @@ export type ShotRecord = {
   /** Added by the server when the record has an image. */
   imageUrl?: string;
 };
-export type ShotDecision = { startSample?: number; mode?: ShotMode; selected?: boolean; hidden?: boolean; notes?: string };
+/** `anchorWordId` pins the shot start to that word's effective start (A51); it wins over `startSample`, which wins over the record. */
+export type ShotDecision = { startSample?: number; anchorWordId?: string; mode?: ShotMode; selected?: boolean; hidden?: boolean; notes?: string };
 export type TimelineSettings = { frameAspect: { width: number; height: number } };
 export type DecisionsBody = { settings: TimelineSettings; shots: Record<string, ShotDecision> };
 export type Decisions = DecisionsBody & { schemaVersion: 1; kind: "visual-timeline-decisions"; clip: ClipIdentity; updatedAt: string };
@@ -22,11 +43,13 @@ export type Decisions = DecisionsBody & { schemaVersion: 1; kind: "visual-timeli
 export type EffectiveShot = {
   id: string; startSample: number; mode: ShotMode; label?: string; prompt?: string; imagePath?: string; imageUrl?: string; notes?: string;
   createdAt: string; producer: { name: string; version: string }; hidden: boolean; selected: boolean; selectionSource?: "decision" | "default";
+  /** Set by the client merge when the decision anchors the shot to a word (A51). */
+  anchorWordId?: string;
 };
 export type CandidateGroup = { startSample: number; shots: EffectiveShot[]; selectedId: string | null; selectionSource: "decision" | "default" | null };
 export type StitchedEntry = (EffectiveShot & { kind: "shot"; endSample: number }) | { kind: "gap"; startSample: number; endSample: number };
 
-export type TimelineResponse = { clip: ClipIdentity; planningDirectory: string; records: ShotRecord[]; decisions: Decisions; candidates: CandidateGroup[]; stitched: StitchedEntry[] };
+export type TimelineResponse = { clip: ClipIdentity; storyDirectory: string; records: ShotRecord[]; decisions: Decisions; candidates: CandidateGroup[]; stitched: StitchedEntry[] };
 export type PeaksResponse = { schemaVersion: number; audioSha256: string; sampleRateHz: number; sampleCount: number; samplesPerBucket: number; min: number[]; max: number[] };
 export type NewShotRequest = { startSample: number; mode: ShotMode; label?: string; prompt?: string; notes?: string; image?: File };
 
@@ -54,6 +77,11 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
 export const getStory = () => request<StoryResponse>("/api/story");
 export const getTimeline = () => request<TimelineResponse>("/api/timeline");
 export const getPeaks = () => request<PeaksResponse>("/api/peaks");
+export const getSpeech = () => request<SpeechResponse>("/api/speech");
+export const putWordTiming = (body: WordTimingBody) =>
+  request<StoryResponse>("/api/word-timing", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+export const postAlign = (body: AlignRequest) =>
+  request<AlignResponse>("/api/word-timing/align", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 export const putDecisions = (body: DecisionsBody) =>
   request<TimelineResponse>("/api/decisions", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 

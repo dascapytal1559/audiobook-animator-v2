@@ -15,7 +15,7 @@ const usage = `Usage:
 One-time seed import for The Great Silence (PIPELINE A33 / B17). Imports the 14 treatment spans as image-less records and the 15 prototype
 panels (each board cropped into thirds with ffmpeg) as image records, all with deterministic ULIDs, so re-running is a no-op: an existing
 record must equal what would be written or the run fails with a diff summary. Writes a suggested decisions.json only when none exists.
---dry-run validates everything, including the crops, and prints the plan without writing into the planning directory.
+--dry-run validates everything, including the crops, and prints the plan without writing into the story directory.
 --ffmpeg / --ffprobe default to the PATH commands. Treatment and prototype paths resolve from the working directory. Nothing is ever deleted.`;
 
 const invalid = (message: string) => new VisualTimelineError({ code: "InvalidRequest", message });
@@ -51,8 +51,8 @@ const main = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const timeline = yield* loadVisualTimeline({ configPath: values.config });
   const { clip } = timeline;
-  const shotsDirectory = join(timeline.planningDirectory, "shots");
-  const decisionsPath = join(timeline.planningDirectory, "decisions.json");
+  const shotsDirectory = join(timeline.storyDirectory, "shots");
+  const decisionsPath = join(timeline.storyDirectory, "decisions.json");
 
   // Treatment spans.
   const treatmentPath = resolve(values.treatment);

@@ -7,7 +7,7 @@ import { test, type TestContext } from "node:test";
 import { NodeServices } from "@effect/platform-node";
 import { Effect } from "effect";
 import { extractStoryAudio, StoryAudioError } from "../story-audio/index.js";
-import { sha256 } from "../transcription/artifacts.js";
+import { sha256 } from "../transcription/content-hash.js";
 import { type StorySplitConfig, type StorySplitPlan } from "./contracts.js";
 import { splitStories, StorySplitError, validateStorySplit } from "./index.js";
 

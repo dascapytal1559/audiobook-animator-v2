@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 import { NodeHttpServer, NodeServices } from "@effect/platform-node";
 import { Effect, Layer, Stream } from "effect";
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http";
-import { fixture } from "../story-planning/context.fixture.js";
+import { fixture, type FixtureWord } from "../story-planning/context.fixture.js";
 import { loadEditorContext, makeEditorRoutes } from "./index.js";
 const encode = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
 /** A 1x1 transparent PNG. */
@@ -14,20 +14,30 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const VALID_ULID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 /** The synthetic verified story (10 Hz, 100 samples, 12-byte "audio") behind an ephemeral loopback server with a fetch client pointed at it. */
-async function serve(t: TestContext, options: { readonly staticDirectory?: string } = {}) {
-  const story = await fixture(t);
-  const planningDirectory = join(story.dir, "planning");
+async function serve(t: TestContext, options: { readonly staticDirectory?: string; readonly words?: ReadonlyArray<FixtureWord> } = {}) {
+  const story = await fixture(t, options.words ? { words: options.words } : {});
+  const planningDirectory = story.dir;
   await mkdir(join(planningDirectory, "shots"), { recursive: true });
-  await writeFile(join(story.dir, "visual-timeline.json"), encode({ schemaVersion: 1, storyPlanningConfigPath: "config.json", planningDirectory: "planning", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } }));
-  const configPath = join(story.dir, "editor-server.json");
-  await writeFile(configPath, encode({ schemaVersion: 1, visualTimelineConfigPath: "visual-timeline.json", ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 }, watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000 } }));
+  await writeFile(join(story.root, "visual-timeline.json"), encode({ schemaVersion: 1, storyPlanningConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } }));
+  const configPath = join(story.root, "editor-server.json");
+  // At 10 Hz a 100 ms frame is one sample; the lead is 2 samples.
+  await writeFile(configPath, encode({ schemaVersion: 1, visualTimelineConfigPath: "visual-timeline.json", ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 },
+    speech: { frameMs: 100, thresholdDbfs: -50, minSilenceMs: 200, minSpeechMs: 100 }, alignment: { leadMs: 200, boundaryPauseMs: 300 },
+    watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } }));
   const ctx = await Effect.runPromise(loadEditorContext({ configPath }).pipe(Effect.provide(NodeServices.layer)));
-  const layer = HttpRouter.serve(makeEditorRoutes(ctx, { producer: { name: "editor", version: "test" }, ...options }), { disableLogger: true, disableListenLog: true })
+  const layer = HttpRouter.serve(makeEditorRoutes(ctx, { producer: { name: "editor", version: "test" }, ...(options.staticDirectory !== undefined ? { staticDirectory: options.staticDirectory } : {}) }), { disableLogger: true, disableListenLog: true })
     .pipe(Layer.provideMerge(NodeHttpServer.layerTest), Layer.provideMerge(NodeServices.layer));
   const run = <A, E>(effect: Effect.Effect<A, E, Layer.Success<typeof layer>>) => Effect.runPromise(effect.pipe(Effect.provide(layer)));
   const clip = ctx.clip;
-  return { story, ctx, clip, planningDirectory, run };
+  const speechFile = (regions: ReadonlyArray<{ startSample: number; endSample: number }>, extra: Record<string, unknown> = {}) =>
+    writeFile(join(planningDirectory, "speech.json"), JSON.stringify({ schemaVersion: 1, kind: "speech-regions", audioSha256: clip.audioSha256, sampleRateHz: 10, sampleCount: 100, frameSamples: 1, thresholdDbfs: -50, minSilenceMs: 200, minSpeechMs: 100, regions, ...extra }));
+  return { story, ctx, clip, planningDirectory, run, speechFile };
 }
+/** Three more words on the 10 Hz clip: 30..35, 35..40, then 60..70 after a 2-second pause. */
+const MORE_WORDS: ReadonlyArray<FixtureWord> = [{ value: "second", startSeconds: 3, endSeconds: 3.5, punctuation: " " }, { value: "third", startSeconds: 3.5, endSeconds: 4, punctuation: " " }, { value: "fourth", startSeconds: 6, endSeconds: 7, punctuation: "." }];
+const putJson = (path: string, body: unknown) => HttpClient.execute(HttpClientRequest.put(path).pipe(HttpClientRequest.bodyJsonUnsafe(body)));
+const postJson = (path: string, body: unknown) => HttpClient.execute(HttpClientRequest.post(path).pipe(HttpClientRequest.bodyJsonUnsafe(body)));
+const readJson = (path: string) => Effect.promise(async () => JSON.parse(await readFile(path, "utf8")) as Record<string, any>);
 const get = (url: string, headers: Record<string, string> = {}) => HttpClient.get(url, { headers });
 const bodyText = (r: { text: Effect.Effect<string, unknown> }) => r.text.pipe(Effect.orDie);
 const bodyJson = (r: { json: Effect.Effect<unknown, unknown> }) => r.json.pipe(Effect.orDie, Effect.map(v => v as Record<string, any>));
@@ -39,12 +49,145 @@ function shotForm(fields: Record<string, string>, image?: { name: string; bytes:
   return HttpClientRequest.post("/api/shots").pipe(HttpClientRequest.bodyFormData(form));
 }
 
-test("/api/story carries the verified clip, titles, the book-clock start, and words converted to clip samples", async t => {
+test("/api/story carries the verified clip, titles, the book-clock start, words converted to clip samples with their original layer, chunks, and an empty timing summary", async t => {
   const s = await serve(t);
   const { status, body } = await s.run(Effect.gen(function* () { const r = yield* get("/api/story"); return { status: r.status, body: yield* bodyJson(r) }; }));
   assert.equal(status, 200);
-  assert.deepEqual(body, { clip: s.clip, story: { title: "Pilot", bookTitle: "Book" }, sourceStartSample: 100, words: [{ id: "m2:e0", value: "Uncorrected", startSample: 13, endSample: 23 }] });
+  assert.deepEqual(body, { clip: s.clip, story: { title: "Pilot", bookTitle: "Book" }, sourceStartSample: 100,
+    words: [{ id: "m2:e0", value: "Uncorrected", startSample: 13, endSample: 23, original: { startSample: 13, endSample: 23 } }],
+    chunks: [{ id: "c0", startSample: 13, endSample: 23, text: "Uncorrected.", wordIds: ["m2:e0"], breakReason: "end" }],
+    chunking: { minSentenceBreakMs: 0, pauseBreakMs: 600, mergedSentenceBreaks: [] }, timing: { inversions: 0, autoRuns: [], manualCount: 0, autoCount: 0 } });
   assert.deepEqual([s.clip.bookId, s.clip.storyId, s.clip.sampleRateHz, s.clip.sampleCount], ["book", "pilot", 10, 100]);
+});
+
+test("/api/speech serves a cache pinned to the clip and its parameters; a stale or missing speech cache beside a valid peaks cache forces one decode, which fails loudly on the fixture's fake audio", async t => {
+  const s = await serve(t);
+  await s.speechFile([{ startSample: 10, endSample: 30 }, { startSample: 40, endSample: 100 }]);
+  await s.run(Effect.gen(function* () {
+    const hit = yield* get("/api/speech");
+    assert.equal(hit.status, 200);
+    const body = yield* bodyJson(hit);
+    assert.deepEqual([body["kind"], body["frameSamples"], body["thresholdDbfs"], body["minSilenceMs"], body["minSpeechMs"], body["regions"]], ["speech-regions", 1, -50, 200, 100, [{ startSample: 10, endSample: 30 }, { startSample: 40, endSample: 100 }]]);
+  }));
+  const stale = await serve(t);
+  const peaks = { schemaVersion: 1, audioSha256: stale.clip.audioSha256, sampleRateHz: 10, sampleCount: 100, samplesPerBucket: 16, min: [-7, -6, -5, -4, -3, -2, -1], max: [7, 6, 5, 4, 3, 2, 1] };
+  await writeFile(join(stale.planningDirectory, "peaks.json"), JSON.stringify(peaks));
+  await stale.speechFile([{ startSample: 10, endSample: 30 }], { thresholdDbfs: -40 });
+  await stale.run(Effect.gen(function* () {
+    assert.deepEqual(yield* bodyJson(yield* get("/api/peaks")), peaks, "the valid peaks cache is served without decoding");
+    const miss = yield* get("/api/speech");
+    assert.equal(miss.status, 500);
+    assert.equal((yield* bodyJson(miss))["code"], "PeaksFailed");
+    assert.equal((yield* readJson(join(stale.planningDirectory, "speech.json")))["thresholdDbfs"], -40, "a failed decode leaves the old file untouched");
+  }));
+});
+
+test("PUT /api/word-timing replaces the manual overlay, the story serves effective times with both layers and recomputed chunks, and bad bodies never touch the file", async t => {
+  const s = await serve(t, { words: MORE_WORDS });
+  const manualPath = join(s.planningDirectory, "word-timing.json");
+  await s.run(Effect.gen(function* () {
+    const before = yield* bodyJson(yield* get("/api/story"));
+    assert.deepEqual((before["chunks"] as Array<Record<string, unknown>>).map(c => [c["text"], c["breakReason"], c["startSample"], c["endSample"]]), [["Uncorrected.", "sentence", 13, 23], ["second third", "pause", 30, 40], ["fourth.", "end", 60, 70]]);
+    const updated = yield* putJson("/api/word-timing", { words: { "m2:e2": { startSample: 42, endSample: 45 }, "m2:e6": { startSample: 90, endSample: 100 } } });
+    assert.equal(updated.status, 200);
+    const story = yield* bodyJson(updated);
+    assert.deepEqual(story["words"], [
+      { id: "m2:e0", value: "Uncorrected", startSample: 13, endSample: 23, original: { startSample: 13, endSample: 23 } },
+      { id: "m2:e2", value: "second", startSample: 42, endSample: 45, original: { startSample: 30, endSample: 35 }, manual: { startSample: 42, endSample: 45 } },
+      { id: "m2:e4", value: "third", startSample: 35, endSample: 40, original: { startSample: 35, endSample: 40 } },
+      { id: "m2:e6", value: "fourth", startSample: 90, endSample: 100, original: { startSample: 60, endSample: 70 }, manual: { startSample: 90, endSample: 100 } }]);
+    assert.deepEqual(story["timing"], { inversions: 1, autoRuns: [], manualCount: 2, autoCount: 0 }, "second now starts after third: one inversion, reported not rejected");
+    assert.deepEqual((story["chunks"] as Array<Record<string, unknown>>).map(c => [c["text"], c["breakReason"], c["startSample"], c["endSample"]]), [["Uncorrected.", "sentence", 13, 23], ["second third", "pause", 42, 40], ["fourth.", "end", 90, 100]], "chunks follow effective times");
+    const onDisk = yield* readJson(manualPath);
+    assert.deepEqual([onDisk["kind"], onDisk["clip"], onDisk["words"]], ["word-timing-manual", s.clip, { "m2:e2": { startSample: 42, endSample: 45 }, "m2:e6": { startSample: 90, endSample: 100 } }]);
+    assert.ok(!Number.isNaN(Date.parse(onDisk["updatedAt"] as string)));
+    assert.deepEqual(yield* bodyJson(yield* get("/api/story")), story, "GET after PUT returns the same payload");
+    for (const [body, status, pattern] of [
+      [{ words: { "m9:e9": { startSample: 0, endSample: 1 } } }, 400, /not in the transcript: m9:e9/],
+      [{ words: { "m2:e0": { startSample: 5, endSample: 5 } } }, 400, /startSample < endSample/],
+      [{ words: { "m2:e0": { startSample: 0, endSample: 101 } } }, 400, /<= 100/],
+      [{ words: { "m2:e0": { startSample: 1.5, endSample: 3 } } }, 400, /schema/],
+      [{ words: { "m2:e0": { startSample: 1, endSample: 3, extra: true } } }, 400, /schema/],
+      [{ nope: {} }, 400, /words/],
+      [[1], 400, /object/],
+    ] as const) {
+      const response = yield* putJson("/api/word-timing", body);
+      const error = yield* bodyJson(response);
+      assert.equal(response.status, status, JSON.stringify(error));
+      assert.match(String(error["message"]), pattern);
+    }
+    const oversized = yield* HttpClient.execute(HttpClientRequest.put("/api/word-timing").pipe(HttpClientRequest.bodyText(`{"words":{},"pad":"${"x".repeat(70_000)}"}`, "application/json")));
+    assert.equal(oversized.status, 413);
+    assert.deepEqual(yield* readJson(manualPath), onDisk, "rejected writes never touch the file");
+    const cleared = yield* putJson("/api/word-timing", { words: {} });
+    assert.equal(cleared.status, 200);
+    assert.deepEqual((yield* bodyJson(cleared))["timing"], { inversions: 0, autoRuns: [], manualCount: 0, autoCount: 0 });
+  }));
+});
+
+test("POST /api/word-timing/align refuses the whole clip without wholeClip, writes the auto overlay for its range only, and the story layers manual over auto", async t => {
+  const s = await serve(t, { words: MORE_WORDS });
+  await s.speechFile([{ startSample: 15, endSample: 26 }, { startSample: 33, endSample: 43 }, { startSample: 62, endSample: 72 }]);
+  const autoPath = join(s.planningDirectory, "word-timing.auto.json");
+  await s.run(Effect.gen(function* () {
+    const whole = yield* postJson("/api/word-timing/align", { startSample: 0, endSample: 100 });
+    assert.equal(whole.status, 400);
+    assert.match(String((yield* bodyJson(whole))["message"]), /wholeClip/);
+    for (const body of [{ startSample: 10, endSample: 10 }, { startSample: -1, endSample: 10 }, { startSample: 0, endSample: 101 }, { startSample: "0", endSample: 10 }, { startSample: 0, endSample: 10, wholeClip: "yes" }]) {
+      assert.equal((yield* postJson("/api/word-timing/align", body)).status, 400, JSON.stringify(body));
+    }
+    assert.ok(!(yield* Effect.promise(() => readFile(autoPath).then(() => true, () => false))), "refusals write nothing");
+    const first = yield* postJson("/api/word-timing/align", { startSample: 0, endSample: 50 });
+    assert.equal(first.status, 200);
+    const { report, story } = yield* bodyJson(first) as Effect.Effect<{ report: Record<string, any>; story: Record<string, any> }>;
+    assert.deepEqual([report["wordCount"], report["regionCount"], report["leadMs"], report["range"]], [3, 2, 200, { startSample: 0, endSample: 50 }]);
+    assert.deepEqual(report["before"]["onsetErrorMs"], { median: -250, p10: -290, p90: -210 }, "Uncorrected starts 200 ms before onset 15; second starts 300 ms before onset 33");
+    assert.deepEqual(report["after"]["onsetErrorMs"], { median: 0, p10: 0, p90: 0 });
+    assert.deepEqual([report["before"]["insideSpeechFraction"], report["after"]["insideSpeechFraction"]], [0.3333, 1], "only `third` already sits inside a region");
+    // Uncorrected 13..23 shifts to 15..25 and fills 15..26; second/third shift to 32..42 and stretch onto 33..43; fourth starts outside the range.
+    assert.deepEqual((story["words"] as Array<Record<string, unknown>>).map(w => [w["id"], w["startSample"], w["endSample"], w["auto"] ?? null]), [
+      ["m2:e0", 15, 26, { startSample: 15, endSample: 26 }], ["m2:e2", 33, 38, { startSample: 33, endSample: 38 }], ["m2:e4", 38, 43, { startSample: 38, endSample: 43 }], ["m2:e6", 60, 70, null]]);
+    assert.equal((story["timing"] as Record<string, any>)["autoCount"], 3);
+    assert.deepEqual(((story["timing"] as Record<string, any>)["autoRuns"] as Array<Record<string, unknown>>).map(r => [r["startSample"], r["endSample"], r["report"]]), [[0, 50, report]]);
+    const onDisk = yield* readJson(autoPath);
+    assert.deepEqual([onDisk["kind"], onDisk["clip"], onDisk["producer"], onDisk["parameters"]], ["word-timing-auto", s.clip, { name: "editor", version: "test" }, { leadMs: 200, thresholdDbfs: -50, minSilenceMs: 200, minSpeechMs: 100 }]);
+    assert.deepEqual(Object.keys(onDisk["words"] as object), ["m2:e0", "m2:e2", "m2:e4"]);
+    const second = yield* postJson("/api/word-timing/align", { startSample: 50, endSample: 100 });
+    assert.equal(second.status, 200);
+    const after = yield* readJson(autoPath);
+    assert.deepEqual(after["words"], { ...onDisk["words"], "m2:e6": { startSample: 62, endSample: 72 } }, "a second range adds its entries and keeps the first range's");
+    assert.equal((after["runs"] as unknown[]).length, 2);
+    // Re-running the first range replaces its entries (same result here) and appends a run; the manual overlay is never touched and still wins.
+    yield* putJson("/api/word-timing", { words: { "m2:e2": { startSample: 34, endSample: 36 } } });
+    const again = yield* postJson("/api/word-timing/align", { startSample: 0, endSample: 50 });
+    const story3 = (yield* bodyJson(again))["story"] as Record<string, any>;
+    assert.deepEqual((story3["words"] as Array<Record<string, unknown>>)[1], { id: "m2:e2", value: "second", startSample: 34, endSample: 36, original: { startSample: 30, endSample: 35 }, auto: { startSample: 33, endSample: 38 }, manual: { startSample: 34, endSample: 36 } });
+    assert.equal(((yield* readJson(autoPath))["runs"] as unknown[]).length, 3);
+    assert.deepEqual((yield* readJson(join(s.planningDirectory, "word-timing.json")))["words"], { "m2:e2": { startSample: 34, endSample: 36 } });
+    const all = yield* postJson("/api/word-timing/align", { startSample: 0, endSample: 100, wholeClip: true });
+    assert.equal(all.status, 200);
+    assert.equal(((yield* bodyJson(all))["report"] as Record<string, unknown>)["wordCount"], 4);
+  }));
+});
+
+test("an anchored shot follows its word through PUT /api/word-timing, and a decision anchored to an unknown word is a 400", async t => {
+  const s = await serve(t, { words: MORE_WORDS });
+  await s.run(Effect.gen(function* () {
+    const created = yield* bodyJson(yield* HttpClient.execute(shotForm({ startSample: "5", mode: "graphic-illustration" })));
+    const id = created["id"] as string;
+    const stale = yield* putJson("/api/decisions", { settings: { frameAspect: { width: 16, height: 9 } }, shots: { [id]: { anchorWordId: "m9:e9" } } });
+    assert.equal(stale.status, 400);
+    assert.match(String((yield* bodyJson(stale))["message"]), /m9:e9/);
+    const anchored = yield* putJson("/api/decisions", { settings: { frameAspect: { width: 16, height: 9 } }, shots: { [id]: { anchorWordId: "m2:e4", startSample: 50 } } });
+    assert.equal(anchored.status, 200);
+    const stitched = (t: Record<string, any>) => (t["stitched"] as Array<Record<string, unknown>>).map(e => [e["kind"], e["startSample"], e["endSample"]]);
+    assert.deepEqual(stitched(yield* bodyJson(anchored)), [["gap", 0, 35], ["shot", 35, 100]], "the anchor to `third` (35) beats the startSample override");
+    assert.deepEqual((yield* bodyJson(anchored))["unresolvedAnchors"], []);
+    assert.equal((yield* putJson("/api/word-timing", { words: { "m2:e4": { startSample: 80, endSample: 85 } } })).status, 200);
+    const moved = yield* bodyJson(yield* get("/api/timeline"));
+    assert.deepEqual(stitched(moved), [["gap", 0, 80], ["shot", 80, 100]], "the shot follows the word's effective start");
+    assert.equal(((moved["candidates"] as Array<Record<string, any>>)[0]!["shots"][0] as Record<string, unknown>)["anchorWordId"], "m2:e4");
+  }));
 });
 
 test("a multipart shot is created with its image, the timeline round-trips through PUT /api/decisions, and bad inputs get honest statuses", async t => {
