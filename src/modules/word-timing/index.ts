@@ -1,12 +1,11 @@
 import { join } from "node:path";
 import { Effect, FileSystem, type Schema } from "effect";
-import { type ClipIdentity, sameClip } from "../../core/identity.js";
+import { type ClipIdentity, sameClip, validateEntries } from "@animator/domain";
 import { decodeJson, encodeJson as encode, readBounded, writeAtomic } from "../../core/io.js";
 import { type AlignParameters, type AlignReport, type TimingEntries, WordTimingAuto, WordTimingError, WordTimingManual } from "./contracts.js";
-import { validateEntries } from "./effective.js";
-export { alignRange, type AlignInput, measureRange, type MeasureInput, type SampleRange, type TimedWord } from "./align.js";
+export { alignRange, type AlignInput, measureRange, type MeasureInput, type SampleRange, type TimedWord } from "@animator/domain";
 export { AlignParameters, AlignReport, AlignRun, TimingEntries, TimingEntry, TimingMeasure, WordTimingAuto, WordTimingError, WordTimingManual } from "./contracts.js";
-export { type EffectiveTiming, type EffectiveWord, effectiveTiming, type SourceWord, validateEntries } from "./effective.js";
+export { type EffectiveTiming, type EffectiveWord, effectiveTiming, type SourceWord, validateEntries } from "@animator/domain";
 export { detectRegions, type DetectOptions, SpeechAccumulator, type SpeechRegion } from "./speech.js";
 type Code = WordTimingError["code"];
 const fail = (code: Code, message: string) => Effect.fail(new WordTimingError({ code, message }));

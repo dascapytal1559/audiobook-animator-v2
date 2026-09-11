@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ApiError, storyApi, useServerEvents, type PeaksResponse, type ShotMode, type SpeechResponse, type StitchedEntry, type StorySummary, type Word } from "./api.js";
-import { referenceChunks, retimeChunks } from "./chunks.js";
-import { entryAt, mergeTimeline } from "./merge.js";
+import { clampSample, entryAt, mergeTimeline, millisecondsToSamples, retimeChunks, secondsToSamples } from "@animator/domain";
+import { referenceChunks } from "./rows.js";
 import { planTick } from "./playback.js";
 import { selectItem, selectedRange, type SelectionItem } from "./selection.js";
 import type { SnapTarget } from "./snap.js";
@@ -12,7 +12,6 @@ import { decisionsForView, initialState, isDecisionsDirty, isDirty, isTimingDirt
 import { Timeline, type TimingRowData } from "./Timeline.js";
 import { effectiveWords, wordStartMap } from "./timing.js";
 import { Transport } from "./Transport.js";
-import { clampSample, millisecondsToSamples, secondsToSamples } from "./time.js";
 
 const SAVE_DEBOUNCE_MS = 300;
 const SEEK_TOLERANCE_MS = 1;

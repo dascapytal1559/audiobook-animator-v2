@@ -1,5 +1,5 @@
 import { Data, Schema } from "effect";
-import { Id, Path, Positive } from "../../core/schema.js";
+import { Id, Path, Positive } from "@animator/domain";
 
 
 /**

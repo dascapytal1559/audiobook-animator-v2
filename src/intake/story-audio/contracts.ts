@@ -1,5 +1,5 @@
 import { Data, Schema, Struct } from "effect";
-import { NonNegative, Path, Positive, Sha256 } from "../../core/schema.js";
+import { NonNegative, Path, Positive, Sha256 } from "@animator/domain";
 import { SourceMediaRequest } from "../source-media/contracts.js";
 
 

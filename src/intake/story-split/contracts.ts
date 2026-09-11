@@ -1,5 +1,5 @@
 import { Data, Schema, Struct } from "effect";
-import { NonNegative, Path, Positive, Sha256, Text } from "../../core/schema.js";
+import { NonNegative, Path, Positive, Sha256, Text } from "@animator/domain";
 import { StoryAudioRequest } from "../story-audio/contracts.js";
 import { BookSource } from "../transcription/book-contracts.js";
 import { Punctuation } from "../transcription/contracts.js";

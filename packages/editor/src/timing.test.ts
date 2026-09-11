@@ -21,11 +21,6 @@ test("effective times are manual, else auto, else original; the local map wins o
   assert.deepEqual(manualMapOf(words), { w3: { startSample: 3300, endSample: 4200 } });
 });
 
-test("a story without overlay fields (older server) reads as original-only", () => {
-  const legacy = { id: "x", value: "x", startSample: 10, endSample: 20 } as unknown as Word;
-  assert.deepEqual(effectiveWords([legacy], {})[0], { id: "x", value: "x", startSample: 10, endSample: 20, original: { startSample: 10, endSample: 20 } });
-});
-
 test("the delta clamps against unselected neighbours and the clip bounds", () => {
   const base = effectiveWords(words, {});
   // Selecting w2–w3: previous end 2000, first start 2250 → min -250; next start 5000, last end 4150 → max +850.

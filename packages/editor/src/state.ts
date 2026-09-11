@@ -2,7 +2,8 @@
  * Editor state: loaded story and timeline, the locally edited decisions overlay, the locally edited word-timing overlay with its undo
  * stack (A41), the word selection (A38), save status, and client-only playback state.
  */
-import type { AlignReport, Decisions, DecisionsBody, ShotDecision, ShotRecord, StoryResponse, TimelineResponse, TimelineSettings, Word } from "./api.js";
+import { DEFAULT_SETTINGS } from "@animator/domain";
+import type { AlignReport, Decisions, DecisionsBody, ShotDecision, ShotRecord, StoryResponse, TimelineResponse, Word } from "./api.js";
 import { selectedRange, type Selection } from "./selection.js";
 import type { SnapTarget } from "./snap.js";
 import { clampDelta, effectiveWords, manualMapOf, moveWords, shiftedWords, type ManualMap } from "./timing.js";
@@ -45,7 +46,7 @@ export type EditorState = {
   readonly error: string | null;
 };
 
-export const DEFAULT_SETTINGS: TimelineSettings = { frameAspect: { width: 16, height: 9 } };
+export { DEFAULT_SETTINGS };
 
 export const initialState: EditorState = {
   story: null, records: [], storyDirectory: null, serverDecisions: null,

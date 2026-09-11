@@ -2,6 +2,7 @@
  * Word timing on the client (A39, A40, A42): the effective layer merge, the group move with its neighbour clamp, and the manual
  * overlay map that autosave sends. Words are always handled in transcript order; the row order is the order the story lists them.
  */
+import { effectiveTiming, type TimingEntries } from "@animator/domain";
 import type { Span, Word } from "./api.js";
 import type { IndexRange } from "./selection.js";
 
@@ -14,18 +15,11 @@ export function manualMapOf(words: ReadonlyArray<Word>): ManualMap {
   return map;
 }
 
-/**
- * Words with the local manual map applied: `manual` mirrors the map and the top-level times are manual, else auto, else original.
- * A story from a server that predates the overlay fields (no `original`) is read as having only original times.
- */
+/** Words with the local manual map applied through the shared rule: the top-level times are manual, else auto, else original, and `manual` mirrors the map. */
 export function effectiveWords(words: ReadonlyArray<Word>, manual: ManualMap): ReadonlyArray<Word> {
-  return words.map(word => {
-    const original = word.original ?? { startSample: word.startSample, endSample: word.endSample };
-    const local = manual[word.id];
-    const effective = local ?? word.auto ?? original;
-    const { manual: _m, ...rest } = word;
-    return { ...rest, original, startSample: effective.startSample, endSample: effective.endSample, ...(local !== undefined ? { manual: local } : {}) };
-  });
+  const auto: Record<string, Span> = {};
+  for (const word of words) if (word.auto !== undefined) auto[word.id] = word.auto;
+  return effectiveTiming(words.map(w => ({ id: w.id, value: w.value, startSample: w.original.startSample, endSample: w.original.endSample })), auto, manual as TimingEntries).words;
 }
 
 /**

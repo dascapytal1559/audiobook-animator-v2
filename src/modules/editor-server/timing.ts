@@ -1,6 +1,6 @@
 import { Console, Effect, Option, Semaphore } from "effect";
 import { type AlignReport, alignRange, autoPath, effectiveTiming, loadOverlays, manualPath, type OverlayContext, type TimingEntries, writeAutoRun, WordTimingError, writeManual } from "../word-timing/index.js";
-import { computeChunks, listSentenceBreaks } from "./chunks.js";
+import { computeChunks, listSentenceBreaks, type StoryResponse } from "@animator/domain";
 import { EditorServerError, type PeaksFile, type SpeechFile } from "./contracts.js";
 import { computePeaksAndSpeech, readPeaksCache, readSpeechCache, writeCache } from "./peaks.js";
 import type { EditorContext } from "./routes.js";
@@ -61,15 +61,17 @@ export function loadTiming(ctx: EditorContext) {
     return { auto, manual, effective, chunks, wordStarts, chunking: { minSentenceBreakMs, pauseBreakMs: ctx.config.chunking.pauseBreakMs, mergedSentenceBreaks } };
   });
 }
-/** `GET /api/story`: identity, titles, effective words with their layers, chunks on effective times, and the timing summary. */
+/** `GET /api/story`: identity, titles, the element order, effective words with their layers, chunks on effective times, and the timing summary, in the shared wire shape. */
 export function storyPayload(ctx: EditorContext) {
   return Effect.gen(function* () {
     const t = yield* loadTiming(ctx);
-    return {
+    const payload: StoryResponse = {
       clip: ctx.clip, story: { title: ctx.story.story.title, bookTitle: ctx.story.bookTitle, transcriptProvider: ctx.story.story.transcriptProvider }, sourceStartSample: ctx.story.sourceStartSample,
+      elements: ctx.elements.map(e => e.kind === "word" ? { kind: "word", id: e.id } : { kind: "punctuation", value: e.value }),
       words: t.effective.words, chunks: t.chunks, chunking: t.chunking,
       timing: { inversions: t.effective.inversions, autoRuns: t.auto?.runs ?? [], manualCount: t.effective.manualCount, autoCount: t.effective.autoCount },
     };
+    return payload;
   });
 }
 export type StoryPayload = Effect.Success<ReturnType<typeof storyPayload>>;

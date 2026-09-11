@@ -1,6 +1,5 @@
 import { Data, Schema } from "effect";
-import { NonNegative, Path, Positive, Sha256 } from "../../core/schema.js";
-const Int16 = Schema.Int.check(Schema.isBetween({ minimum: -32768, maximum: 32767 }));
+import { NonNegative, Path, Positive } from "@animator/domain";
 
 /**
  * `config/editor-server.json`. Paths resolve from the config file; the port and static directory are command-line arguments.
@@ -23,20 +22,7 @@ export const EditorServerConfig = Schema.Struct({
 });
 export type EditorServerConfig = typeof EditorServerConfig.Type;
 
-/** `<story>/cache/peaks.json`: int16 min/max per bucket of decoded mono samples, pinned to the clip's audio hash. The last bucket may be partial. */
-export const PeaksFile = Schema.Struct({
-  schemaVersion: Schema.Literal(1), audioSha256: Sha256, sampleRateHz: Positive, sampleCount: Positive, samplesPerBucket: Positive,
-  min: Schema.Array(Int16), max: Schema.Array(Int16),
-});
-export type PeaksFile = typeof PeaksFile.Type;
-
-/** `<story>/cache/speech.json`: detected speech regions on the clip clock, pinned to the audio hash and the detection parameters. Computed in the same decode as peaks (A46). */
-export const SpeechFile = Schema.Struct({
-  schemaVersion: Schema.Literal(1), kind: Schema.Literal("speech-regions"), audioSha256: Sha256, sampleRateHz: Positive, sampleCount: Positive,
-  frameSamples: Positive, thresholdDbfs: Schema.Number, minSilenceMs: Positive, minSpeechMs: Positive,
-  regions: Schema.Array(Schema.Struct({ startSample: NonNegative, endSample: NonNegative })),
-});
-export type SpeechFile = typeof SpeechFile.Type;
+export { PeaksFile, SpeechFile } from "@animator/domain";
 
 export class EditorServerError extends Data.TaggedError("EditorServerError")<{
   readonly code: "InvalidConfig" | "InvalidRequest" | "PayloadTooLarge" | "NotFound" | "PeaksFailed" | "IoFailed";

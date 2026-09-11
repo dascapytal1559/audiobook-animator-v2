@@ -1,5 +1,83 @@
-import type { AlignReport, TimingEntries, TimingEntry, TimingMeasure } from "./contracts.js";
-import type { SpeechRegion } from "./speech.js";
+import { Schema } from "effect";
+import { ClipIdentity, Producer } from "./identity.js";
+import { IsoUtc, NonNegative, Positive } from "./schema.js";
+
+/** One word's span on the clip clock. Keys of the overlay maps are transcript word ids; `startSample < endSample <= sampleCount` is checked against the loaded transcript, not here. */
+export const TimingEntry = Schema.Struct({ startSample: NonNegative, endSample: NonNegative });
+export type TimingEntry = typeof TimingEntry.Type;
+export const TimingEntries = Schema.Record(Schema.String, TimingEntry);
+export type TimingEntries = typeof TimingEntries.Type;
+/** A detected speech region on the clip clock; regions are sorted and disjoint. */
+export type SpeechRegion = TimingEntry;
+
+/** Before/after statistics for one range (A48). Percentiles are null when the range holds no phrase boundary; the fraction is null when it holds no word. */
+export const TimingMeasure = Schema.Struct({
+  wordCount: NonNegative, boundaryCount: NonNegative,
+  onsetErrorMs: Schema.NullOr(Schema.Struct({ median: Schema.Number, p10: Schema.Number, p90: Schema.Number })),
+  insideSpeechCount: NonNegative, insideSpeechFraction: Schema.NullOr(Schema.Number),
+});
+export type TimingMeasure = typeof TimingMeasure.Type;
+export const AlignReport = Schema.Struct({
+  range: Schema.Struct({ startSample: NonNegative, endSample: NonNegative }), wordCount: NonNegative, regionCount: NonNegative, leadMs: Schema.Int, boundaryPauseMs: Positive,
+  before: TimingMeasure, after: TimingMeasure,
+});
+export type AlignReport = typeof AlignReport.Type;
+export const AlignParameters = Schema.Struct({ leadMs: Schema.Int, thresholdDbfs: Schema.Number, minSilenceMs: Positive, minSpeechMs: Positive });
+export type AlignParameters = typeof AlignParameters.Type;
+export const AlignRun = Schema.Struct({ startSample: NonNegative, endSample: NonNegative, ranAt: IsoUtc, report: AlignReport });
+export type AlignRun = typeof AlignRun.Type;
+/** `<story>/word-timing.auto.json`: written only by the align pass (A42). Entries for a range are replaced by each run over it; every run is appended. */
+export const WordTimingAuto = Schema.Struct({
+  schemaVersion: Schema.Literal(1), kind: Schema.Literal("word-timing-auto"), clip: ClipIdentity, updatedAt: IsoUtc, producer: Producer,
+  parameters: AlignParameters, runs: Schema.Array(AlignRun), words: TimingEntries,
+});
+export type WordTimingAuto = typeof WordTimingAuto.Type;
+/** `<story>/word-timing.json`: written only by the editor (A42). Replaced wholesale on every save. */
+export const WordTimingManual = Schema.Struct({
+  schemaVersion: Schema.Literal(1), kind: Schema.Literal("word-timing-manual"), clip: ClipIdentity, updatedAt: IsoUtc, words: TimingEntries,
+});
+export type WordTimingManual = typeof WordTimingManual.Type;
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Effective timing (A37, A42)
+
+/** A transcript word with its provider timing on the clip clock. */
+export type SourceWord = { readonly id: string; readonly value: string; readonly startSample: number; readonly endSample: number };
+/** A word after the overlays: top-level times are effective (manual, else auto, else original); the layers stay visible for the three tracks (A52). */
+export type EffectiveWord = SourceWord & { readonly original: TimingEntry; readonly auto?: TimingEntry; readonly manual?: TimingEntry };
+export type EffectiveTiming = {
+  readonly words: ReadonlyArray<EffectiveWord>;
+  /** Neighbouring pairs, in transcript order, whose effective starts are out of order. Not rejected: manual and auto entries mix freely (A42). */
+  readonly inversions: number;
+  readonly manualCount: number; readonly autoCount: number;
+};
+
+/** Validate one overlay's entries against the transcript: every key a word id, `0 <= startSample < endSample <= sampleCount`. Returns the first problem, naming `label`. */
+export function validateEntries(entries: TimingEntries, wordIds: ReadonlySet<string>, sampleCount: number, label: string): string | null {
+  for (const [id, entry] of Object.entries(entries)) {
+    if (!wordIds.has(id)) return `Timing entry names a word that is not in the transcript: ${id} in ${label}.`;
+    if (!(entry.startSample >= 0 && entry.startSample < entry.endSample && entry.endSample <= sampleCount)) return `Timing entry for ${id} must satisfy 0 <= startSample < endSample <= ${sampleCount}, got ${entry.startSample}..${entry.endSample} in ${label}.`;
+  }
+  return null;
+}
+
+/** Pure precedence merge: manual, else auto, else original. Entries for ids not in `words` are ignored; validate first. */
+export function effectiveTiming(words: ReadonlyArray<SourceWord>, auto: TimingEntries | undefined, manual: TimingEntries | undefined): EffectiveTiming {
+  let manualCount = 0, autoCount = 0, inversions = 0;
+  const merged: EffectiveWord[] = words.map(word => {
+    const original = { startSample: word.startSample, endSample: word.endSample };
+    const a = auto?.[word.id]; const m = manual?.[word.id];
+    if (a !== undefined) autoCount++;
+    if (m !== undefined) manualCount++;
+    const effective = m ?? a ?? original;
+    return { id: word.id, value: word.value, startSample: effective.startSample, endSample: effective.endSample, original, ...(a !== undefined ? { auto: a } : {}), ...(m !== undefined ? { manual: m } : {}) };
+  });
+  for (let i = 1; i < merged.length; i++) if (merged[i]!.startSample < merged[i - 1]!.startSample) inversions++;
+  return { words: merged, inversions, manualCount, autoCount };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The energy-only align pass (A47) and its measurement (A48)
 
 export type TimedWord = TimingEntry & { readonly id: string };
 export type SampleRange = { readonly startSample: number; readonly endSample: number };
@@ -60,12 +138,12 @@ export function measureRange(input: MeasureInput): TimingMeasure {
 
 /**
  * The energy-only first pass (A47), pure. Takes the words whose original start lies in `[range.startSample, range.endSample)`, shifts each later by
- * the lead, assigns each to the speech region it overlaps most, then maps every
- * region's words linearly. A word that overlaps no region joins the region of its nearest overlapping neighbour within the same sentence (walking outward in
- * transcript order, stopping at a sentence start); with such a neighbour on both sides, or none, it takes the nearest region by distance (earliest wins ties). Then maps every
- * region's words linearly so the earliest start lands on the region start and the latest end on the region end; a lone word fills its region.
- * Regions are first clipped to the range and regions outside it dropped, so no entry ever leaves the range; with no region in the range there are
- * no entries. Word order within a region is preserved; results are integers with `startSample < endSample`. Words outside the range are untouched.
+ * the lead, assigns each to the speech region it overlaps most. A word that overlaps no region joins the region of its nearest overlapping neighbour
+ * within the same sentence (walking outward in transcript order, stopping at a sentence start); with such a neighbour on both sides, or none, it takes
+ * the nearest region by distance (earliest wins ties). Then maps every region's words linearly so the earliest start lands on the region start and the
+ * latest end on the region end; a lone word fills its region. Regions are first clipped to the range and regions outside it dropped, so no entry ever
+ * leaves the range; with no region in the range there are no entries. Word order within a region is preserved; results are integers with
+ * `startSample < endSample`. Words outside the range are untouched.
  */
 export function alignRange(input: AlignInput): { readonly entries: TimingEntries; readonly report: AlignReport } {
   const { words, regions, range, sampleRateHz, leadMs, boundaryPauseMs } = input;

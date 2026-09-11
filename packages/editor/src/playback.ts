@@ -1,6 +1,6 @@
 /** One playback tick's decision: keep advancing, wrap a loop, or stop at a boundary. Pure so it can be tested without an audio element. */
 import type { StitchedEntry } from "./api.js";
-import { entryAt } from "./merge.js";
+import { entryAt } from "@animator/domain";
 
 export type TickInput = {
   readonly sample: number; readonly sampleCount: number; readonly toleranceSamples: number;

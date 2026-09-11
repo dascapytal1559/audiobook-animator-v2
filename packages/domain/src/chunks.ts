@@ -1,13 +1,16 @@
-/** Transcript chunking for the editor's chunk lane: a chunk is a maximal run of words ended by sentence punctuation, a long pause, or the end of the transcript. */
+import { Schema } from "effect";
+import { NonNegative, Text } from "./schema.js";
 
+/** Transcript chunking for the editor's chunk lane: a chunk is a maximal run of words ended by sentence punctuation, a long pause, or the end of the transcript. */
 export type ChunkElement =
   | { readonly kind: "word"; readonly id: string; readonly value: string; readonly startSample: number; readonly endSample: number }
   | { readonly kind: "punctuation"; readonly value: string };
-export type ChunkBreakReason = "sentence" | "pause" | "end";
-export type Chunk = {
-  readonly id: string; readonly startSample: number; readonly endSample: number; readonly text: string;
-  readonly wordIds: ReadonlyArray<string>; readonly breakReason: ChunkBreakReason;
-};
+export const ChunkBreakReason = Schema.Literals(["sentence", "pause", "end"]);
+export type ChunkBreakReason = typeof ChunkBreakReason.Type;
+export const Chunk = Schema.Struct({
+  id: Text, startSample: NonNegative, endSample: NonNegative, text: Schema.String, wordIds: Schema.Array(Text), breakReason: ChunkBreakReason,
+});
+export type Chunk = typeof Chunk.Type;
 
 const SENTENCE_END = /[.?!]/;
 
@@ -73,4 +76,17 @@ export function computeChunks(elements: ReadonlyArray<ChunkElement>, pauseBreakS
     else if (next.kind === "word" && next.startSample - element.endSample >= pauseBreakSamples) close("pause");
   }
   return chunks;
+}
+
+/**
+ * The same grouping re-timed from the words as they currently are, so chunk boxes follow local edits before the server confirms them.
+ * Membership, text, and break reasons are kept; only `startSample`/`endSample` are recomputed from the members present.
+ */
+export function retimeChunks(chunks: ReadonlyArray<Chunk>, words: ReadonlyArray<{ readonly id: string; readonly startSample: number; readonly endSample: number }>): ReadonlyArray<Chunk> {
+  const byId = new Map(words.map(w => [w.id, w]));
+  return chunks.map(chunk => {
+    const members = chunk.wordIds.map(id => byId.get(id)).filter(w => w !== undefined);
+    if (members.length === 0) return chunk;
+    return { ...chunk, startSample: Math.min(...members.map(w => w.startSample)), endSample: Math.max(...members.map(w => w.endSample)) };
+  });
 }

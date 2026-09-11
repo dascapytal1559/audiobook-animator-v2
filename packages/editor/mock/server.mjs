@@ -20,6 +20,7 @@ const ms = (n) => Math.round((n / 1000) * RATE);
 const wordSpec = [["The", 100, 250], ["humans", 260, 520], ["use", 530, 640], ["we", 650, 850], ["would", 1250, 1450], ["call", 1460, 1600], ["silence", 1620, 1950]];
 // Three timing layers (A42): the transcriber's original, the script's auto overlay, and the editor's manual overlay. The mock starts with
 // one auto entry ("use", shifted 150 ms later like the pilot's measured lead) and one manual entry ("silence").
+const elements = wordSpec.flatMap((_, i) => [{ kind: "word", id: `w${i + 1}` }, { kind: "punctuation", value: i === wordSpec.length - 1 ? "." : " " }]);
 const original = wordSpec.map(([value, s, e], i) => ({ id: `w${i + 1}`, value, startSample: ms(s), endSample: ms(e) }));
 const autoRuns = [];
 let auto = { w3: { startSample: ms(680), endSample: ms(790) } };
@@ -49,17 +50,17 @@ function chunksOf(words) {
 }
 function story(storyId) {
   const words = effective();
-  const inversions = words.filter((w, i) => i > 0 && w.startSample < words[i - 1].endSample).map(w => w.id);
+  const inversions = words.filter((w, i) => i > 0 && w.startSample < words[i - 1].startSample).length;
   const listed = STORIES.find(s => s.id === storyId);
-  return { clip: { ...clip, bookId: listed.bookId, storyId }, story: { title: listed.title, bookTitle: listed.bookTitle }, sourceStartSample: 123456789, words, chunks: chunksOf(words), chunking: { ...CHUNKING, mergedSentenceBreaks: [] }, timing: { inversions, autoRuns, manualCount: Object.keys(manual).length, autoCount: Object.keys(auto).length } };
+  return { clip: { ...clip, bookId: listed.bookId, storyId }, story: { title: listed.title, bookTitle: listed.bookTitle }, sourceStartSample: 123456789, elements, words, chunks: chunksOf(words), chunking: { ...CHUNKING, mergedSentenceBreaks: [] }, timing: { inversions, autoRuns, manualCount: Object.keys(manual).length, autoCount: Object.keys(auto).length } };
 }
 // Speech regions (A44): the synthetic tone is silent only during the 850–1250 ms pause, so two regions with a deliberate 150 ms lead on the words.
-const speech = { schemaVersion: 1, audioSha256: clip.audioSha256, sampleRateHz: RATE, sampleCount: COUNT, frameSamples: ms(10), thresholdDbfs: -50, minSilenceMs: 150, minSpeechMs: 50, regions: [{ startSample: ms(250), endSample: ms(850) }, { startSample: ms(1250), endSample: ms(2000) }] };
+const speech = { schemaVersion: 1, kind: "speech-regions", audioSha256: clip.audioSha256, sampleRateHz: RATE, sampleCount: COUNT, frameSamples: ms(10), thresholdDbfs: -50, minSilenceMs: 150, minSpeechMs: 50, regions: [{ startSample: ms(250), endSample: ms(850) }, { startSample: ms(1250), endSample: ms(2000) }] };
 const wordsById = () => new Map(effective().map(w => [w.id, w]));
 
 const svg = (color, text) => `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><rect width="640" height="360" fill="${color}"/><text x="320" y="190" font-size="40" text-anchor="middle" fill="#fff" font-family="sans-serif">${text}</text></svg>`;
 const images = new Map();
-const ulid = (n) => `01JMOCK${"0".repeat(15)}${String(n).padStart(4, "0")}`;
+const ulid = (n) => `01JMCK${"0".repeat(16)}${String(n).padStart(4, "0")}`;
 const record = (n, startSample, mode, createdAt, extra = {}) => ({ schemaVersion: 1, kind: "visual-shot-generation", id: ulid(n), clip, startSample, mode, createdAt, producer: { name: "mock", version: "1" }, ...extra });
 let counter = 0;
 const records = [];
@@ -105,7 +106,7 @@ function merge(storyId) {
   if (firstStart > 0) stitched.unshift({ kind: "gap", startSample: 0, endSample: firstStart });
   return { candidates, stitched };
 }
-const timeline = (storyId) => ({ clip, storyDirectory: `/mock/stories/${storyId}`, records: records.map(withUrl(storyId)), decisions, ...merge(storyId) });
+const timeline = (storyId) => ({ clip, storyDirectory: `/mock/stories/${storyId}`, records: records.map(withUrl(storyId)), decisions, ...merge(storyId), unresolvedAnchors: [] });
 
 // Synthetic audio: a 220 Hz tone with a slow amplitude sweep, silent during the 850–1250 ms pause.
 const pcm = new Int16Array(COUNT);
@@ -237,8 +238,8 @@ const server = createServer(async (req, res) => {
       // Canned pass: every original word in the range gets an auto value 150 ms later (the pilot's measured lead).
       const inRange = original.filter(w => w.startSample < body.endSample && w.endSample > body.startSample);
       for (const w of inRange) auto[w.id] = { startSample: w.startSample + ms(150), endSample: w.endSample + ms(150) };
-      const stats = (median) => ({ boundaryMedianMs: median, boundaryP10Ms: median / 3, boundaryP90Ms: median * 1.8, insideSpeechFraction: median > 100 ? 0.86 : 0.94, wordCount: inRange.length });
-      const report = { before: stats(152), after: stats(38) };
+      const measure = (median, fraction) => ({ wordCount: inRange.length, boundaryCount: Math.min(2, inRange.length), onsetErrorMs: { median, p10: median / 3, p90: median * 1.8 }, insideSpeechCount: Math.round(inRange.length * fraction), insideSpeechFraction: fraction });
+      const report = { range: { startSample: body.startSample, endSample: body.endSample }, wordCount: inRange.length, regionCount: 2, leadMs: 150, boundaryPauseMs: 300, before: measure(152, 0.86), after: measure(38, 0.94) };
       autoRuns.push({ startSample: body.startSample, endSample: body.endSample, ranAt: new Date().toISOString(), report });
       posts.push({ at: new Date().toISOString(), route: "/api/word-timing/align", body });
       console.error(`POST /api/word-timing/align: ${JSON.stringify(body)} → ${inRange.length} words`);

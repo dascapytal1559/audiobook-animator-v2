@@ -1,5 +1,5 @@
 import { Data, Schema } from "effect";
-import { Sha256 } from "../../core/schema.js";
+import { Sha256 } from "@animator/domain";
 export { Sha256 };
 
 export const JobId = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/));

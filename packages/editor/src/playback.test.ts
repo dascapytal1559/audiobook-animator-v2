@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ClipIdentity, ShotRecord } from "./api.js";
-import { mergeTimeline } from "./merge.js";
+import { mergeTimeline } from "@animator/domain";
 import { planTick } from "./playback.js";
 
 const clip: ClipIdentity = { bookId: "b", storyId: "s", audioSha256: "a".repeat(64), transcriptSha256: "b".repeat(64), sampleRateHz: 48000, sampleCount: 96000 };

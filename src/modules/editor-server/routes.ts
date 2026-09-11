@@ -6,7 +6,8 @@ import { loadStoryContext, StoryManifest, StoryConfig, StoryError, type StoryCon
 import { decodeJson, readBounded } from "../../core/io.js";
 import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotRecord, VisualTimelineConfig, VisualTimelineError, writeDecisions, type DecisionsBody } from "../visual-timeline/index.js";
 import { type TimingEntries, WordTimingError } from "../word-timing/index.js";
-import type { ChunkElement } from "./chunks.js";
+import { type ChunkElement, type StoriesResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
+export type { StorySummary };
 import { EditorServerConfig, EditorServerError } from "./contracts.js";
 import type { PeaksIdentity, SpeechIdentity } from "./peaks.js";
 import { parseRange } from "./range.js";
@@ -37,11 +38,6 @@ export type EditorContext = EditorConfigContext & {
   /** Transcript elements (words with original timing, plus punctuation) in order, for chunking. */
   readonly elements: ReadonlyArray<ChunkElement>;
   readonly words: ReadonlyArray<EditorWord>;
-};
-/** What `GET /api/stories` lists for one story: identity and size from its manifest, without opening the transcript. */
-export type StorySummary = {
-  readonly id: string; readonly title: string; readonly bookId: string; readonly bookTitle: string;
-  readonly wordCount: number; readonly sampleRateHz: number; readonly sampleCount: number; readonly durationSeconds: number; readonly durationDisplay: string;
 };
 /** A story opened by the server: its verified context and its in-memory peaks/speech caches. */
 export type OpenStory = { readonly ctx: EditorContext; readonly caches: Caches };
@@ -206,7 +202,7 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
   const timeline = (ctx: EditorContext) => Effect.gen(function* () {
     const { wordStarts } = yield* loadTiming(ctx);
     const t = yield* loadVisualTimeline({ configPath: ctx.timelineConfigPath, storyDirectory: ctx.storyDirectory, wordStarts });
-    return { ...t, records: t.records.map(imageUrl(ctx.clip.storyId)) };
+    return { ...t, records: t.records.map(imageUrl(ctx.clip.storyId)) } satisfies TimelineResponse;
   });
   const storyJson = (ctx: EditorContext) => Effect.map(storyPayload(ctx), json);
   const number = (name: string, value: string | undefined) => {
@@ -218,7 +214,7 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
   const ignoredChange = (ctx: EditorContext, path: string) => basename(path).startsWith(".") || path === ctx.cacheDirectory || path.startsWith(ctx.cacheDirectory + "/");
   const at = <P extends `/${string}`>(path: P) => `/api/stories/:storyId${path}` as const;
 
-  const stories = HttpRouter.add("GET", "/api/stories", json({ defaultStoryId: library.defaultStoryId, stories: library.stories }));
+  const stories = HttpRouter.add("GET", "/api/stories", json({ defaultStoryId: library.defaultStoryId, stories: library.stories } satisfies StoriesResponse));
   const story = HttpRouter.add("GET", at("/story"), handle(withStory(s => storyJson(s.ctx))));
   const timelineRoute = HttpRouter.add("GET", at("/timeline"), handle(withStory(s => Effect.map(timeline(s.ctx), t => json(t)))));
   const decisions = HttpRouter.add("PUT", at("/decisions"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {

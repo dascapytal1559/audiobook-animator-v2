@@ -1,4 +1,4 @@
-import { formatSampleClock } from "./time.js";
+import { formatSampleClock } from "@animator/domain";
 import type { SaveStatus, WorkingRegion } from "./state.js";
 
 type Props = {

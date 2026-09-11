@@ -55,11 +55,12 @@ function shotForm(fields: Record<string, string>, image?: { name: string; bytes:
   return HttpClientRequest.post("/api/stories/pilot/shots").pipe(HttpClientRequest.bodyFormData(form));
 }
 
-test("/api/story carries the verified clip, titles, the book-clock start, words converted to clip samples with their original layer, chunks, and an empty timing summary", async t => {
+test("/api/story carries the verified clip, titles, the book-clock start, the element order, words converted to clip samples with their original layer, chunks, and an empty timing summary", async t => {
   const s = await serve(t);
   const { status, body } = await s.run(Effect.gen(function* () { const r = yield* get("/api/stories/pilot/story"); return { status: r.status, body: yield* bodyJson(r) }; }));
   assert.equal(status, 200);
   assert.deepEqual(body, { clip: s.clip, story: { title: "Pilot", bookTitle: "Book", transcriptProvider: "rev-ai" }, sourceStartSample: 100,
+    elements: s.ctx.elements.map(e => e.kind === "word" ? { kind: "word", id: e.id } : { kind: "punctuation", value: e.value }),
     words: [{ id: "m2:e0", value: "Uncorrected", startSample: 13, endSample: 23, original: { startSample: 13, endSample: 23 } }],
     chunks: [{ id: "c0", startSample: 13, endSample: 23, text: "Uncorrected.", wordIds: ["m2:e0"], breakReason: "end" }],
     chunking: { minSentenceBreakMs: 0, pauseBreakMs: 600, mergedSentenceBreaks: [] }, timing: { inversions: 0, autoRuns: [], manualCount: 0, autoCount: 0 } });

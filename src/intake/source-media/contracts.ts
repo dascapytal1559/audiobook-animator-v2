@@ -1,5 +1,5 @@
 import { Data, Schema } from "effect";
-import { Path, Positive } from "../../core/schema.js";
+import { Path, Positive } from "@animator/domain";
 
 
 /** All operational limits are supplied at the application boundary. */

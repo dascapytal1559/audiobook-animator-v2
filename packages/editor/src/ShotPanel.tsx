@@ -1,7 +1,7 @@
 import { useState, type ChangeEvent } from "react";
 import { SHOT_MODES, type CandidateGroup, type EffectiveShot, type ShotMode, type StitchedEntry } from "./api.js";
 import { MODE_COLORS, MODE_LABELS } from "./modes.js";
-import { formatSampleClock } from "./time.js";
+import { formatSampleClock } from "@animator/domain";
 
 type ShotEntry = Extract<StitchedEntry, { kind: "shot" }>;
 type Props = {

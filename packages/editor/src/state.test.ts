@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ClipIdentity, Decisions, ShotRecord, StoryResponse, TimelineResponse, Word } from "./api.js";
 import { applyPatch, decisionsForView, initialState, isDirty, isTimingDirty, reduce, wordsForView, workingBounds, type EditorState } from "./state.js";
-import { mergeTimeline } from "./merge.js";
+import { mergeTimeline } from "@animator/domain";
 
 const clip: ClipIdentity = { bookId: "b", storyId: "s", audioSha256: "a".repeat(64), transcriptSha256: "b".repeat(64), sampleRateHz: 48000, sampleCount: 96000 };
 const record = (id: string, startSample: number, createdAt: string, extra: Partial<ShotRecord> = {}): ShotRecord =>
@@ -11,7 +11,7 @@ const decisions = (shots: Decisions["shots"] = {}): Decisions =>
   ({ schemaVersion: 1, kind: "visual-timeline-decisions", clip, updatedAt: "2026-09-08T00:00:00Z", settings: { frameAspect: { width: 16, height: 9 } }, shots });
 const timeline = (records: ShotRecord[], d: Decisions = decisions()): TimelineResponse => {
   const merged = mergeTimeline(records, d, clip.sampleCount, new Map());
-  return { clip, storyDirectory: "/stories/pilot", records, decisions: d, candidates: [...merged.candidates], stitched: [...merged.stitched] };
+  return { clip, storyDirectory: "/stories/pilot", records, decisions: d, candidates: [...merged.candidates], stitched: [...merged.stitched], unresolvedAnchors: [] };
 };
 const records = [record("aaa", 0, "2026-01-01T00:00:00Z"), record("bbb", 48000, "2026-01-02T00:00:00Z"), record("ccc", 48000, "2026-01-03T00:00:00Z")];
 const loaded = (): EditorState => reduce(initialState, { type: "timeline-loaded", timeline: timeline(records) });
@@ -122,9 +122,11 @@ const word = (id: string, start: number, end: number, extra: Partial<Word> = {})
   ({ id, value: id, startSample: start, endSample: end, original: { startSample: start, endSample: end }, ...extra });
 const storyWords = [word("w1", 1000, 2000), word("w2", 2100, 3000), word("w3", 3100, 4000), word("w4", 5000, 6000, { manual: { startSample: 5000, endSample: 6000 } })];
 const story = (words: Word[] = storyWords): StoryResponse => ({
-  clip, story: { title: "t", bookTitle: "b" }, sourceStartSample: 0, words,
-  chunks: [{ id: "c0", startSample: 1000, endSample: 6000, text: "w1 w2 w3 w4", wordIds: ["w1", "w2", "w3", "w4"], breakReason: "end" }],
+  clip, story: { title: "t", bookTitle: "b", transcriptProvider: "rev-ai" }, sourceStartSample: 0, words,
+  elements: words.flatMap((w, i) => [{ kind: "word" as const, id: w.id }, { kind: "punctuation" as const, value: i === words.length - 1 ? "." : " " }]),
+  chunks: [{ id: "c0", startSample: 1000, endSample: 6000, text: "w1 w2 w3 w4.", wordIds: ["w1", "w2", "w3", "w4"], breakReason: "end" }],
   chunking: { pauseBreakMs: 600, minSentenceBreakMs: 150, mergedSentenceBreaks: [] },
+  timing: { inversions: 0, autoRuns: [], manualCount: words.filter(w => w.manual !== undefined).length, autoCount: words.filter(w => w.auto !== undefined).length },
 });
 const withStory = (): EditorState => reduce(loaded(), { type: "story-loaded", story: story() });
 const select = (state: EditorState, first: string, last: string, extend = false): EditorState =>

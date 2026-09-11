@@ -1,13 +1,12 @@
 import { dirname, extname, join, resolve } from "node:path";
 import { Effect, FileSystem, type Schema } from "effect";
-import { sameClip } from "../../core/identity.js";
+import { type DecisionsBody as MergeBody, mergeTimeline, sameClip, type ServedShotRecord } from "@animator/domain";
 import { decodeJson, encodeJson as encode, readBounded, writeAtomic as writeAtomicBytes } from "../../core/io.js";
 import { loadStoryContext, StoryError } from "../story/index.js";
 import { ClipIdentity, DEFAULT_SETTINGS, Decisions, type DecisionsBody, type ShotMode, ShotRecord, VisualTimelineConfig, VisualTimelineError } from "./contracts.js";
-import { mergeTimeline } from "./merge.js";
 import { isUlid, mintUlid } from "./ulid.js";
 export { ClipIdentity, Decisions, DEFAULT_SETTINGS, type DecisionsBody, IsoUtc, Producer, ShotDecision, ShotMode, ShotRecord, TimelineSettings, VisualTimelineConfig, VisualTimelineError } from "./contracts.js";
-export { type CandidateGroup, type EffectiveShot, mergeTimeline, type StitchedEntry } from "./merge.js";
+export { type CandidateGroup, type EffectiveShot, mergeTimeline, type MergedTimeline, type StitchedEntry } from "@animator/domain";
 export { isUlid, mintUlid, ULID_PATTERN } from "./ulid.js";
 type Code = VisualTimelineError["code"];
 const fail = (code: Code, message: string) => Effect.fail(new VisualTimelineError({ code, message }));
@@ -15,6 +14,11 @@ const fail = (code: Code, message: string) => Effect.fail(new VisualTimelineErro
 const read = (path: string, limit: number) => readBounded(path, limit).pipe(Effect.mapError(e => new VisualTimelineError({ code: "IoFailed", message: e.message })));
 const io = <A>(effect: Effect.Effect<A, unknown>, message: string) => effect.pipe(Effect.mapError(e => e instanceof VisualTimelineError ? e : new VisualTimelineError({ code: "IoFailed", message })));
 const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) => decodeJson(schema, bytes, path, true).pipe(Effect.mapError(e => new VisualTimelineError({ code, message: e.message })));
+/** The domain merge, with any broken rule turned into InvalidDecisions naming the file or body it came from. */
+const checkedMerge = (records: ReadonlyArray<ServedShotRecord>, decisions: MergeBody, sampleCount: number, path: string, wordStarts: ReadonlyMap<string, number>) => {
+  const merged = mergeTimeline(records, decisions, sampleCount, wordStarts);
+  return merged.problems.length > 0 ? fail("InvalidDecisions", `${merged.problems[0]} in ${path}.`) : Effect.succeed(merged);
+};
 const writeAtomic = (path: string, bytes: Uint8Array) => writeAtomicBytes(path, bytes).pipe(Effect.mapError(() => new VisualTimelineError({ code: "IoFailed", message: `Cannot write ${path}.` })));
 
 /** Config, verified clip identity from story, and the story directory every timeline file lives in. `storyDirectory` overrides the story config's default story. */
@@ -83,7 +87,7 @@ export function loadVisualTimeline(options: { readonly configPath: string; reado
     const ctx = yield* loadContext(options.configPath, options.storyDirectory);
     const records = yield* loadRecords(ctx);
     const decisions = yield* loadDecisions(ctx);
-    const { candidates, stitched, unresolvedAnchors } = yield* mergeTimeline(records, decisions, ctx.clip.sampleCount, ctx.decisionsPath, options.wordStarts ?? NO_WORDS);
+    const { candidates, stitched, unresolvedAnchors } = yield* checkedMerge(records, decisions, ctx.clip.sampleCount, ctx.decisionsPath, options.wordStarts ?? NO_WORDS);
     return { clip: ctx.clip, storyDirectory: ctx.storyDirectory, records, decisions, candidates, stitched, unresolvedAnchors };
   }));
 }
@@ -144,7 +148,7 @@ export function writeDecisions(options: { readonly configPath: string; readonly 
     const bytes = encode({ schemaVersion: 1, kind: "visual-timeline-decisions", clip: ctx.clip, updatedAt: new Date().toISOString(), settings: options.decisions.settings, shots: options.decisions.shots });
     const decisions = yield* decode(Decisions, bytes, "InvalidDecisions", "the supplied decisions");
     if (bytes.byteLength > ctx.config.limits.maxDecisionsBytes) return yield* fail("InvalidDecisions", `The decisions would exceed maxDecisionsBytes (${ctx.config.limits.maxDecisionsBytes}).`);
-    yield* mergeTimeline(records, decisions, ctx.clip.sampleCount, "the supplied decisions", options.wordStarts ?? NO_WORDS);
+    yield* checkedMerge(records, decisions, ctx.clip.sampleCount, "the supplied decisions", options.wordStarts ?? NO_WORDS);
     yield* writeAtomic(ctx.decisionsPath, bytes);
     return decisions;
   }));

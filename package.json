@@ -10,12 +10,14 @@
     "pnpm": "11.25.0"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json",
-    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "build": "rm -rf dist && pnpm --filter @animator/domain build && tsc --project tsconfig.json",
+    "typecheck": "pnpm --filter @animator/domain build && tsc --project tsconfig.json --noEmit",
     "test": "pnpm run build && node --enable-source-maps --test 'dist/**/*.test.js'",
+    "check": "pnpm --filter @animator/domain test && pnpm run test && pnpm --filter editor test && pnpm --filter editor typecheck",
     "cli": "node --enable-source-maps dist/cli.js"
   },
   "dependencies": {
+    "@animator/domain": "workspace:*",
     "@effect/platform-node": "4.0.0-rc.112",
     "effect": "4.0.0-rc.112",
     "redis": "6.2.1"

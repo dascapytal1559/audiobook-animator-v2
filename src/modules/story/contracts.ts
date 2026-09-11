@@ -1,5 +1,5 @@
 import { Data, Schema } from "effect";
-import { Id, NonNegative, Path, Positive, PositiveSeconds, Sha256, Text } from "../../core/schema.js";
+import { Id, NonNegative, Path, Positive, PositiveSeconds, Sha256, Text } from "@animator/domain";
 import { StorySplitSegment } from "../../intake/story-split/contracts.js";
 import { ProviderTimedWord } from "../../intake/transcription/normalize.js";
 import { Punctuation } from "../../intake/transcription/contracts.js";

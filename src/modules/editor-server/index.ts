@@ -3,7 +3,7 @@ import { NodeHttpServer } from "@effect/platform-node";
 import { Console, Effect, Layer } from "effect";
 import { HttpRouter, HttpServer } from "effect/unstable/http";
 import { loadEditorLibrary, makeEditorRoutes } from "./routes.js";
-export { type Chunk, type ChunkBreakReason, type ChunkElement, computeChunks } from "./chunks.js";
+export { type Chunk, type ChunkBreakReason, type ChunkElement, computeChunks } from "@animator/domain";
 export { EditorServerConfig, EditorServerError, PeaksFile, SpeechFile } from "./contracts.js";
 export { computePeaksAndSpeech, type DecodeOptions, PeakAccumulator, type PeaksIdentity, readPeaksCache, readSpeechCache, type SpeechIdentity, writeCache } from "./peaks.js";
 export { type AlignOptions, alignTiming, type Caches, loadTiming, makeCaches, type StoryPayload, storyPayload, timingPaths, writeManualTiming } from "./timing.js";

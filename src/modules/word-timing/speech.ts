@@ -1,6 +1,7 @@
 /** Speech-region detection (A45): RMS energy per fixed frame, an absolute dBFS threshold, then run-length cleanup. Pure; no I/O. */
 
-export type SpeechRegion = { readonly startSample: number; readonly endSample: number };
+import type { SpeechRegion } from "@animator/domain";
+export type { SpeechRegion };
 
 /** Streaming per-frame RMS in dBFS over little-endian s16 bytes, the same chunk shape as the peaks reduction: chunks may split a sample, the last partial frame counts. A frame at exact digital zero is -Infinity dBFS. */
 export class SpeechAccumulator {

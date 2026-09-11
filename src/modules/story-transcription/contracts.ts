@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { NonNegative, Positive, Sha256, Text } from "../../core/schema.js";
+import { NonNegative, Positive, Sha256, Text } from "@animator/domain";
 
 /** The working story transcript. Timing overlays refer to these GPT word IDs, never Rev's book IDs. */
 export const StoryTranscript = Schema.Struct({

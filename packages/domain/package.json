@@ -1,0 +1,29 @@
+{
+  "name": "@animator/domain",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shapes and pure rules shared by the animator-v2 server, CLIs, and browser editor. No Node APIs, no I/O.",
+  "type": "module",
+  "engines": {
+    "node": "24.20.0",
+    "pnpm": "11.25.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "rm -rf test-dist && tsc -p tsconfig.test.json && node --enable-source-maps --test 'test-dist/**/*.test.js'"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.112"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "typescript": "7.0.2"
+  }
+}

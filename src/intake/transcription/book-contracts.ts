@@ -1,5 +1,5 @@
 import { Data, Schema, Struct } from "effect";
-import { Path, Positive, PositiveSeconds, Sha256 } from "../../core/schema.js";
+import { Path, Positive, PositiveSeconds, Sha256 } from "@animator/domain";
 import { SourceMediaRequest } from "../source-media/contracts.js";
 
 

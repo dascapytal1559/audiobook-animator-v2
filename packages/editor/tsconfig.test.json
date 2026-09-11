@@ -6,8 +6,25 @@
     "moduleResolution": "bundler",
     "rootDir": "src",
     "outDir": "test-dist",
-    "types": ["vite/client", "node"],
+    "types": [
+      "vite/client",
+      "node"
+    ],
     "sourceMap": true
   },
-  "include": ["src/time.ts", "src/time.test.ts", "src/snap.ts", "src/snap.test.ts", "src/state.ts", "src/state.test.ts", "src/merge.ts", "src/merge.test.ts", "src/playback.ts", "src/playback.test.ts", "src/chunks.ts", "src/chunks.test.ts", "src/selection.ts", "src/selection.test.ts", "src/timing.ts", "src/timing.test.ts", "src/api.ts"]
+  "include": [
+    "src/snap.ts",
+    "src/snap.test.ts",
+    "src/state.ts",
+    "src/state.test.ts",
+    "src/playback.ts",
+    "src/playback.test.ts",
+    "src/rows.ts",
+    "src/rows.test.ts",
+    "src/selection.ts",
+    "src/selection.test.ts",
+    "src/timing.ts",
+    "src/timing.test.ts",
+    "src/api.ts"
+  ]
 }

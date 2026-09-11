@@ -1,11 +1,11 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
-import type { AlignReport, AlignStats, CandidateGroup, Chunk, PeaksResponse, Span, StitchedEntry, Word } from "./api.js";
+import { clampSample, formatClock, millisecondsToSamples } from "@animator/domain";
+import type { AlignReport, CandidateGroup, Chunk, PeaksResponse, Span, StitchedEntry, TimingMeasure, Word } from "./api.js";
 import { ChunkLane, type RowVariant, type TextLaneMode } from "./ChunkLane.js";
 import { selectedIds as selectedIdsOf, type Selection, type SelectionItem } from "./selection.js";
 import { ShotLane } from "./ShotLane.js";
 import { computeSnapTargets, computeSpeechOnsetTargets, findSnapTarget, type SnapTarget } from "./snap.js";
 import type { Drag, WordDrag } from "./state.js";
-import { clampSample, formatClock, millisecondsToSamples } from "./time.js";
 import { Waveform } from "./Waveform.js";
 
 const SNAP_RADIUS_PX = 8;
@@ -296,13 +296,14 @@ export function Timeline(p: Props) {
 
 /** Before → after for one align run (A48), compact enough for the toolbar. Unknown extra report fields are not rendered. */
 function AlignReportView({ report, onDismiss }: { report: AlignReport; onDismiss: () => void }) {
-  const pair = (pick: (s: AlignStats) => number, unit: string, digits = 0) => `${pick(report.before).toFixed(digits)}→${pick(report.after).toFixed(digits)}${unit}`;
+  const format = (value: number | null | undefined, digits: number) => (value === null || value === undefined ? "n/a" : value.toFixed(digits));
+  const pair = (pick: (s: TimingMeasure) => number | null | undefined, unit: string, digits = 0) => `${format(pick(report.before), digits)}→${format(pick(report.after), digits)}${unit}`;
   return (
     <span className="align-report" data-testid="align-report" title="Before → after: median, p10, p90 boundary error; fraction of words fully inside speech">
-      <span>median {pair(s => s.boundaryMedianMs, " ms")}</span>
-      <span>p10 {pair(s => s.boundaryP10Ms, " ms")}</span>
-      <span>p90 {pair(s => s.boundaryP90Ms, " ms")}</span>
-      <span>inside {pair(s => s.insideSpeechFraction * 100, "%")}</span>
+      <span>median {pair(s => s.onsetErrorMs?.median, " ms")}</span>
+      <span>p10 {pair(s => s.onsetErrorMs?.p10, " ms")}</span>
+      <span>p90 {pair(s => s.onsetErrorMs?.p90, " ms")}</span>
+      <span>inside {pair(s => (s.insideSpeechFraction === null ? null : s.insideSpeechFraction * 100), "%")}</span>
       <span className="muted">{report.after.wordCount} words</span>
       <button type="button" onClick={onDismiss} aria-label="Dismiss report">×</button>
     </span>

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { computeChunks, listSentenceBreaks, type ChunkElement } from "./chunks.js";
+import { computeChunks, listSentenceBreaks, retimeChunks, type ChunkElement } from "./chunks.js";
 
 const word = (id: string, value: string, startSample: number, endSample: number): ChunkElement => ({ kind: "word", id, value, startSample, endSample });
 const punctuation = (value: string): ChunkElement => ({ kind: "punctuation", value });
@@ -77,4 +77,13 @@ test("a sentence mark with an inaudible gap does not end the chunk; at the thres
     { afterWordId: "w2", nextWordId: "w3", gapSamples: 199, text: "my. Next" },
   ]);
   assert.throws(() => computeChunks(elements, 10_000, -1), RangeError);
+});
+
+test("retimeChunks keeps membership, text, and reasons and recomputes only the span from the members present", () => {
+  const chunks = [
+    { id: "c0", startSample: 0, endSample: 1, text: "The great silence.", wordIds: ["w1", "w2", "w3"], breakReason: "sentence" as const },
+    { id: "c1", startSample: 0, endSample: 1, text: "The", wordIds: ["w4"], breakReason: "pause" as const },
+  ];
+  const words = [{ id: "w1", startSample: 1000, endSample: 2000 }, { id: "w3", startSample: 3100, endSample: 4000 }];
+  assert.deepEqual(retimeChunks(chunks, words).map(c => [c.startSample, c.endSample, c.text]), [[1000, 4000, "The great silence."], [0, 1, "The"]]);
 });

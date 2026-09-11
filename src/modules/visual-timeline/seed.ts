@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Schema } from "effect";
-import { Positive, Sha256, Text } from "../../core/schema.js";
+import { Positive, Sha256, Text } from "@animator/domain";
 import { type ShotMode } from "./contracts.js";
 import { encodeUlid } from "./ulid.js";
 
