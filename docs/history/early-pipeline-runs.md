@@ -1,6 +1,6 @@
 # Early pipeline runs
 
-Archived from `PIPELINE.md` during the approved cleanup on 2026-09-09. These entries preserve the decisions, observations, and checks from the first transcription, split, inventory, and visual-study runs. They are historical records; references to the old demo commands or comparison player describe retired code. The [current pipeline](../../PIPELINE.md) and [README](../../README.md) describe the active implementation.
+Archived from `PIPELINE.md` during the approved cleanup on 2026-09-09. These entries preserve the decisions, observations, and checks from the first transcription, split, inventory, and visual-study runs. They are historical records; references to the old demo commands or comparison player describe retired code. The [current context](../../CONTEXT.md) and [README](../../README.md) describe the active implementation.
 
 **Q4 — Finished cut:** the user wants mostly narration eventually, with detailed trimming and possible pacing changes later. Getting stories split and selectable is the immediate priority. The previous whole-track metadata recommendation was not adopted as a finished-cut contract.
 

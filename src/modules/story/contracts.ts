@@ -12,9 +12,12 @@ export type StorySettings = typeof StorySettings.Type;
 export const storyDefaults: StorySettings = { limits: { maxManifestBytes: 65_536, maxTranscriptBytes: 134_217_728, maxAudioManifestBytes: 1_048_576, maxElements: 1_000_000 } };
 export type ManifestLimits = Pick<StorySettings["limits"], "maxManifestBytes" | "maxTranscriptBytes" | "maxAudioManifestBytes">;
 
-/** Where a story came from: the book split that produced it. Historical locators and the split's pinned hashes; the split inventory is not reopened. */
+/**
+ * Where a story came from: the book split that produced it. `splitInventoryPath` and `originalSegmentPath` are locators from before the story
+ * moved into its own directory and may no longer exist; they are kept as history with the split's pinned hashes, and nothing reopens them.
+ */
 export const StoryOrigin = Schema.Struct({
-  splitInventoryPath: Path, splitInventorySha256: Sha256, segmentPath: Path,
+  splitInventoryPath: Path, splitInventorySha256: Sha256, originalSegmentPath: Path,
   planSha256: Sha256, transcriptSha256: Sha256, sourceSha256: Sha256, providerJobId: Text,
 });
 export type StoryOrigin = typeof StoryOrigin.Type;

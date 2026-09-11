@@ -1,6 +1,6 @@
 # Project evidence and round responses
 
-Archived from `PIPELINE.md` on 2026-09-09 during the approved cleanup. These sections record decisions as they were made and facts as they were measured; paths and commands reflect the layout at the time. The live decision record is [PIPELINE.md](../../PIPELINE.md).
+Archived from `PIPELINE.md` on 2026-09-09 during the approved cleanup. These sections record decisions as they were made and facts as they were measured; paths and commands reflect the layout at the time. The live decision record is [CONTEXT.md](../../CONTEXT.md).
 
 ## Relocations and cleanups
 

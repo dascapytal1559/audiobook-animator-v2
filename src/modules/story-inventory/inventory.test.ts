@@ -52,7 +52,7 @@ async function fixture(t: TestContext) {
         durationDisplay: duration === 90 ? "00:01:30.000" : duration === 20 ? "00:00:20.000" : "00:01:01.500",
         audioPath: "audio/audio.flac", audioSha256: hash(audio), audioManifestPath: "audio/manifest.json", audioManifestSha256: hash(audioManifestBytes),
         transcriptPath: "transcript.json", transcriptSha256: hash(transcriptBytes), textPath: "transcript.txt", textSha256: hash(text),
-        origin: { splitInventoryPath: `../../books/${bookId}/split/inventory.json`, splitInventorySha256: h, segmentPath: `../../books/${bookId}/split/segments/${id}`, planSha256: h, transcriptSha256: h, sourceSha256: h, providerJobId: "job" },
+        origin: { splitInventoryPath: `../../books/${bookId}/split/inventory.json`, splitInventorySha256: h, originalSegmentPath: `../../books/${bookId}/split/segments/${id}`, planSha256: h, transcriptSha256: h, sourceSha256: h, providerJobId: "job" },
       };
       for (const [name, bytes] of [["audio/audio.flac", audio], ["audio/manifest.json", audioManifestBytes], ["transcript.json", transcriptBytes], ["transcript.txt", text]] as const) {
         const path = join(storyDirectory, name);

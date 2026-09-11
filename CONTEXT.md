@@ -1,8 +1,8 @@
-# Animator pipeline
+# Animator: context
 
-Shared working document for the user and lead agent. This records the product, decisions, evidence, and implementation backlog. Agent workflow instructions live in `AGENTS.md`.
+Shared working document for the user and the lead agent: the target, the pipeline, the words we use, the decisions with their reasons, and the backlog. Agent directives are in `AGENTS.md`; humans read `README.md`; the human roadmap is `HUMAN.md`.
 
-Updated: 2026-09-09, Australia/Melbourne (stories relocated to `data/stories/` the same day). Alignment is ongoing; an open question is not an approved requirement. Implementation can proceed on settled modules while other branches are discussed.
+Updated: 2026-09-11, Australia/Melbourne. Alignment is ongoing; an open question is not an approved requirement. Implementation can proceed on settled modules while other branches are discussed.
 
 ## Target
 
@@ -35,6 +35,36 @@ The autonomy percentage is a target, not a demonstrated result. A successful run
 8. **Polish:** ambience and music, with narration remaining the primary soundtrack.
 
 The foundation, source inspection, timestamp demo, whole-book transcript import, and verified audio extraction are implemented. Both collections have completed transcripts, reviewed split plans, and all 38 paired outputs. The combined inventory contains 17 stories with durations and premise-only synopses; notes and credits are available separately. Independent whole-book reconstruction checks passed for each book's audio and transcript. Later movie stages still need delivery contracts and acceptance criteria.
+
+## Glossary
+
+Use these words in code, documents, and conversation; a schema comment defers to this list.
+
+| Term | Meaning |
+| --- | --- |
+| book | One audiobook as delivered: the original MP3 and its whole-book Rev export under `data/books/<book>/`. |
+| intake | Everything that turns a book into story directories: inspection, whole-book transcription, the split plan, audio extraction, and the split. Frozen; bespoke for a new book if need be. |
+| story | The unit of all creative work: one narrative from a book, living in `data/stories/<id>/` with its verified audio and transcript. The folder name is the story id. |
+| manifest | `story.json`: the story's identity, file locators with hashes, origin, and editable synopsis. Verified against its files on every load. |
+| clip | The story's audio as the editor and timeline see it; the clip clock counts integer samples from the clip's first sample. |
+| clip identity | Book id, story id, audio hash, transcript hash, sample rate, sample count. Every per-story artifact carries it and is refused on mismatch. |
+| segment | A slice of a book produced by the split: a story or an extra. Historical term; a story's `originalSegmentPath` points at where its segment was. |
+| extra | An author's note or credits, split from the book and kept with the book under `split/segments/`. Never a story. |
+| working transcript | The story's `transcript.json`: Rev split text by default, or GPT text once promoted. Written only by `animator transcription promote`. |
+| element | One word (with timing) or one piece of punctuation, in transcript order. |
+| overlay | A file keyed to the transcript that changes what is read without changing the transcript: `word-timing.auto.json`, `word-timing.json`, `decisions.json`. |
+| record, shot | An immutable generation record under `shots/<ulid>/record.json`, possibly with an image beside it: a start on the clip clock, a mode, a producer. |
+| decision | A per-shot override or selection in `decisions.json`, written only by the editor or a CLI verb. |
+| candidate group | Every shot with the same effective start; one is selected, by decision or newest-wins. |
+| stitched timeline | The selected shots in order, each holding until the next start, with an explicit opening gap when nothing starts at sample 0. |
+| chunk | A run of words the editor draws as one box: ended by a sentence mark with an audible gap, a long pause, or the end. |
+| speech region | A span the energy detector calls speech; the snap targets and the align pass use them. |
+| run | One invocation of a tool: its effective settings are the code defaults with an optional run file laid over them, and its outputs record them. |
+| settings | The values a run uses, one section per module: `story`, `timeline`, `editor`, `inventory`, `transcription`. |
+| cache | Regenerable derived data under `<story>/cache/`, pinned to the audio hash and the parameters that produced it. |
+| producer | Who wrote an artifact and at what version. |
+| domain | `packages/domain`: the shapes and pure rules shared by the server, the CLIs, and the browser. |
+| core | `src/core/`: the Node-side io every module shares. |
 
 ## Recommended next milestones
 
@@ -102,76 +132,75 @@ Audiobook -> movie
         └── Paired splits and duration inventory [both collections complete; 17 stories ready]
 ```
 
-## Standing assumptions
+## Decisions
 
-These are explicit engineering calls, open to challenge. Challenging one reopens the decisions and implementation that depend on it.
+One file per decision under [docs/decisions](docs/decisions/), each with its status, the decision, the reason, and the code that cites it. Challenging one reopens what depends on it.
 
-| ID | Assumption | Reason |
+| ID | Decision | Status |
 | --- | --- | --- |
-| A1 | Build fresh v2 contracts, using legacy assets and useful behavior as reference. | The old stages have drifted apart and the legacy build does not pass. |
-| A2 | One application with focused modules. Each exposes validated inputs, outputs, and failures; Effect services handle media tools, storage, and providers. | Keeps modules independently callable and gives external dependencies explicit boundaries. |
-| A3 | Start with a local CLI, Node LTS, pnpm, and exact dependency/configuration pins. | Fits the available local media and tools; module operations can also be called by a later runner or interface. |
-| A4 | Keep original audio unchanged and preserve source-relative timing for every cut. A story is the author's narrative unit, not an arbitrary duration segment. | Later transcripts and visuals must remain traceable to the original narration. |
-| A5 | Completion requires verified outputs, and verified work should be reusable on reruns. | The autonomy target depends on detecting failure and avoiding unnecessary repeated work. |
-| A6 | Preserve credits and author's notes as separately classified material; story jobs process stories. | Extras should remain available without being mistaken for story content. |
-| A7 | Transcribe the audiobook before discovering story boundaries and extracting stories. Metadata is optional comparison evidence and never a cut authority or automatic fallback. | Whole-book transcription is feasible, and the user explicitly confirms that the metadata is inaccurate. |
-| A8 | Any technical transcription chunks retain the original book timeline and do not define stories or alter source audio. | Provider request limits should not dictate narrative boundaries. |
-| A9 | Export story audio as lossless 24-bit FLAC at the source sample rate and channel count, with a matching timed transcript beside it. Extraction requests use integer decoded-audio sample intervals with an exclusive end. | Preserve narration quality and reproducible cuts for later movie work; the source MP3 remains unchanged. |
-| A10 | First story cuts retain spoken titles and complete narration at the original pace. Cut in quiet gaps between stories and extras; keep every author note and credit segment separately. | Makes the stories selectable now without premature editing of their internal narration. |
-| A11 | Group local originals and raw exports under each book's `input/` directory, with `data/inbox/` for new downloads. Separate the current source location from unchanged historical evidence and verified content identity. | Moving an identical input should preserve completed transcription and splits without rewriting their provenance. |
-| A12 | Keep selection synopses short and focused on the premise, without revealing endings. Store editable descriptions separately from completed split evidence, linked by story ID and transcript hash. | Helps the user compare stories while allowing descriptions to change without repeating media work or invalidating accepted outputs. |
-| A13 | Story plans distinguish facts supported by the transcript, uncertain interpretations, and invented visual details. Preserve raw transcription and attach evidence to interpretations or corrections. | Recognition errors and unspecified visual details must not silently become story canon. |
-| A14 | Plan visual beats around changes in action, idea, emotion, or setting, while retaining the narration's order and intended reveals. Adjacent beats may share an image. | Stories can contain reflection, reported examples, flashbacks, and future references; word/sentence boundaries and event chronology do not by themselves define the viewing sequence. |
-| A15 | The planner proposes each scene's visual mode, and a user can override any scene. Graphic illustration is a useful starting point for concrete subjects; poetic abstraction is useful for ideas and emotional passages. These are suggestions, not mandatory rules. | Supports the autonomy target while preserving the user's creative control over individual scenes. |
-| A16 | Use recurring motifs and the prototype's related green/blue/warm-gold palette to connect the two modes in the pilot. | Provides a starting point for continuity when the rendering style changes; this remains a creative proposal the user can change. |
-| A17 | Discard the prototype comparison player and its server. Their files remain on disk as evidence of the studies; no code is carried into the editor. | It was a throwaway with hard-coded scenes, a fixed 25-second window, and no persistence. |
-| A18 | The editor opens exactly one verified story segment at a time, chosen by book and story ID, with The Great Silence as the default. It never opens arbitrary audio files. | Every timeline stays tied to a verified clip identity. |
-| A19 | A `visual-timeline` module owns two schemas per story: immutable generation records under `data/stories/<story>/shots/` and a `decisions.json` overlay beside them. Both pin the clip's audio and transcript hashes. The editor is a client of this module, not the owner of the format. | Separates immutable evidence from editable choices, matching A12, and lets any script produce records. |
-| A20 | Time on the timeline is stored as integer samples on the clip's own clock, zero at clip start. Seconds are derived for display. | Consistent with the sample-exact splitting already done. |
-| A21 | The editor previews in the browser. A separate CLI renders the film from the timeline with FFmpeg. The editor never shells out to FFmpeg for the film. | Keeps the editor responsive and the render reproducible. |
-| A22 | Waveform peaks are computed server-side once, cached beside the clip, and served with byte-range audio streaming. | Keeps the browser cheap and works for the multi-hour stories. |
-| A23 | The editor server binds to loopback with no authentication. | It is a personal desktop tool. |
-| A24 | Word-click seeking, follow-playback highlighting, and dual clip-time and book-time clocks are carried from the demo viewer as behaviours, re-implemented in the new stack. | Those behaviours were verified useful; the code belongs to the old stack. |
-| A25 | Several generation records may target the same time. The decisions file records which candidate is selected; unselected candidates remain visible as alternatives. Selecting is a decision, not a deletion. | Preserves generated work and supports comparison. |
-| A26 | Files are the only channel between scripts and the frontend. The editor server watches the story folder and pushes changes to the browser over server-sent events. No queue, database, or socket protocol. | A script that finishes writing a file is immediately visible without coordination. |
-| A27 | The editor server is a thin Effect HTTP layer in the root package over module operations. Later frontend generation features call the same operations the CLIs use. | Nothing is implemented twice. |
-| A28 | The React client is a new `packages/editor` workspace package with exactly pinned Vite and React. Vite serves the client in development and proxies to the Effect server; the production build is static files served by the same Effect server. | Keeps pipeline modules framework-free. |
-| A29 | Preview is image swapping in the browser synced to audio playback, not a video file. | Instant feedback; rendering stays a separate CLI under A21. |
-| A30 | Each generation record is a directory `shots/<shot-id>/` with `record.json` and its image beside it. The record holds `startSample`, `mode`, `prompt`, relative `imagePath`, `createdAt`, `producer`, and `notes`. Shot IDs are ULIDs. | Any script can mint an ID and write a record without coordination. |
-| A31 | A record's image is optional. An image-less shot renders as a placeholder card with mode color and notes. | Lets treatment spans seed the timeline and lets the user sketch before generating. |
-| A32 | Decisions are keyed by shot ID and hold overrides for `startSample`, `mode`, `selected`, and `hidden`, plus story-level settings such as frame aspect. Merge order is generated record, then decision override. | Two writers never touch the same file. |
-| A33 | The 15 prototype frames and the 14 treatment spans are imported once as generation records with their origin as `producer`, labeled as studies. | The editor is never empty on first open. |
-| A34 | Dragging a shot start snaps to the nearest word start or measured quiet-gap midpoint within a small pixel radius; a modifier disables snapping. Snap targets come from the paired transcript. | No new audio analysis is needed. |
-| A35 | Vite, React, and the peaks format receive exact version pins looked up at implementation time. | Matches the project's pinning rule. |
-| A36 | Word timing edits live in overlay files in the story's story directory, keyed by word id, holding `startSample`/`endSample` on the clip clock and pinned to the transcript hash. The paired transcript is never written and is the backup by construction. | It is hash-pinned acceptance evidence; a copy would be a second source of truth. |
-| A37 | The server merges effective timing before words, chunks, and snap targets are served. Chunking reruns on effective times. | One place decides what "the timing" is. |
-| A38 | Selection is a contiguous range and client-only: click selects, shift-click extends, Escape clears. Sentence mode selects whole sentences and moves all their words. | Covers the alignment use without a discontiguous-selection model. |
-| A39 | A group move is a horizontal drag of any selected box; every selected word's start shifts by the same amount and ends ride along, so durations are preserved. The leading edge snaps to speech onsets, Alt disables, comma and period nudge by 10 ms. | Q21: translate only; start time is what matters. |
-| A40 | A moved group clamps against its unselected neighbours so order and non-overlap are preserved. | Prevents silent inversions. |
-| A41 | Undo and redo for timing edits with the usual keys, client-side stack. | Manual alignment is trial and error. |
-| A42 | Two files, two writers: the script owns `word-timing.auto.json`; the editor owns `word-timing.json`. Effective timing is manual, else auto, else original. Re-running the script replaces auto entries for its range and never touches manual ones. | Same two-layer rule as shot records and decisions (Q17). |
-| A43 | Excerpt-first: the automatic pass runs on the editor selection or an explicit CLI range; the whole clip requires an explicit flag and the user's say-so. | Q23: the user spot-checks a couple of excerpts first. |
-| A44 | Detected speech regions are shaded under the waveform. | Makes misalignment visible and supplies snap targets. |
-| A45 | Speech detection is explicit config: absolute -50 dBFS on 10 ms RMS frames, minimum silence 150 ms, minimum speech 50 ms. | Measured on the pilot: the energy histogram is bimodal with a trough at -50 dBFS and the source is noise-gated, so a relative threshold is meaningless. |
-| A46 | Speech regions are computed in the same FFmpeg decode as peaks and cached beside them under `<story>/cache/`, pinned to the audio hash. | One pass, two artifacts. |
-| A47 | The align algorithm is a pure function in a `word-timing` module: shift the range's words by the configured lead (default 150 ms), assign each word to the speech region it overlaps most, snap each region's first start and last end to the region edges, scale interior words linearly. Regions with no words are ignored. A word wholly in silence follows its sentence: it joins the region of its nearest overlapping neighbour in transcript order without crossing a sentence start, and only falls back to the nearest region by distance when it has such a neighbour on both sides or on neither (amended 2026-09-09 after a Tower of Babylon sentence start was pulled back into the previous phrase by a 17 ms distance margin; the rerun moved 1,035 of 187,067 words across the corpus, 0.55%, nearly all sentence starts moved later, and none on the pilot). | Measured on the pilot: a constant ~150 ms lead with ~140 ms jitter and no drift; this correction takes words fully inside speech from 86% to 94%. |
-| A48 | Every align run reports before and after for its range: median boundary error, spread, and fraction of words fully inside speech. | That is how excerpts are judged before widening. |
-| A49 | Server routes for speech regions, manual timing writes, and a ranged align; the CLI exposes the same align operation. | Editor and scripts share one implementation (A27). |
-| A50 | Build order: speech shading, then selection and group move, then the automatic pass on the first 30 seconds, each landing on the running dev server. | Lets the user see the problem before the tools arrive. |
-| A51 | A shot placed on a word start records an anchor to that word id in its decision and follows the word's effective start; dragging the shot marker detaches it to a plain sample position; snapping to a word re-anchors. The audio clock remains the only ground truth. | Q22: shots follow words by default but move independently. |
-| A52 | Three timing tracks with toolbar toggles: Original (transcriber, read-only, faint), Auto (scripted, read-only), Edited (effective; the one selected and dragged, never empty). Clicking a word in any track seeks to that track's time. | The user wants the original and the scripted result visible for reference. |
-| A53 | Autosave on every timing change about 300 ms after the last edit, with the same saved/saving indicator as decisions; no commit step. | The write is a small JSON file. |
-| A54 | A transcriber's sentence mark only ends a sentence chunk when the gap to the next word is at least the story's `chunking.minSentenceBreakMs`, set per story in `story.json` and defaulting to the server config's value of 0 (rule off). Measured across the corpus on 2026-09-09, 5–6% of sentence breaks sit under 150 ms with no clean gap, so the rule is enabled story by story after listening; it is on at 150 ms for The Great Silence and Tower of Babylon. Breaks merged by this rule are listed in the story payload for audit. Confirmed on the pilot 2026-09-09: of 95 sentence breaks, three sat on gaps of 0–64 ms and the user verified all three were misplaced periods; the next smallest gap is 180 ms and the median is about 1 s. | A period with no audible pause behind it is a transcription error, and the margin on the pilot is wide. Other narrators must be measured before trusting the threshold. |
-| A55 | A story is a directory: `data/stories/<story-id>/` holds `story.json` (identity, current file locators, origin, and the editable synopsis), the verified `audio/` and transcript pair, planning documents, `shots/`, `decisions.json`, timing overlays, and caches. `data/books/<book>/` is the pre-treated input and book-level processing: originals, imports, the split plan and its acceptance inventory, and the extras. Story ids are unique across books. Configs select a story by its directory; the manifest is verified against the linked files on every load, and the split inventory is retained as origin evidence, not reopened. | Stories are the unit of creative work, so everything about one story lives in one place and any script can find it by id. The split inventory stays an unchanged acceptance artifact; the manifest is the current locator, as A11 separates location from identity for inputs. |
-| A56 | The editor server opens every story directory under the stories directory (`data/stories/` unless a run file overrides it) and lists them at `GET /api/stories`; each story's routes live under `/api/stories/<story-id>/`. The story config's story stays the default (A18) and is verified before the server listens; other stories are verified on first open and kept for the process lifetime. The client shows a story selector in the header, keeps the open story in the URL as `?story=<id>`, and remounts the editor on a switch so no state leaks between clips. | Switching stories no longer needs a config edit and a restart (A18 still holds: one story open at a time, chosen by id). Explicit directory configuration over inference from the default story's parent. Lazy verification keeps start-up as fast as one story while the listing needs only the manifests. |
+| A1 | [Build fresh v2 contracts, using legacy assets and useful behavior as reference.](docs/decisions/A1-build-fresh-v2-contracts-using.md) | standing |
+| A2 | [One application with focused modules.](docs/decisions/A2-application-focused-modules.md) | standing |
+| A3 | [Start with a local CLI, Node LTS, pnpm, and exact dependency/configuration pins.](docs/decisions/A3-start-local-cli-node-lts.md) | standing |
+| A4 | [Keep original audio unchanged and preserve source-relative timing for every cut.](docs/decisions/A4-keep-original-audio-unchanged-preserve.md) | standing |
+| A5 | [Completion requires verified outputs, and verified work should be reusable on reruns.](docs/decisions/A5-completion-requires-verified-outputs-verified.md) | standing |
+| A6 | [Preserve credits and author's notes as separately classified material; story jobs process stories.](docs/decisions/A6-preserve-credits-author-s-notes.md) | standing |
+| A7 | [Transcribe the audiobook before discovering story boundaries and extracting stories.](docs/decisions/A7-transcribe-audiobook-before-discovering-story.md) | standing |
+| A8 | [Any technical transcription chunks retain the original book timeline and do not define stories or alter source audio.](docs/decisions/A8-any-technical-transcription-chunks-retain.md) | standing |
+| A9 | [Export story audio as lossless 24-bit FLAC at the source sample rate and channel count, with a matching timed transcript beside it.](docs/decisions/A9-export-story-audio-lossless-24.md) | standing |
+| A10 | [First story cuts retain spoken titles and complete narration at the original pace.](docs/decisions/A10-first-story-cuts-retain-spoken.md) | standing |
+| A11 | [Group local originals and raw exports under each book's `input/` directory, with `data/inbox/` for new downloads.](docs/decisions/A11-group-local-originals-raw-exports.md) | standing |
+| A12 | [Keep selection synopses short and focused on the premise, without revealing endings.](docs/decisions/A12-keep-selection-synopses-short-focused.md) | standing |
+| A13 | [Story plans distinguish facts supported by the transcript, uncertain interpretations, and invented visual details.](docs/decisions/A13-story-plans-distinguish-facts-supported.md) | standing |
+| A14 | [Plan visual beats around changes in action, idea, emotion, or setting, while retaining the narration's order and intended reveals.](docs/decisions/A14-plan-visual-beats-around-changes.md) | standing |
+| A15 | [The planner proposes each scene's visual mode, and a user can override any scene.](docs/decisions/A15-planner-proposes-scene-s-visual.md) | standing |
+| A16 | [Use recurring motifs and the prototype's related green/blue/warm-gold palette to connect the two modes in the pilot.](docs/decisions/A16-use-recurring-motifs-prototype-s.md) | standing |
+| A17 | [Discard the prototype comparison player and its server.](docs/decisions/A17-discard-prototype-comparison-player-server.md) | standing |
+| A18 | [The editor opens exactly one verified story segment at a time, chosen by book and story ID, with The Great Silence as the default.](docs/decisions/A18-editor-opens-exactly-verified-story.md) | amended |
+| A19 | [A `visual-timeline` module owns two schemas per story: immutable generation records under `data/stories/<story>/shots/` and a `decisions.json` overlay beside them.](docs/decisions/A19-module-owns-two-schemas-per.md) | standing |
+| A20 | [Time on the timeline is stored as integer samples on the clip's own clock, zero at clip start.](docs/decisions/A20-time-timeline-stored-integer-samples.md) | standing |
+| A21 | [The editor previews in the browser.](docs/decisions/A21-editor-previews-browser.md) | standing |
+| A22 | [Waveform peaks are computed server-side once, cached beside the clip, and served with byte-range audio streaming.](docs/decisions/A22-waveform-peaks-computed-server-side.md) | standing |
+| A23 | [The editor server binds to loopback with no authentication.](docs/decisions/A23-editor-server-binds-loopback-no.md) | standing |
+| A24 | [Word-click seeking, follow-playback highlighting, and dual clip-time and book-time clocks are carried from the demo viewer as behaviours, re-implemented in the new stack.](docs/decisions/A24-word-click-seeking-follow-playback.md) | standing |
+| A25 | [Several generation records may target the same time.](docs/decisions/A25-several-generation-records-may-target.md) | standing |
+| A26 | [Files are the only channel between scripts and the frontend.](docs/decisions/A26-files-channel-between-scripts-frontend.md) | standing |
+| A27 | [The editor server is a thin Effect HTTP layer in the root package over module operations.](docs/decisions/A27-editor-server-thin-effect-http.md) | standing |
+| A28 | [The React client is a new `packages/editor` workspace package with exactly pinned Vite and React.](docs/decisions/A28-react-client-new-workspace-package.md) | standing |
+| A29 | [Preview is image swapping in the browser synced to audio playback, not a video file.](docs/decisions/A29-preview-image-swapping-browser-synced.md) | standing |
+| A30 | [Each generation record is a directory `shots/<shot-id>/` with `record.json` and its image beside it.](docs/decisions/A30-generation-record-directory-image-beside.md) | standing |
+| A31 | [A record's image is optional.](docs/decisions/A31-record-s-image-optional.md) | standing |
+| A32 | [Decisions are keyed by shot ID and hold overrides for `startSample`, `mode`, `selected`, and `hidden`, plus story-level settings such as frame aspect.](docs/decisions/A32-decisions-keyed-shot-id-hold.md) | standing |
+| A33 | [The 15 prototype frames and the 14 treatment spans are imported once as generation records with their origin as `producer`, labeled as studies.](docs/decisions/A33-15-prototype-frames-14-treatment.md) | standing |
+| A34 | [Dragging a shot start snaps to the nearest word start or measured quiet-gap midpoint within a small pixel radius; a modifier disables snapping.](docs/decisions/A34-dragging-shot-start-snaps-nearest.md) | standing |
+| A35 | [Vite, React, and the peaks format receive exact version pins looked up at implementation time.](docs/decisions/A35-vite-react-peaks-format-receive.md) | standing |
+| A36 | [Word timing edits live in overlay files in the story's story directory, keyed by word id, holding `startSample`/`endSample` on the clip clock and pinned to the transcript hash.](docs/decisions/A36-word-timing-edits-live-overlay.md) | standing |
+| A37 | [The server merges effective timing before words, chunks, and snap targets are served.](docs/decisions/A37-server-merges-effective-timing-before.md) | standing |
+| A38 | [Selection is a contiguous range and client-only: click selects, shift-click extends, Escape clears.](docs/decisions/A38-selection-contiguous-range-client-click.md) | standing |
+| A39 | [A group move is a horizontal drag of any selected box; every selected word's start shifts by the same amount and ends ride along, so durations are preserved.](docs/decisions/A39-group-move-horizontal-drag-any.md) | standing |
+| A40 | [A moved group clamps against its unselected neighbours so order and non-overlap are preserved.](docs/decisions/A40-moved-group-clamps-against-unselected.md) | standing |
+| A41 | [Undo and redo for timing edits with the usual keys, client-side stack.](docs/decisions/A41-undo-redo-timing-edits-usual.md) | standing |
+| A42 | [Two files, two writers: the script owns `word-timing.auto.json`; the editor owns `word-timing.json`.](docs/decisions/A42-two-files-two-writers-script.md) | standing |
+| A43 | [Excerpt-first: the automatic pass runs on the editor selection or an explicit CLI range; the whole clip requires an explicit flag and the user's say-so.](docs/decisions/A43-excerpt-first-automatic-pass-runs.md) | standing |
+| A44 | [Detected speech regions are shaded under the waveform.](docs/decisions/A44-detected-speech-regions-shaded-waveform.md) | standing |
+| A45 | [Speech detection is explicit config: absolute -50 dBFS on 10 ms RMS frames, minimum silence 150 ms, minimum speech 50 ms.](docs/decisions/A45-speech-detection-explicit-config-absolute.md) | standing |
+| A46 | [Speech regions are computed in the same FFmpeg decode as peaks and cached beside them under `<story>/cache/`, pinned to the audio hash.](docs/decisions/A46-speech-regions-computed-same-ffmpeg.md) | standing |
+| A47 | [The align algorithm is a pure function in a `word-timing` module: shift the range's words by the configured lead (default 150 ms), assign each word to the speech region it overlaps most, snap each region's first start and last end to the region edges, scale interior words linearly.](docs/decisions/A47-align-algorithm-pure-function-module.md) | standing |
+| A48 | [Every align run reports before and after for its range: median boundary error, spread, and fraction of words fully inside speech.](docs/decisions/A48-align-run-reports-before-after.md) | standing |
+| A49 | [Server routes for speech regions, manual timing writes, and a ranged align; the CLI exposes the same align operation.](docs/decisions/A49-server-routes-speech-regions-manual.md) | standing |
+| A50 | [Build order: speech shading, then selection and group move, then the automatic pass on the first 30 seconds, each landing on the running dev server.](docs/decisions/A50-build-order-speech-shading-then.md) | standing |
+| A51 | [A shot placed on a word start records an anchor to that word id in its decision and follows the word's effective start; dragging the shot marker detaches it to a plain sample position; snapping to a word re-anchors.](docs/decisions/A51-shot-placed-word-start-records.md) | standing |
+| A52 | [Three timing tracks with toolbar toggles: Original (transcriber, read-only, faint), Auto (scripted, read-only), Edited (effective; the one selected and dragged, never empty).](docs/decisions/A52-three-timing-tracks-toolbar-toggles.md) | standing |
+| A53 | [Autosave on every timing change about 300 ms after the last edit, with the same saved/saving indicator as decisions; no commit step.](docs/decisions/A53-autosave-timing-change-about-300.md) | standing |
+| A54 | [A transcriber's sentence mark only ends a sentence chunk when the gap to the next word is at least the story's `chunking.minSentenceBreakMs`, set per story in `story.json` and defaulting to the server config's value of 0 (rule off).](docs/decisions/A54-transcriber-s-sentence-mark-ends.md) | standing |
+| A55 | [A story is a directory: `data/stories/<story-id>/` holds `story.json` (identity, current file locators, origin, and the editable synopsis), the verified `audio/` and transcript pair, planning documents, `shots/`, `decisions.json`, timing overlays, and caches.](docs/decisions/A55-story-directory-holds-identity-current.md) | standing |
+| A56 | [The editor server opens every story directory under the stories directory (`data/stories/` unless a run file overrides it) and lists them at `GET /api/stories`; each story's routes live under `/api/stories/<story-id>/`.](docs/decisions/A56-editor-server-opens-story-directory.md) | amended |
+| A57 | [Defaults live in code; a config is a record of one run, kept beside its output.](docs/decisions/A57-defaults-in-code-run-files.md) | standing |
+| A58 | [Shapes and pure rules shared by server and client live once, in `packages/domain`.](docs/decisions/A58-one-source-of-truth-for-shapes.md) | standing |
+| A59 | [Intake produces stories; everything else consumes them, and the story manifest is the boundary.](docs/decisions/A59-intake-produces-stories.md) | standing |
 
-## Architecture and implementation direction
+## When a new book arrives
 
-The application will use `src/modules/<module-name>/` for module implementation, with a thin CLI at the application boundary. Module operations remain callable without the CLI. Concrete provider/media/storage implementations are supplied through Effect layers. Runtime schemas validate external inputs and persisted outputs.
-
-The first independent module is **source-media inspection**: probe an explicit local path, fingerprint the source, identify audio streams, and preserve chapter and CUE evidence with its timing precision and diagnostics. It does not decide final story boundaries or cut audio.
-
-The splitter separates boundary evidence, a validated split plan, audio extraction, and verification. Boundary discovery uses a whole-book timed transcript and the original audio. Inaccurate chapter/CUE metadata cannot set cuts, override transcript/audio evidence, or silently substitute for missing evidence. The split plan pins source, transcript, and evidence hashes, partitions transcript elements, and supplies integer decoded-audio sample intervals. Paired output preserves raw provider timestamps and adds approximate segment-relative times. Both collections have reviewed plans; reusable autonomous discovery and its exception policy remain to be designed. No full workflow engine or distributed infrastructure has been selected.
+Intake is frozen and may need bespoke handling. The path the two existing books took: `animator intake inspect` on the original, `animator intake prepare` with a run file pinning its hash, whole-book transcription through the Rev dashboard, `animator intake import` of the export, an agent-authored split plan checked against measured audio gaps, `animator intake split`, then relocation of each story segment into `data/stories/<id>/` with a `story.json` (the one-time relocation script was removed after its run; write a new one from `data/story-relocation.json` if needed), and `animator inventory publish`. A reusable discovery service (B06) and production transcription submission (B07) remain unbuilt until a third book makes them worth building.
 
 ## History
 
@@ -205,6 +234,7 @@ Round-by-round responses, source-file evidence, the stack survey from foundation
 | B20 | Editor client: speech shading, three timing tracks with toggles, contiguous selection, group drag with snapping and clamping, nudge, undo/redo, autosave, align-selection with report, shot anchoring and detaching | Done 2026-09-09 | Q21, Q22, A38–A41, A44, A50–A53. Completion: browser QA on the running dev server. |
 | B21 | Excerpt runs on the pilot, then whole clip, then every story on the user's say-so | All 17 stories aligned 2026-09-09 | Run 0–30 s: 69 words, 8 speech regions; boundary onset error median −210 ms → 0 ms (p10 −770 → −306, p90 −106 → 0); words inside speech 87% → 100%; all shifts between +140 and +302 ms. The user judged the first 30 s "very good" and asked for the whole clip. Whole-clip run with `--all`: 1,189 words, 149 regions, 162 boundaries; onset error median −140 ms → 0 (p10/p90 −379/+480 → 0/0); words inside speech 86% → 100%. Shifts: p10 +40 ms, median +147 ms, p90 +300 ms, extremes −260 ms (around 187 s, "astronomers used a SIBO") and +540 ms (around 338 s and 454 s). Those three spots are the places to eyeball on the Auto row. No manual entries exist yet. After approving the pilot's Auto track the user asked for every story. Sanity checks on one story per collection showed the same constant lead (130–150 ms) and sane speech detection on the 22.05 kHz narrator. The whole-clip pass then ran on all 16 remaining stories: original boundary onset error medians of −64 to −144 ms, all zeroed; words fully inside speech 82–87% before and 100% after; 15 MB of auto overlays in total. The first attempt failed on the seven stories over about 1h20m because the auto overlay borrowed the 1 MiB decisions limit; it now has its own explicit `limits.maxWordTimingBytes` (16 MiB). Caveat carried from A54: the 150 ms sentence-break rule was measured across the corpus and does not transfer (5–6% of breaks sit under 150 ms with no clean gap), so it needs a per-story setting or a manual join layer before it is trusted beyond the pilot. |
 | B22 | Story selector: multi-story editor server and a header picker in the client | Done 2026-09-09 | A56. `GET /api/stories` plus story-scoped routes; `--story` on the word-timing CLI; the mock server lists two stories. Completion: route tests on the synthetic fixture (listing, 404s, every route under the prefix) and browser QA switching between stories on the running dev server. |
+| B23 | Agent ergonomics: `src/core/`, `src/intake/`, `packages/domain`, run files instead of `config/`, one command tree, `animator status` | Done 2026-09-11 | A57 to A59. Every step verified by `pnpm check`; the review that led here is `docs/reviews/2026-09-09-agent-ergonomics-review.md`. Outstanding from it: fold the per-module error types into one shared error. |
 | B13 | Local input organization and source relocation | Done | Five input files moved with exact hashes retained; current paths/configs/docs updated. Real imports and all 20 Exhalation pairs reuse 97 unchanged artifacts. No loose root audio/transcript files or compatibility symlinks for those inputs remain. |
 
 Current readiness assessment: all 17 stories have verified audio/transcript pairs and live under `data/stories/`, with notes and credits retained with their books. The Great Silence is selected. Its source analysis is drafted, its editable timeline and study imports work in the browser editor, and the whole clip has an automatic timing overlay. The next product delivery is a complete moodboard film: consistent visual references and story images, final pacing, and a separate render command. Image provider, budget, output settings, and quality criteria remain open. Reusable autonomous discovery and semantic generation remain backlog work. The 95% autonomy target is not demonstrated; no complete movie has been rendered.

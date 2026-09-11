@@ -42,7 +42,7 @@ export async function fixture(t: TestContext, options: { readonly words?: Readon
     wordCount: transcript.wordCount, sampleCount: 100, sampleRateHz: 10, durationSeconds: 10, durationDisplay: "00:00:10.000",
     audioPath: "audio.flac", audioSha256: hash(audioBytes), audioManifestPath: "manifest.json", audioManifestSha256: hash(encode(manifest)),
     transcriptProvider: "rev-ai", transcriptPath: "transcript.json", transcriptSha256: hash(encode(transcript)), textPath: "transcript.txt", textSha256: hash(Buffer.from(transcript.text + "\n")),
-    origin: { splitInventoryPath: "../inventory.json", splitInventorySha256: h, segmentPath: "../segments/pilot", planSha256: h, transcriptSha256: h, sourceSha256: h, providerJobId: "job" } };
+    origin: { splitInventoryPath: "../inventory.json", splitInventorySha256: h, originalSegmentPath: "../segments/pilot", planSha256: h, transcriptSha256: h, sourceSha256: h, providerJobId: "job" } };
   const settings = { limits: { maxManifestBytes: 65536, maxTranscriptBytes: 65536, maxAudioManifestBytes: 65536, maxElements: Math.max(10, transcript.elements.length) } };
   async function save() {
     story.transcriptSha256 = hash(encode(transcript));
