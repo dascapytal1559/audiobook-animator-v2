@@ -3,23 +3,23 @@ import { Effect, FileSystem, type Schema } from "effect";
 import { type DecisionsBody as MergeBody, mergeTimeline, sameClip, type ServedShotRecord } from "@animator/domain";
 import { decodeJson, encodeJson as encode, readBounded, writeAtomic as writeAtomicBytes } from "../../core/io.js";
 import { clipOf, type StoryContext } from "../story/index.js";
-import { DEFAULT_SETTINGS, Decisions, type DecisionsBody, type ShotMode, ShotRecord, type VisualTimelineSettings, VisualTimelineError, visualTimelineDefaults } from "./contracts.js";
+import { DEFAULT_SETTINGS, Decisions, type DecisionsBody, type ShotMode, ShotRecord, type VisualTimelineSettings, timelineError, isTimelineError, type TimelineCode, visualTimelineDefaults } from "./contracts.js";
 import { isUlid, mintUlid } from "./ulid.js";
-export { ClipIdentity, Decisions, DEFAULT_SETTINGS, type DecisionsBody, IsoUtc, Producer, ShotDecision, ShotMode, ShotRecord, TimelineSettings, VisualTimelineError, VisualTimelineSettings, visualTimelineDefaults } from "./contracts.js";
+export { ClipIdentity, Decisions, DEFAULT_SETTINGS, type DecisionsBody, IsoUtc, Producer, ShotDecision, ShotMode, ShotRecord, TimelineSettings, timelineError, isTimelineError, type TimelineCode, VisualTimelineSettings, visualTimelineDefaults } from "./contracts.js";
 export { type CandidateGroup, type EffectiveShot, mergeTimeline, type MergedTimeline, type StitchedEntry } from "@animator/domain";
 export { isUlid, mintUlid, ULID_PATTERN } from "./ulid.js";
-type Code = VisualTimelineError["code"];
-const fail = (code: Code, message: string) => Effect.fail(new VisualTimelineError({ code, message }));
+type Code = TimelineCode;
+const fail = (code: Code, message: string) => Effect.fail(timelineError({ code, message }));
 /** Core readers and decoders keep their messages; this module owns the error type and code. */
-const read = (path: string, limit: number) => readBounded(path, limit).pipe(Effect.mapError(e => new VisualTimelineError({ code: "IoFailed", message: e.message })));
-const io = <A>(effect: Effect.Effect<A, unknown>, message: string) => effect.pipe(Effect.mapError(e => e instanceof VisualTimelineError ? e : new VisualTimelineError({ code: "IoFailed", message })));
-const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) => decodeJson(schema, bytes, path, true).pipe(Effect.mapError(e => new VisualTimelineError({ code, message: e.message })));
+const read = (path: string, limit: number) => readBounded(path, limit).pipe(Effect.mapError(e => timelineError({ code: "IoFailed", message: e.message })));
+const io = <A>(effect: Effect.Effect<A, unknown>, message: string) => effect.pipe(Effect.mapError(e => isTimelineError(e) ? e : timelineError({ code: "IoFailed", message })));
+const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) => decodeJson(schema, bytes, path, true).pipe(Effect.mapError(e => timelineError({ code, message: e.message })));
 /** The domain merge, with any broken rule turned into InvalidDecisions naming the file or body it came from. */
 const checkedMerge = (records: ReadonlyArray<ServedShotRecord>, decisions: MergeBody, sampleCount: number, path: string, wordStarts: ReadonlyMap<string, number>) => {
   const merged = mergeTimeline(records, decisions, sampleCount, wordStarts);
   return merged.problems.length > 0 ? fail("InvalidDecisions", `${merged.problems[0]} in ${path}.`) : Effect.succeed(merged);
 };
-const writeAtomic = (path: string, bytes: Uint8Array) => writeAtomicBytes(path, bytes).pipe(Effect.mapError(() => new VisualTimelineError({ code: "IoFailed", message: `Cannot write ${path}.` })));
+const writeAtomic = (path: string, bytes: Uint8Array) => writeAtomicBytes(path, bytes).pipe(Effect.mapError(() => timelineError({ code: "IoFailed", message: `Cannot write ${path}.` })));
 
 /** Where one story's timeline files live: the verified clip identity from the story context, and the settings (defaults unless a run overrides them). */
 export type TimelineTarget = { readonly story: StoryContext; readonly settings?: VisualTimelineSettings };
@@ -49,7 +49,7 @@ function loadRecords(ctx: Context) {
       if (Number.isNaN(Date.parse(record.createdAt))) return yield* fail("InvalidRecord", `createdAt is not a real instant in ${path}.`);
       if (record.imagePath !== undefined) {
         const image = join(directory, record.imagePath);
-        const info = yield* fs.stat(image).pipe(Effect.mapError(() => new VisualTimelineError({ code: "InvalidRecord", message: `Image referenced by ${path} does not exist: ${image}.` })));
+        const info = yield* fs.stat(image).pipe(Effect.mapError(() => timelineError({ code: "InvalidRecord", message: `Image referenced by ${path} does not exist: ${image}.` })));
         if (info.type !== "File") return yield* fail("InvalidRecord", `Image referenced by ${path} is not a regular file: ${image}.`);
       }
       records.push(record);
@@ -68,7 +68,7 @@ function loadDecisions(ctx: Context) {
     return decisions;
   });
 }
-const wrap = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.mapError(e => e instanceof VisualTimelineError ? e : new VisualTimelineError({ code: "IoFailed", message: "Cannot read the visual timeline." })));
+const wrap = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.mapError(e => isTimelineError(e) ? e : timelineError({ code: "IoFailed", message: "Cannot read the visual timeline." })));
 
 const NO_WORDS: ReadonlyMap<string, number> = new Map();
 /**
@@ -123,7 +123,7 @@ export function addShot(request: AddShotRequest) {
     const decoded = yield* decode(ShotRecord, bytes, "InvalidRequest", `the new record ${id}`);
     if (bytes.byteLength > ctx.settings.limits.maxRecordBytes) return yield* fail("InvalidRequest", `The new record would exceed maxRecordBytes (${ctx.settings.limits.maxRecordBytes}).`);
     yield* io(fs.makeDirectory(ctx.shotsDirectory, { recursive: true }), `Cannot create ${ctx.shotsDirectory}.`);
-    yield* fs.makeDirectory(directory).pipe(Effect.mapError(() => new VisualTimelineError({ code: "RecordExists", message: `Cannot create a fresh record directory: ${directory}.` })));
+    yield* fs.makeDirectory(directory).pipe(Effect.mapError(() => timelineError({ code: "RecordExists", message: `Cannot create a fresh record directory: ${directory}.` })));
     if (image) yield* io(fs.writeFile(join(directory, image.name), image.bytes, { flag: "wx" }), `Cannot copy the image into ${directory}.`);
     yield* writeAtomic(join(directory, "record.json"), bytes);
     return decoded;

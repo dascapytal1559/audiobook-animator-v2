@@ -9,7 +9,7 @@ This file is the map and the how-tos. The target, the words we use, every decisi
 | Layer | Where | What |
 | --- | --- | --- |
 | domain | `packages/domain` | The shapes and pure rules shared by the server, the CLIs, and the browser: schema primitives, clip identity, records, decisions, overlays, caches, every wire shape, the timeline merge, chunking, effective timing, the align pass, time conversions, ULIDs. No I/O. |
-| core | `src/core/` | Node-side io every module shares: bounded reads, strict JSON decoding, atomic writes. |
+| core | `src/core/` | Node-side io every module shares (bounded reads, strict JSON decoding, atomic writes) and the one error class, `AnimatorError`, carrying `module` and `code`; each story-level module keeps a typed constructor and guard over it. |
 | intake | `src/intake/` | Book to stories, run once per book and frozen: `source-media`, `transcription`, `story-audio`, `story-split`. |
 | story modules | `src/modules/` | Everything that consumes a story: `story` (manifest and context), `story-inventory`, `story-transcription`, `visual-timeline`, `word-timing`, `editor-server`, `status`. |
 | runs and commands | `src/run.ts`, `src/cli.ts`, `src/commands/` | Defaults merged with an optional run file, and the one command tree. |

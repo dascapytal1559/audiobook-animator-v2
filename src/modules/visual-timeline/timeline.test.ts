@@ -6,12 +6,12 @@ import test, { type TestContext } from "node:test";
 import { NodeServices } from "@effect/platform-node";
 import { Effect } from "effect";
 import { fixture } from "../story/context.fixture.js";
-import { loadStoryContext, StoryError } from "../story/index.js";
-import { addShot, type DecisionsBody, loadVisualTimeline, mintUlid, ULID_PATTERN, VisualTimelineError, writeDecisions } from "./index.js";
+import { loadStoryContext, isStoryError } from "../story/index.js";
+import { addShot, type DecisionsBody, loadVisualTimeline, mintUlid, ULID_PATTERN, isTimelineError, writeDecisions } from "./index.js";
 const provide = <A, E>(effect: Effect.Effect<A, E, NodeServices.NodeServices>) => Effect.runPromise(effect.pipe(Effect.provide(NodeServices.layer)));
 const encode = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
 const failsWith = (code: string, pattern?: RegExp) => (error: unknown) =>
-  error instanceof VisualTimelineError && error.code === code && (pattern === undefined || pattern.test(error.message));
+  isTimelineError(error) && error.code === code && (pattern === undefined || pattern.test(error.message));
 const T = (ms: number) => new Date(Date.UTC(2026, 8, 8, 0, 0, 0, ms)).toISOString();
 
 /** The synthetic story directory (10 Hz, 100 samples) with helpers for hand-written records. Timeline files live beside the story's manifest. */
@@ -75,7 +75,7 @@ test("records with a bad id, wrong directory, out-of-range start, escaping image
     const p = await planning(t);
     const body = await p.record(fields, directoryName);
     await assert.rejects(p.load(), failsWith("InvalidRecord", new RegExp(`${pattern.source}|${body.id}`)), `case ${JSON.stringify(fields)}`);
-    await assert.rejects(p.load(), (e: unknown) => e instanceof VisualTimelineError && e.message.includes(join(p.planningDirectory, "shots", directoryName ?? body.id, "record.json")));
+    await assert.rejects(p.load(), (e: unknown) => isTimelineError(e) && e.message.includes(join(p.planningDirectory, "shots", directoryName ?? body.id, "record.json")));
   }
 });
 
@@ -229,7 +229,7 @@ test("writeDecisions round-trips through load, sets updatedAt, and rejects inval
 test("a broken story identity surfaces as the story error, not a timeline error", async t => {
   const p = await planning(t);
   await writeFile(join(p.story.dir, "transcript.json"), "{}");
-  await assert.rejects(p.load(), (e: unknown) => e instanceof StoryError && e.code === "TranscriptMismatch");
+  await assert.rejects(p.load(), (e: unknown) => isStoryError(e) && e.code === "TranscriptMismatch");
 });
 
 test("show on The Great Silence loads the real verified clip", async t => {

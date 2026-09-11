@@ -4,7 +4,7 @@ import { Console, Effect, Layer } from "effect";
 import { HttpRouter, HttpServer } from "effect/unstable/http";
 import { type EditorShared, loadEditorLibrary, makeEditorRoutes } from "./routes.js";
 export { type Chunk, type ChunkBreakReason, type ChunkElement, computeChunks } from "@animator/domain";
-export { editorDefaults, EditorServerError, EditorSettings, PeaksFile, SpeechFile } from "./contracts.js";
+export { editorDefaults, editorError, isEditorError, type EditorCode, EditorSettings, PeaksFile, SpeechFile } from "./contracts.js";
 export { computePeaksAndSpeech, type DecodeOptions, PeakAccumulator, type PeaksIdentity, readPeaksCache, readSpeechCache, type SpeechIdentity, writeCache } from "./peaks.js";
 export { type AlignOptions, alignTiming, type Caches, loadTiming, makeCaches, type StoryPayload, storyPayload, timingPaths, writeManualTiming } from "./timing.js";
 export { type ByteRange, parseRange } from "./range.js";

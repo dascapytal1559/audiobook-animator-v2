@@ -1,10 +1,11 @@
 import { Console, Effect, Option, Semaphore } from "effect";
-import { type AlignReport, alignRange, autoPath, effectiveTiming, loadOverlays, manualPath, type OverlayContext, type TimingEntries, writeAutoRun, WordTimingError, writeManual } from "../word-timing/index.js";
+import { AnimatorError } from "../../core/error.js";
+import { type AlignReport, alignRange, autoPath, effectiveTiming, loadOverlays, manualPath, type OverlayContext, type TimingEntries, writeAutoRun, writeManual } from "../word-timing/index.js";
 import { computeChunks, listSentenceBreaks, type StoryResponse } from "@animator/domain";
-import { EditorServerError, type PeaksFile, type SpeechFile } from "./contracts.js";
+import { editorError, type EditorCode, type PeaksFile, type SpeechFile } from "./contracts.js";
 import { computePeaksAndSpeech, readPeaksCache, readSpeechCache, writeCache } from "./peaks.js";
 import type { EditorContext } from "./routes.js";
-const fail = (code: EditorServerError["code"], message: string) => Effect.fail(new EditorServerError({ code, message }));
+const fail = (code: EditorCode, message: string) => Effect.fail(editorError({ code, message }));
 /** The first word plus every word that follows a sentence mark in the transcript's punctuation; the align pass uses it to keep silence-only words in their sentence. */
 function sentenceStartIds(ctx: EditorContext): ReadonlySet<string> {
   const ids = new Set(listSentenceBreaks(ctx.elements).map(b => b.nextWordId));
@@ -88,7 +89,7 @@ export type AlignOptions = {
   readonly producer: { readonly name: string; readonly version: string };
 };
 /** The align pass over one range (A47): speech regions from the cache, original transcript timings in, entries merged into the auto overlay, report out. */
-export function alignTiming(ctx: EditorContext, caches: Caches, options: AlignOptions): Effect.Effect<AlignReport, EditorServerError | WordTimingError, Effect.Services<Caches["speech"]> | Effect.Services<ReturnType<typeof writeAutoRun>>> {
+export function alignTiming(ctx: EditorContext, caches: Caches, options: AlignOptions): Effect.Effect<AlignReport, AnimatorError | AnimatorError, Effect.Services<Caches["speech"]> | Effect.Services<ReturnType<typeof writeAutoRun>>> {
   return Effect.gen(function* () {
     const { range } = options;
     if (!Number.isSafeInteger(range.startSample) || !Number.isSafeInteger(range.endSample) || range.startSample < 0 || range.startSample >= range.endSample || range.endSample > ctx.clip.sampleCount) {

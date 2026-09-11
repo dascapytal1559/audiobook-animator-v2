@@ -1,4 +1,5 @@
-import { Data, Schema } from "effect";
+import { Schema } from "effect";
+import { errorsOf } from "../../core/error.js";
 import { NonNegative, Path, Positive } from "@animator/domain";
 
 /**
@@ -30,7 +31,8 @@ export const editorDefaults: EditorSettings = {
 
 export { PeaksFile, SpeechFile } from "@animator/domain";
 
-export class EditorServerError extends Data.TaggedError("EditorServerError")<{
-  readonly code: "InvalidConfig" | "InvalidRequest" | "PayloadTooLarge" | "NotFound" | "PeaksFailed" | "IoFailed";
-  readonly message: string;
-}> {}
+export type EditorCode = "InvalidConfig" | "InvalidRequest" | "PayloadTooLarge" | "NotFound" | "PeaksFailed" | "IoFailed";
+const errors = errorsOf<"editor", EditorCode>("editor");
+/** A editor failure: the shared AnimatorError with this module's code union. */
+export const editorError = errors.make;
+export const isEditorError = errors.is;

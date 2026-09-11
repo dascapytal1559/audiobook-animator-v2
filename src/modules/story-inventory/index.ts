@@ -1,13 +1,14 @@
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { Effect, FileSystem } from "effect";
-import { durationDisplay, type LoadedStoryManifest, loadStoryManifest, StoryError } from "../story/index.js";
-import { type StoryInventorySettings, StoryInventoryError, storyInventoryDefaults } from "./contracts.js";
+import { AnimatorError } from "../../core/error.js";
+import { durationDisplay, type LoadedStoryManifest, loadStoryManifest } from "../story/index.js";
+import { type StoryInventorySettings, inventoryError, isInventoryError, type InventoryCode, storyInventoryDefaults } from "./contracts.js";
 
-export { StoryInventoryError, StoryInventorySettings, storyInventoryDefaults } from "./contracts.js";
+export { inventoryError, isInventoryError, type InventoryCode, StoryInventorySettings, storyInventoryDefaults } from "./contracts.js";
 
-const fail = (code: StoryInventoryError["code"], message: string) => Effect.fail(new StoryInventoryError({ code, message }));
+const fail = (code: InventoryCode, message: string) => Effect.fail(inventoryError({ code, message }));
 /** story's reader and manifest loader use the same code names; only the error type changes. */
-const own = <A, R>(effect: Effect.Effect<A, StoryError, R>) => effect.pipe(Effect.mapError(e => new StoryInventoryError({ code: e.code === "NotFound" ? "InvalidManifest" : e.code, message: e.message })));
+const own = <A, R>(effect: Effect.Effect<A, AnimatorError, R>) => effect.pipe(Effect.mapError(e => inventoryError({ code: (e.code === "NotFound" ? "InvalidManifest" : e.code) as InventoryCode, message: e.message })));
 const jsonBytes = (value: unknown): Buffer => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 
 const markdown = (value: string): string => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -163,6 +164,6 @@ export function renderStoryInventory(options: { readonly storiesDirectory: strin
     // Every file is complete before any view changes; each rename is atomic on its filesystem.
     for (const output of staged) yield* fs.rename(output.path, output.destination);
     return { bookCount: books.length, storyCount: ordered.length, outputPaths };
-  })).pipe(Effect.mapError((error) => error instanceof StoryInventoryError ? error
-    : new StoryInventoryError({ code: "IoFailed", message: "Cannot read or publish the story inventory files." })));
+  })).pipe(Effect.mapError((error) => isInventoryError(error) ? error
+    : inventoryError({ code: "IoFailed", message: "Cannot read or publish the story inventory files." })));
 }

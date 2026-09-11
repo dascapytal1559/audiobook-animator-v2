@@ -5,10 +5,10 @@ import test from "node:test";
 import { NodeServices } from "@effect/platform-node";
 import { Effect } from "effect";
 import { fixture } from "./context.fixture.js";
-import { loadStoryContext, StoryError } from "./index.js";
+import { loadStoryContext, isStoryError } from "./index.js";
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 const run = (f: Fixture) => Effect.runPromise(loadStoryContext({ storyDirectory: f.dir, settings: f.settings }).pipe(Effect.provide(NodeServices.layer)));
-const code = (value: string) => (error: unknown) => error instanceof StoryError && error.code === value;
+const code = (value: string) => (error: unknown) => isStoryError(error) && error.code === value;
 test("planning context preserves complete paired input including raw words, punctuation and nonzero timing offset without writes", async t => {
   const f = await fixture(t);
   const before = await readFile(join(f.dir, "transcript.json"));

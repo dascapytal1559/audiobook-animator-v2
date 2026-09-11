@@ -1,4 +1,5 @@
-import { Data, Schema } from "effect";
+import { Schema } from "effect";
+import { errorsOf } from "../../core/error.js";
 import { Id, NonNegative, Path, Positive, PositiveSeconds, Sha256, Text } from "@animator/domain";
 import { StorySplitSegment } from "../../intake/story-split/contracts.js";
 import { ProviderTimedWord } from "../../intake/transcription/normalize.js";
@@ -69,7 +70,8 @@ export const PlanningTranscript = Schema.Struct({ ...PairedTranscript.fields,
   text: Schema.String,
 });
 export type PlanningTranscript = typeof PlanningTranscript.Type;
-export class StoryError extends Data.TaggedError("StoryError")<{
-  readonly code: "InvalidConfig" | "NotFound" | "InvalidManifest" | "TranscriptMismatch" | "ArtifactMismatch" | "IoFailed";
-  readonly message: string;
-}> {}
+export type StoryCode = "InvalidConfig" | "NotFound" | "InvalidManifest" | "TranscriptMismatch" | "ArtifactMismatch" | "IoFailed";
+const errors = errorsOf<"story", StoryCode>("story");
+/** A story failure: the shared AnimatorError with this module's code union. */
+export const storyError = errors.make;
+export const isStoryError = errors.is;

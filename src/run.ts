@@ -3,7 +3,9 @@
  * result is what the tool works with and what its outputs record. No settings file is read unless a run names one.
  */
 import { dirname, resolve } from "node:path";
-import { Data, Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
+import { AnimatorError } from "./core/error.js";
+import { errorsOf } from "./core/error.js";
 import { Path } from "@animator/domain";
 import { decodeJson, readBounded } from "./core/io.js";
 import { EditorSettings, editorDefaults } from "./modules/editor-server/index.js";
@@ -21,7 +23,11 @@ export const runDefaults: RunSettings = {
   storiesDirectory: DEFAULT_STORIES_DIRECTORY, booksDirectory: DEFAULT_BOOKS_DIRECTORY,
   story: storyDefaults, timeline: visualTimelineDefaults, editor: editorDefaults, inventory: storyInventoryDefaults, transcription: transcriptionDefaults,
 };
-export class RunError extends Data.TaggedError("RunError")<{ readonly code: "InvalidRun" | "IoFailed"; readonly message: string }> {}
+export type RunCode = "InvalidRun" | "IoFailed";
+const errors = errorsOf<"run", RunCode>("run");
+/** A run failure: the shared AnimatorError with this module's code union. */
+export const runError = errors.make;
+export const isRunError = errors.is;
 const MAX_RUN_BYTES = 1_048_576;
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -34,15 +40,15 @@ function deepMerge(defaults: unknown, override: unknown): unknown {
 }
 
 /** The defaults, or the defaults with the run file's values laid over them and the whole checked strictly. Directory paths in a run file resolve from the file. */
-export function loadRun(runPath: string | undefined): Effect.Effect<RunSettings, RunError, FileSystem.FileSystem> {
+export function loadRun(runPath: string | undefined): Effect.Effect<RunSettings, AnimatorError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     if (runPath === undefined) return runDefaults;
-    if (runPath === "" || runPath.includes("\0")) return yield* Effect.fail(new RunError({ code: "InvalidRun", message: "A run file path must be a non-empty path." }));
+    if (runPath === "" || runPath.includes("\0")) return yield* Effect.fail(runError({ code: "InvalidRun", message: "A run file path must be a non-empty path." }));
     const path = resolve(runPath);
-    const bytes = yield* readBounded(path, MAX_RUN_BYTES).pipe(Effect.mapError(e => new RunError({ code: "IoFailed", message: e.message })));
-    const raw = yield* Effect.try({ try: () => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown, catch: () => new RunError({ code: "InvalidRun", message: `Run file is not valid UTF-8 JSON: ${path}.` }) });
-    if (!isObject(raw)) return yield* Effect.fail(new RunError({ code: "InvalidRun", message: `Run file must be a JSON object: ${path}.` }));
-    const merged = yield* decodeJson(RunSettings, Buffer.from(JSON.stringify(deepMerge(runDefaults, raw))), path, true).pipe(Effect.mapError(e => new RunError({ code: "InvalidRun", message: e.message })));
+    const bytes = yield* readBounded(path, MAX_RUN_BYTES).pipe(Effect.mapError(e => runError({ code: "IoFailed", message: e.message })));
+    const raw = yield* Effect.try({ try: () => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown, catch: () => runError({ code: "InvalidRun", message: `Run file is not valid UTF-8 JSON: ${path}.` }) });
+    if (!isObject(raw)) return yield* Effect.fail(runError({ code: "InvalidRun", message: `Run file must be a JSON object: ${path}.` }));
+    const merged = yield* decodeJson(RunSettings, Buffer.from(JSON.stringify(deepMerge(runDefaults, raw))), path, true).pipe(Effect.mapError(e => runError({ code: "InvalidRun", message: e.message })));
     const from = dirname(path);
     return { ...merged,
       storiesDirectory: "storiesDirectory" in raw ? resolve(from, merged.storiesDirectory) : merged.storiesDirectory,

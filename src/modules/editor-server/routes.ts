@@ -1,19 +1,20 @@
 import { basename, extname, join, resolve } from "node:path";
 import { Duration, Effect, FileSystem, Layer, Schema, Semaphore, Stream } from "effect";
+import { AnimatorError } from "../../core/error.js";
 import { Sse } from "effect/unstable/encoding";
 import { HttpIncomingMessage, HttpRouter, type HttpServerRequest, HttpServerResponse, HttpStaticServer, Multipart } from "effect/unstable/http";
-import { clipOf, listStories as listStoryManifests, loadStoryContext, StoryError, type StoryContext, type StorySettings } from "../story/index.js";
+import { clipOf, listStories as listStoryManifests, loadStoryContext, type StoryContext, type StorySettings } from "../story/index.js";
 import { decodeJson, readBounded } from "../../core/io.js";
-import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotRecord, VisualTimelineError, type VisualTimelineSettings, writeDecisions, type DecisionsBody } from "../visual-timeline/index.js";
-import { type TimingEntries, WordTimingError } from "../word-timing/index.js";
+import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotRecord, type VisualTimelineSettings, writeDecisions, type DecisionsBody } from "../visual-timeline/index.js";
+import { type TimingEntries } from "../word-timing/index.js";
 import { type ChunkElement, type StoriesResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
 export type { StorySummary };
-import { type EditorSettings, EditorServerError } from "./contracts.js";
+import { type EditorSettings, editorError, type EditorCode } from "./contracts.js";
 import type { PeaksIdentity, SpeechIdentity } from "./peaks.js";
 import { parseRange } from "./range.js";
 import { alignTiming, type Caches, loadTiming, makeCaches, storyPayload, writeManualTiming } from "./timing.js";
-type Code = EditorServerError["code"];
-const fail = (code: Code, message: string) => Effect.fail(new EditorServerError({ code, message }));
+type Code = EditorCode;
+const fail = (code: Code, message: string) => Effect.fail(editorError({ code, message }));
 const IMAGE_TYPES: Readonly<Record<string, string>> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
 const HEARTBEAT = Duration.seconds(15);
 const MAX_MULTIPART_PARTS = 16;
@@ -41,20 +42,20 @@ export type OpenStory = { readonly ctx: EditorContext; readonly caches: Caches }
 export type EditorLibrary = EditorShared & {
   readonly stories: ReadonlyArray<StorySummary>;
   /** The listed story, verified on first open and kept for the process lifetime; a failed verification is retried on the next open. Unknown ids are `NotFound`. */
-  readonly open: (storyId: string | undefined) => Effect.Effect<OpenStory, EditorServerError | StoryError, FileSystem.FileSystem>;
+  readonly open: (storyId: string | undefined) => Effect.Effect<OpenStory, AnimatorError | AnimatorError, FileSystem.FileSystem>;
 };
 export type EditorRouteOptions = { readonly producer: { readonly name: string; readonly version: string }; readonly staticDirectory?: string };
 
-const read = (path: string, limit: number) => readBounded(path, limit).pipe(Effect.mapError(e => new EditorServerError({ code: "IoFailed", message: e.message })));
-const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) => decodeJson(schema, bytes, path, true).pipe(Effect.mapError(e => new EditorServerError({ code, message: e.message })));
+const read = (path: string, limit: number) => readBounded(path, limit).pipe(Effect.mapError(e => editorError({ code: "IoFailed", message: e.message })));
+const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) => decodeJson(schema, bytes, path, true).pipe(Effect.mapError(e => editorError({ code, message: e.message })));
 
 /** Every story under the stories directory, summarized from its manifest. A manifest that fails is InvalidConfig: the server cannot list what it cannot read. */
-export function listStories(shared: EditorShared): Effect.Effect<ReadonlyArray<StorySummary>, EditorServerError, FileSystem.FileSystem> {
-  return listStoryManifests(shared.storiesDirectory, shared.settings.story.limits).pipe(Effect.mapError(e => new EditorServerError({ code: e.code === "IoFailed" ? "IoFailed" : "InvalidConfig", message: e.message })));
+export function listStories(shared: EditorShared): Effect.Effect<ReadonlyArray<StorySummary>, AnimatorError, FileSystem.FileSystem> {
+  return listStoryManifests(shared.storiesDirectory, shared.settings.story.limits).pipe(Effect.mapError(e => editorError({ code: e.code === "IoFailed" ? "IoFailed" : "InvalidConfig", message: e.message })));
 }
 
 /** One story verified through story, its words converted to clip samples, and its cache identities. The story directory is what `/events` watches. */
-export function openStory(shared: EditorShared, storyId: string): Effect.Effect<EditorContext, EditorServerError | StoryError, FileSystem.FileSystem> {
+export function openStory(shared: EditorShared, storyId: string): Effect.Effect<EditorContext, AnimatorError | AnimatorError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     const story = yield* loadStoryContext({ storyDirectory: join(shared.storiesDirectory, storyId), settings: shared.settings.story });
     const clip: ClipIdentity = clipOf(story);
@@ -73,7 +74,7 @@ export function openStory(shared: EditorShared, storyId: string): Effect.Effect<
 }
 
 /** The shared settings and one verified story, for the CLIs. The story must be listed; anything else is NotFound naming what is. */
-export function loadEditorContext(options: EditorShared & { readonly storyId: string }): Effect.Effect<EditorContext, EditorServerError | StoryError, FileSystem.FileSystem> {
+export function loadEditorContext(options: EditorShared & { readonly storyId: string }): Effect.Effect<EditorContext, AnimatorError | AnimatorError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     const stories = yield* listStories(options);
     if (!stories.some(s => s.id === options.storyId)) return yield* fail("NotFound", `No story ${options.storyId} under ${options.storiesDirectory}; stories: ${stories.map(s => s.id).join(", ")}.`);
@@ -82,7 +83,7 @@ export function loadEditorContext(options: EditorShared & { readonly storyId: st
 }
 
 /** The shared settings, the story listing taken once at start, and a lazy per-story cache of verified contexts. Stories added on disk later need a restart. */
-export function loadEditorLibrary(shared: EditorShared): Effect.Effect<EditorLibrary, EditorServerError, FileSystem.FileSystem> {
+export function loadEditorLibrary(shared: EditorShared): Effect.Effect<EditorLibrary, AnimatorError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     const stories = yield* listStories(shared);
     const sessions = new Map<string, OpenStory>();
@@ -107,19 +108,14 @@ const json = (body: unknown, status = 200) => HttpServerResponse.jsonUnsafe(body
 const errorJson = (status: number, code: string, message: string) => json({ code, message }, status);
 /** Every route answers JSON `{ code, message }` on failure; the status follows who is at fault. Decisions from the client are 400, invalid files on disk are 500. */
 function errorResponse(error: unknown, options: { readonly decisionsFromClient?: boolean } = {}): HttpServerResponse.HttpServerResponse {
-  if (error instanceof EditorServerError) {
-    const status: Record<Code, number> = { InvalidConfig: 500, InvalidRequest: 400, PayloadTooLarge: 413, NotFound: 404, PeaksFailed: 500, IoFailed: 500 };
-    return errorJson(status[error.code], error.code, error.message);
+  if (error instanceof AnimatorError) {
+    const byModule: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+      editor: { InvalidConfig: 500, InvalidRequest: 400, PayloadTooLarge: 413, NotFound: 404, PeaksFailed: 500, IoFailed: 500 },
+      timing: { InvalidRequest: 400, InvalidTiming: 500, IdentityMismatch: 409, IoFailed: 500 },
+      timeline: { InvalidConfig: 500, InvalidRequest: 400, InvalidRecord: 500, InvalidDecisions: options.decisionsFromClient ? 400 : 500, IdentityMismatch: 409, RecordExists: 409, IoFailed: 500 },
+    };
+    return errorJson(byModule[error.module]?.[error.code] ?? 500, error.code, error.message);
   }
-  if (error instanceof WordTimingError) {
-    const status: Record<WordTimingError["code"], number> = { InvalidRequest: 400, InvalidTiming: 500, IdentityMismatch: 409, IoFailed: 500 };
-    return errorJson(status[error.code], error.code, error.message);
-  }
-  if (error instanceof VisualTimelineError) {
-    const status: Record<VisualTimelineError["code"], number> = { InvalidConfig: 500, InvalidRequest: 400, InvalidRecord: 500, InvalidDecisions: options.decisionsFromClient ? 400 : 500, IdentityMismatch: 409, RecordExists: 409, IoFailed: 500 };
-    return errorJson(status[error.code], error.code, error.message);
-  }
-  if (error instanceof StoryError) return errorJson(500, error.code, error.message);
   if (error instanceof Multipart.MultipartError) {
     const tag = error.reason._tag;
     if (tag === "FileTooLarge" || tag === "BodyTooLarge" || tag === "FieldTooLarge" || tag === "TooManyParts") return errorJson(413, "PayloadTooLarge", `Upload rejected: ${tag}.`);
@@ -138,7 +134,7 @@ function readBody(request: HttpServerRequest.HttpServerRequest, limit: number) {
     const chunks: Uint8Array[] = [];
     let length = 0;
     yield* request.stream.pipe(
-      Stream.mapError(() => new EditorServerError({ code: "InvalidRequest", message: "Cannot read the request body." })),
+      Stream.mapError(() => editorError({ code: "InvalidRequest", message: "Cannot read the request body." })),
       Stream.runForEach(chunk => { length += chunk.byteLength; if (length > limit) return fail("PayloadTooLarge", `Body exceeds the ${limit}-byte limit.`); chunks.push(chunk); return Effect.void; }));
     return Buffer.concat(chunks, length);
   });
@@ -148,7 +144,7 @@ const imageUrl = (storyId: string) => (record: ShotRecord) => record.imagePath =
 function readJsonObject(request: HttpServerRequest.HttpServerRequest, limit: number) {
   return Effect.gen(function* () {
     const bytes = yield* readBody(request, limit);
-    const body = yield* Effect.try({ try: () => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown, catch: () => new EditorServerError({ code: "InvalidRequest", message: "Body is not valid UTF-8 JSON." }) });
+    const body = yield* Effect.try({ try: () => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown, catch: () => editorError({ code: "InvalidRequest", message: "Body is not valid UTF-8 JSON." }) });
     if (typeof body !== "object" || body === null || Array.isArray(body)) return yield* fail("InvalidRequest", "Body must be a JSON object.");
     return body as Record<string, unknown>;
   });
@@ -228,7 +224,7 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     return json(imageUrl(ctx.clip.storyId)(record), 201);
   }))));
   const image = HttpRouter.add("GET", at("/shots/:id/image"), handle(withStory(({ ctx }) => Effect.gen(function* () {
-    const notFound = new EditorServerError({ code: "NotFound", message: "No image for that shot." });
+    const notFound = editorError({ code: "NotFound", message: "No image for that shot." });
     const { id } = yield* HttpRouter.params;
     if (id === undefined || !isUlid(id)) return yield* Effect.fail(notFound);
     const directory = join(ctx.storyDirectory, "shots", id);
