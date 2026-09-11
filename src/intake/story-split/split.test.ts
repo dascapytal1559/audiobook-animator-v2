@@ -193,7 +193,7 @@ test("an explicit source override reuses every paired output without changing pl
   const result = await run(options, (request) => extractStoryAudio(request).pipe(Effect.tap((output) => Effect.sync(() => { if (output.reused) reused++; }))));
   assert.equal(reused, 5);
   assert.deepEqual(result, first);
-  const checked = spawnSync(process.execPath, [resolve("dist/split-stories.js"), "--plan", f.planPath, "--config", f.configPath, "--source", "moved source.wav", "--validate-only"], { encoding: "utf8", cwd: f.directory });
+  const checked = spawnSync(process.execPath, [resolve("dist/split-stories.js"), "--plan", f.planPath, "--run", f.configPath, "--source", "moved source.wav", "--validate-only"], { encoding: "utf8", cwd: f.directory });
   assert.equal(checked.status, 0, checked.stderr);
   assert.equal(JSON.parse(checked.stdout).planSha256, sha256(planBytes));
   await writeFile(f.configPath, encode({ ...f.config, concurrency: 1 }));
@@ -238,12 +238,12 @@ test("input changes during extraction prevent a complete inventory even when ind
 test("validation-only CLI emits JSON without creating output; errors and help stay on stderr", async (t) => {
   const f = await fixture(t);
   const cli = resolve("dist/split-stories.js");
-  const checked = spawnSync(process.execPath, [cli, "--plan", f.planPath, "--config", f.configPath, "--validate-only"], { encoding: "utf8" });
+  const checked = spawnSync(process.execPath, [cli, "--plan", f.planPath, "--run", f.configPath, "--validate-only"], { encoding: "utf8" });
   assert.equal(checked.status, 0, checked.stderr);
   assert.equal(checked.stderr, "");
   assert.equal(JSON.parse(checked.stdout).assignedElementCount, 20);
   assert.ok(!(await readdir(f.directory)).includes("split"));
-  const bad = spawnSync(process.execPath, [cli, "--plan", f.planPath, "--config", f.configPath], { encoding: "utf8" });
+  const bad = spawnSync(process.execPath, [cli, "--plan", f.planPath, "--run", f.configPath], { encoding: "utf8" });
   assert.equal(bad.status, 1);
   assert.equal(bad.stdout, "");
   assert.match(bad.stderr, /either --output or --validate-only/);
@@ -260,7 +260,7 @@ test("CLI failures retain actionable child stderr while bounding large diagnosti
   await writeFile(fakeFfmpeg, `#!/usr/bin/env node\nif (process.argv.includes('-version')) { process.stdout.write('ffmpeg synthetic diagnostic fixture\\n'); } else { process.stderr.write(${JSON.stringify(childStderr)}); process.exitCode = 234; }\n`);
   await chmod(fakeFfmpeg, 0o700);
   await writeFile(f.configPath, encode({ ...f.config, audio: { ...f.config.audio, ffmpegPath: fakeFfmpeg } }));
-  const failed = spawnSync(process.execPath, [resolve("dist/split-stories.js"), "--plan", f.planPath, "--config", f.configPath, "--output", f.artifactDirectory], { encoding: "utf8", maxBuffer: 65536 });
+  const failed = spawnSync(process.execPath, [resolve("dist/split-stories.js"), "--plan", f.planPath, "--run", f.configPath, "--output", f.artifactDirectory], { encoding: "utf8", maxBuffer: 65536 });
   assert.equal(failed.status, 1);
   assert.equal(failed.stdout, "");
   assert.match(failed.stderr, /ProcessFailed: FFmpeg exited with status 234/);

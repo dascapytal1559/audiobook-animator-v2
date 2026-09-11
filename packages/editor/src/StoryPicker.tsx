@@ -15,7 +15,7 @@ export function StoryPicker({ stories, value, onChange }: Props) {
     <label className="story-picker">
       <span className="muted">Story</span>
       <select value={value} onChange={e => onChange(e.target.value)} data-testid="story-picker" aria-label="Story">
-        {!known && <option value={value} disabled>{value} (not on this server)</option>}
+        {value === "" ? <option value="" disabled>Choose a story…</option> : !known && <option value={value} disabled>{value} (not on this server)</option>}
         {[...books].map(([bookId, book]) => (
           <optgroup key={bookId} label={book.title}>
             {[...book.stories].sort((a, b) => a.durationSeconds - b.durationSeconds).map(s => <option key={s.id} value={s.id}>{s.title} · {durationLabel(s.durationSeconds)}</option>)}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -24,7 +24,8 @@ test("inspect CLI emits only machine JSON and keeps failed invocations on stderr
     `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(JSON.stringify(probeOutput))});\n`,
     { mode: 0o755 },
   );
-  const checkedInConfig = JSON.parse(await readFile(new URL("../../config/source-media.json", import.meta.url), "utf8")) as Record<string, unknown>;
+  /** The probe settings a run file carries; the same values every book inspection was run with (see artifacts/source-inspection.request.json). */
+  const checkedInConfig: Record<string, unknown> = { ffprobePath: "ffprobe", probeTimeoutMs: 30000, maxProbeOutputBytes: 8388608, maxProbeErrorBytes: 65536, hashChunkBytes: 1048576, cueChapterToleranceSeconds: 0.02 };
   await writeFile(join(configDirectory, "source.json"), JSON.stringify({ ...checkedInConfig, ffprobePath: "./probe tool" }));
   const cli = fileURLToPath(new URL("../cli.js", import.meta.url));
   const run = (...args: string[]) => spawnSync(process.execPath, [cli, "inspect", ...args], {
@@ -33,7 +34,7 @@ test("inspect CLI emits only machine JSON and keeps failed invocations on stderr
     timeout: 10_000,
     maxBuffer: 1024 * 1024,
   });
-  const success = run("--source", "source audio.mp3", "--config", "configuration/source.json");
+  const success = run("--source", "source audio.mp3", "--run", "configuration/source.json");
   assert.equal(success.error, undefined);
   assert.equal(success.status, 0, success.stderr);
   assert.equal(success.stderr, "");
@@ -45,10 +46,10 @@ test("inspect CLI emits only machine JSON and keeps failed invocations on stderr
 
   await writeFile(join(configDirectory, "invalid.json"), JSON.stringify({ ...checkedInConfig, probeTimeoutMs: 0, unexpectedOption: true }));
   const invalidInvocations = [
-    { args: ["--source", "source audio.mp3"], message: /config/ },
-    { args: ["--config", "configuration/source.json"], message: /source/ },
-    { args: ["--source", "source audio.mp3", "--config", "configuration/invalid.json"], message: /Invalid source inspection config/ },
-    { args: ["--source", "missing.mp3", "--config", "configuration/source.json"], message: /SourceNotFound/ },
+    { args: ["--source", "source audio.mp3"], message: /run/ },
+    { args: ["--run", "configuration/source.json"], message: /source/ },
+    { args: ["--source", "source audio.mp3", "--run", "configuration/invalid.json"], message: /Invalid source inspection run file/ },
+    { args: ["--source", "missing.mp3", "--run", "configuration/source.json"], message: /SourceNotFound/ },
   ];
   for (const invocation of invalidInvocations) {
     const failure = run(...invocation.args);

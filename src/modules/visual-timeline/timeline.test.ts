@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 import { NodeServices } from "@effect/platform-node";
 import { Effect } from "effect";
 import { fixture } from "../story/context.fixture.js";
-import { StoryError } from "../story/index.js";
+import { loadStoryContext, StoryError } from "../story/index.js";
 import { addShot, type DecisionsBody, loadVisualTimeline, mintUlid, ULID_PATTERN, VisualTimelineError, writeDecisions } from "./index.js";
 const provide = <A, E>(effect: Effect.Effect<A, E, NodeServices.NodeServices>) => Effect.runPromise(effect.pipe(Effect.provide(NodeServices.layer)));
 const encode = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
@@ -19,9 +19,9 @@ async function planning(t: TestContext) {
   const story = await fixture(t);
   const planningDirectory = story.dir;
   await mkdir(join(planningDirectory, "shots"), { recursive: true });
-  const configPath = join(story.root, "visual-timeline.json");
-  const config = { schemaVersion: 1, storyConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } };
-  await writeFile(configPath, encode(config));
+  const settings = { limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } };
+  /** The story is re-verified on every call, as every tool does, so a file edited by the test is seen. */
+  const target = async () => ({ story: await provide(loadStoryContext({ storyDirectory: story.dir, settings: story.settings })), settings });
   const clip = { bookId: "book", storyId: "pilot", audioSha256: story.story.audioSha256, transcriptSha256: story.story.transcriptSha256, sampleRateHz: 10, sampleCount: 100 };
   const producer = { name: "test", version: "0" };
   let counter = 0;
@@ -35,7 +35,7 @@ async function planning(t: TestContext) {
   }
   const decisions = (shots: DecisionsBody["shots"], extra: Record<string, unknown> = {}) =>
     writeFile(join(planningDirectory, "decisions.json"), encode({ schemaVersion: 1, kind: "visual-timeline-decisions", clip, updatedAt: T(0), settings: { frameAspect: { width: 16, height: 9 } }, shots, ...extra }));
-  return { story, configPath, planningDirectory, clip, producer, record, decisions, load: (wordStarts?: ReadonlyMap<string, number>) => provide(loadVisualTimeline({ configPath, ...(wordStarts ? { wordStarts } : {}) })) };
+  return { story, settings, target, planningDirectory, clip, producer, record, decisions, load: async (wordStarts?: ReadonlyMap<string, number>) => provide(loadVisualTimeline({ ...(await target()), ...(wordStarts ? { wordStarts } : {}) })) };
 }
 
 test("ULIDs are 26 Crockford characters, timestamp-prefixed, and unique", () => {
@@ -165,8 +165,8 @@ test("an anchored shot follows its word's effective start over any startSample o
   await p.decisions({ [b.id]: { anchorWordId: "m9:e9" } });
   await assert.rejects(p.load(words), failsWith("InvalidDecisions", /anchored to a word that is not in the transcript: m9:e9/));
   assert.deepEqual((await p.load()).unresolvedAnchors, [b.id], "with unknown words a stale anchor is merely unresolved");
-  await assert.rejects(provide(writeDecisions({ configPath: p.configPath, decisions: { settings: { frameAspect: { width: 16, height: 9 } }, shots: { [b.id]: { anchorWordId: "m9:e9" } } }, wordStarts: words })), failsWith("InvalidDecisions", /m9:e9/));
-  await provide(writeDecisions({ configPath: p.configPath, decisions: { settings: { frameAspect: { width: 16, height: 9 } }, shots: { [b.id]: { anchorWordId: "m2:e0" } } }, wordStarts: words }));
+  await assert.rejects(provide(writeDecisions({ ...(await p.target()), decisions: { settings: { frameAspect: { width: 16, height: 9 } }, shots: { [b.id]: { anchorWordId: "m9:e9" } } }, wordStarts: words })), failsWith("InvalidDecisions", /m9:e9/));
+  await provide(writeDecisions({ ...(await p.target()), decisions: { settings: { frameAspect: { width: 16, height: 9 } }, shots: { [b.id]: { anchorWordId: "m2:e0" } } }, wordStarts: words }));
   assert.deepEqual((await p.load(words)).candidates.map(g => [g.startSample, g.selectedId]), [[0, a.id], [13, b.id]]);
 });
 
@@ -174,7 +174,7 @@ test("addShot mints a record, copies the image, converts seconds to samples, and
   const p = await planning(t);
   const source = join(p.story.dir, "source.PNG");
   await writeFile(source, "image bytes");
-  const record = await provide(addShot({ configPath: p.configPath, startSeconds: 2.36, mode: "graphic-illustration", label: "Opening", prompt: "A parrot", imageSourcePath: source, notes: "n", producer: p.producer }));
+  const record = await provide(addShot({ ...(await p.target()), startSeconds: 2.36, mode: "graphic-illustration", label: "Opening", prompt: "A parrot", imageSourcePath: source, notes: "n", producer: p.producer }));
   assert.equal(record.startSample, 24);
   assert.equal(record.imagePath, "image.png");
   assert.deepEqual(record.clip, p.clip);
@@ -185,14 +185,14 @@ test("addShot mints a record, copies the image, converts seconds to samples, and
   const loaded = await p.load();
   assert.deepEqual(loaded.records, [record]);
   assert.deepEqual(loaded.stitched.map(e => [e.kind, e.startSample, e.endSample]), [["gap", 0, 24], ["shot", 24, 100]]);
-  const imageless = await provide(addShot({ configPath: p.configPath, startSample: 99, mode: "poetic-abstraction", producer: p.producer }));
+  const imageless = await provide(addShot({ ...(await p.target()), startSample: 99, mode: "poetic-abstraction", producer: p.producer }));
   assert.equal(imageless.imagePath, undefined);
   assert.equal((await p.load()).records.length, 2);
   for (const bad of [{ startSample: 100 }, { startSeconds: 10 }, { startSample: 1, startSeconds: 1 }, {}, { startSeconds: Number.NaN }]) {
-    await assert.rejects(provide(addShot({ configPath: p.configPath, mode: "graphic-illustration", producer: p.producer, ...bad })), failsWith("InvalidRequest"));
+    await assert.rejects(provide(addShot({ ...(await p.target()), mode: "graphic-illustration", producer: p.producer, ...bad })), failsWith("InvalidRequest"));
   }
   await writeFile(source, Buffer.alloc(2048));
-  await assert.rejects(provide(addShot({ configPath: p.configPath, startSample: 0, mode: "graphic-illustration", imageSourcePath: source, producer: p.producer })), failsWith("IoFailed", /source\.PNG/));
+  await assert.rejects(provide(addShot({ ...(await p.target()), startSample: 0, mode: "graphic-illustration", imageSourcePath: source, producer: p.producer })), failsWith("IoFailed", /source\.PNG/));
   assert.equal((await p.load()).records.length, 2);
 });
 
@@ -202,10 +202,10 @@ test("addShot never overwrites: an explicit id whose directory already exists is
   const directory = join(p.planningDirectory, "shots", id);
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "record.json"), "untouched");
-  await assert.rejects(provide(addShot({ configPath: p.configPath, id, startSample: 0, mode: "graphic-illustration", producer: p.producer })), failsWith("RecordExists", new RegExp(id)));
+  await assert.rejects(provide(addShot({ ...(await p.target()), id, startSample: 0, mode: "graphic-illustration", producer: p.producer })), failsWith("RecordExists", new RegExp(id)));
   assert.equal(await readFile(join(directory, "record.json"), "utf8"), "untouched");
-  await assert.rejects(provide(addShot({ configPath: p.configPath, id: "not-a-ulid", startSample: 0, mode: "graphic-illustration", producer: p.producer })), failsWith("InvalidRequest", /not a ULID/));
-  const explicit = await provide(addShot({ configPath: p.configPath, id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", startSample: 3, mode: "graphic-illustration", producer: p.producer }));
+  await assert.rejects(provide(addShot({ ...(await p.target()), id: "not-a-ulid", startSample: 0, mode: "graphic-illustration", producer: p.producer })), failsWith("InvalidRequest", /not a ULID/));
+  const explicit = await provide(addShot({ ...(await p.target()), id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", startSample: 3, mode: "graphic-illustration", producer: p.producer }));
   assert.equal(explicit.id, "01ARZ3NDEKTSV4RRFFQ69G5FAV");
   assert.deepEqual((await readdir(join(p.planningDirectory, "shots"))).sort(), [explicit.id, id].sort());
 });
@@ -214,15 +214,15 @@ test("writeDecisions round-trips through load, sets updatedAt, and rejects inval
   const p = await planning(t);
   const a = await p.record({ startSample: 5 });
   const body: DecisionsBody = { settings: { frameAspect: { width: 4, height: 3 } }, shots: { [a.id]: { startSample: 0, selected: true, notes: "pinned" } } };
-  const written = await provide(writeDecisions({ configPath: p.configPath, decisions: body }));
+  const written = await provide(writeDecisions({ ...(await p.target()), decisions: body }));
   assert.deepEqual(written.clip, p.clip);
   assert.ok(!Number.isNaN(Date.parse(written.updatedAt)));
   const result = await p.load();
   assert.deepEqual(result.decisions, written);
   assert.deepEqual(JSON.parse(await readFile(join(p.planningDirectory, "decisions.json"), "utf8")), written);
   assert.deepEqual(result.stitched.map(e => [e.kind, e.startSample, e.endSample]), [["shot", 0, 100]]);
-  await assert.rejects(provide(writeDecisions({ configPath: p.configPath, decisions: { ...body, shots: { "01ARZ3NDEKTSV4RRFFQ69G5FAV": {} } } })), failsWith("InvalidDecisions", /no generation record/));
-  await assert.rejects(provide(writeDecisions({ configPath: p.configPath, decisions: { settings: { frameAspect: { width: 0, height: 9 } }, shots: {} } })), failsWith("InvalidDecisions", /schema/));
+  await assert.rejects(provide(writeDecisions({ ...(await p.target()), decisions: { ...body, shots: { "01ARZ3NDEKTSV4RRFFQ69G5FAV": {} } } })), failsWith("InvalidDecisions", /no generation record/));
+  await assert.rejects(provide(writeDecisions({ ...(await p.target()), decisions: { settings: { frameAspect: { width: 0, height: 9 } }, shots: {} } })), failsWith("InvalidDecisions", /schema/));
   assert.deepEqual(JSON.parse(await readFile(join(p.planningDirectory, "decisions.json"), "utf8")), written);
 });
 
@@ -233,12 +233,10 @@ test("a broken story identity surfaces as the story error, not a timeline error"
 });
 
 test("show on The Great Silence loads the real verified clip", async t => {
-  const configPath = fileURLToPath(new URL("../../../config/visual-timeline.json", import.meta.url));
-  const storyConfigPath = fileURLToPath(new URL("../../../config/story.json", import.meta.url));
-  const manifest = fileURLToPath(new URL("../../../data/stories/the-great-silence/story.json", import.meta.url));
-  if (!(await access(manifest).then(() => true, () => false))) return t.skip("local story data is not present");
-  assert.ok(await access(storyConfigPath).then(() => true, () => false));
-  const result = await provide(loadVisualTimeline({ configPath, storyDirectory: fileURLToPath(new URL("../../../data/stories/the-great-silence", import.meta.url)) }));
+  const storyDirectory = fileURLToPath(new URL("../../../data/stories/the-great-silence", import.meta.url));
+  if (!(await access(join(storyDirectory, "story.json")).then(() => true, () => false))) return t.skip("local story data is not present");
+  const story = await provide(loadStoryContext({ storyDirectory }));
+  const result = await provide(loadVisualTimeline({ story }));
   assert.deepEqual([result.clip.bookId, result.clip.storyId, result.clip.sampleRateHz, result.clip.sampleCount], ["exhalation", "the-great-silence", 44100, 21608368]);
   assert.match(result.storyDirectory, /data\/stories\/the-great-silence$/);
   const last = result.stitched.at(-1)!;

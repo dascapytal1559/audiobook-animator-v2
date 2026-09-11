@@ -1,14 +1,14 @@
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
 import { Duration, Effect, FileSystem, Layer, Schema, Semaphore, Stream } from "effect";
 import { Sse } from "effect/unstable/encoding";
 import { HttpIncomingMessage, HttpRouter, type HttpServerRequest, HttpServerResponse, HttpStaticServer, Multipart } from "effect/unstable/http";
-import { loadStoryContext, StoryManifest, StoryConfig, StoryError, type StoryContext } from "../story/index.js";
+import { clipOf, listStories as listStoryManifests, loadStoryContext, StoryError, type StoryContext, type StorySettings } from "../story/index.js";
 import { decodeJson, readBounded } from "../../core/io.js";
-import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotRecord, VisualTimelineConfig, VisualTimelineError, writeDecisions, type DecisionsBody } from "../visual-timeline/index.js";
+import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotRecord, VisualTimelineError, type VisualTimelineSettings, writeDecisions, type DecisionsBody } from "../visual-timeline/index.js";
 import { type TimingEntries, WordTimingError } from "../word-timing/index.js";
 import { type ChunkElement, type StoriesResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
 export type { StorySummary };
-import { EditorServerConfig, EditorServerError } from "./contracts.js";
+import { type EditorSettings, EditorServerError } from "./contracts.js";
 import type { PeaksIdentity, SpeechIdentity } from "./peaks.js";
 import { parseRange } from "./range.js";
 import { alignTiming, type Caches, loadTiming, makeCaches, storyPayload, writeManualTiming } from "./timing.js";
@@ -20,17 +20,14 @@ const MAX_MULTIPART_PARTS = 16;
 
 /** A transcript word with its ORIGINAL provider timing on the clip clock. Effective timing is merged per request by `loadTiming`. */
 export type EditorWord = { readonly id: string; readonly value: string; readonly startSample: number; readonly endSample: number };
-/** Both configs, the stories directory, and the default story (A18) named by the story config. Loaded once at start; shared by every story. */
-export type EditorConfigContext = {
-  readonly configPath: string; readonly config: EditorServerConfig;
-  readonly timelineConfigPath: string; readonly timelineConfig: VisualTimelineConfig;
-  readonly storyConfigPath: string; readonly storyConfig: StoryConfig;
+/** What every story shares: where the stories live and the effective settings of the three modules the server composes. Nothing here names a default story. */
+export type EditorShared = {
   /** Every direct subdirectory is a story the server can open. */
   readonly storiesDirectory: string;
-  readonly defaultStoryId: string;
+  readonly settings: { readonly story: StorySettings; readonly timeline: VisualTimelineSettings; readonly editor: EditorSettings };
 };
 /** One verified story: the shared configs plus the loaded story, its clip identity, words, and cache identities. */
-export type EditorContext = EditorConfigContext & {
+export type EditorContext = EditorShared & {
   readonly story: StoryContext; readonly clip: ClipIdentity; readonly storyDirectory: string;
   /** Regenerable caches live here, apart from source and work files; the watcher ignores it. */
   readonly cacheDirectory: string;
@@ -41,7 +38,7 @@ export type EditorContext = EditorConfigContext & {
 };
 /** A story opened by the server: its verified context and its in-memory peaks/speech caches. */
 export type OpenStory = { readonly ctx: EditorContext; readonly caches: Caches };
-export type EditorLibrary = EditorConfigContext & {
+export type EditorLibrary = EditorShared & {
   readonly stories: ReadonlyArray<StorySummary>;
   /** The listed story, verified on first open and kept for the process lifetime; a failed verification is retried on the next open. Unknown ids are `NotFound`. */
   readonly open: (storyId: string | undefined) => Effect.Effect<OpenStory, EditorServerError | StoryError, FileSystem.FileSystem>;
@@ -51,76 +48,42 @@ export type EditorRouteOptions = { readonly producer: { readonly name: string; r
 const read = (path: string, limit: number) => readBounded(path, limit).pipe(Effect.mapError(e => new EditorServerError({ code: "IoFailed", message: e.message })));
 const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) => decodeJson(schema, bytes, path, true).pipe(Effect.mapError(e => new EditorServerError({ code, message: e.message })));
 
-/** The three configs, resolved from one another, with the default story checked to live directly under the stories directory. */
-export function loadEditorConfig(options: { readonly configPath: string }): Effect.Effect<EditorConfigContext, EditorServerError, FileSystem.FileSystem> {
-  return Effect.gen(function* () {
-    if (!options.configPath || options.configPath.includes("\0")) return yield* fail("InvalidConfig", "Supply an explicit configuration path.");
-    const configPath = resolve(options.configPath);
-    const config = yield* decode(EditorServerConfig, yield* read(configPath, 65_536), "InvalidConfig", configPath);
-    const timelineConfigPath = resolve(dirname(configPath), config.visualTimelineConfigPath);
-    const timelineConfig = yield* decode(VisualTimelineConfig, yield* read(timelineConfigPath, 65_536), "InvalidConfig", timelineConfigPath);
-    const storyConfigPath = resolve(dirname(timelineConfigPath), timelineConfig.storyConfigPath);
-    const storyConfig = yield* decode(StoryConfig, yield* read(storyConfigPath, 65_536), "InvalidConfig", storyConfigPath);
-    const storiesDirectory = resolve(dirname(configPath), config.storiesDirectory);
-    const defaultStoryDirectory = resolve(dirname(storyConfigPath), storyConfig.storyDirectory);
-    if (dirname(defaultStoryDirectory) !== storiesDirectory) return yield* fail("InvalidConfig", `The default story ${defaultStoryDirectory} (from ${storyConfigPath}) must live directly under storiesDirectory ${storiesDirectory} (from ${configPath}).`);
-    return { configPath, config, timelineConfigPath, timelineConfig, storyConfigPath, storyConfig, storiesDirectory, defaultStoryId: basename(defaultStoryDirectory) };
-  });
-}
-
-/** Every direct subdirectory of the stories directory, summarized from its `story.json` (id checked against the directory name). Files beside them are not stories. */
-export function listStories(shared: EditorConfigContext): Effect.Effect<ReadonlyArray<StorySummary>, EditorServerError, FileSystem.FileSystem> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const io = (message: string) => (e: unknown) => e instanceof EditorServerError ? e : new EditorServerError({ code: "IoFailed", message });
-    const entries = (yield* fs.readDirectory(shared.storiesDirectory).pipe(Effect.mapError(io(`Cannot list ${shared.storiesDirectory}.`)))).filter(name => !name.startsWith(".")).sort();
-    const stories: StorySummary[] = [];
-    for (const name of entries) {
-      const storyDirectory = join(shared.storiesDirectory, name);
-      if ((yield* fs.stat(storyDirectory).pipe(Effect.mapError(io(`Cannot inspect ${storyDirectory}.`)))).type !== "Directory") continue;
-      const manifestPath = join(storyDirectory, "story.json");
-      const manifest = yield* decode(StoryManifest, yield* read(manifestPath, shared.storyConfig.limits.maxManifestBytes), "InvalidConfig", manifestPath);
-      if (manifest.id !== name) return yield* fail("InvalidConfig", `Manifest id ${manifest.id} does not match its directory name: ${storyDirectory}.`);
-      stories.push({ id: manifest.id, title: manifest.title, bookId: manifest.book.id, bookTitle: manifest.book.title, wordCount: manifest.wordCount,
-        sampleRateHz: manifest.sampleRateHz, sampleCount: manifest.sampleCount, durationSeconds: manifest.durationSeconds, durationDisplay: manifest.durationDisplay });
-    }
-    if (!stories.some(s => s.id === shared.defaultStoryId)) return yield* fail("InvalidConfig", `The default story ${shared.defaultStoryId} is not a story directory under ${shared.storiesDirectory}.`);
-    return stories;
-  });
+/** Every story under the stories directory, summarized from its manifest. A manifest that fails is InvalidConfig: the server cannot list what it cannot read. */
+export function listStories(shared: EditorShared): Effect.Effect<ReadonlyArray<StorySummary>, EditorServerError, FileSystem.FileSystem> {
+  return listStoryManifests(shared.storiesDirectory, shared.settings.story.limits).pipe(Effect.mapError(e => new EditorServerError({ code: e.code === "IoFailed" ? "IoFailed" : "InvalidConfig", message: e.message })));
 }
 
 /** One story verified through story, its words converted to clip samples, and its cache identities. The story directory is what `/events` watches. */
-export function openStory(shared: EditorConfigContext, storyId: string): Effect.Effect<EditorContext, EditorServerError | StoryError, FileSystem.FileSystem> {
+export function openStory(shared: EditorShared, storyId: string): Effect.Effect<EditorContext, EditorServerError | StoryError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
-    const story = yield* loadStoryContext({ configPath: shared.storyConfigPath, storyDirectory: join(shared.storiesDirectory, storyId) });
-    const clip: ClipIdentity = { bookId: story.bookId, storyId: story.story.id, audioSha256: story.story.audioSha256, transcriptSha256: story.story.transcriptSha256, sampleRateHz: story.story.sampleRateHz, sampleCount: story.story.sampleCount };
+    const story = yield* loadStoryContext({ storyDirectory: join(shared.storiesDirectory, storyId), settings: shared.settings.story });
+    const clip: ClipIdentity = clipOf(story);
     const { storyDirectory } = story;
     const toSample = (seconds: number) => Math.min(clip.sampleCount, Math.max(0, Math.round(seconds * clip.sampleRateHz)));
     const elements: ReadonlyArray<ChunkElement> = story.transcript.kind === "story-transcript" ? story.transcript.elements : story.transcript.elements.map(e => e.kind === "word"
       ? { kind: "word", id: e.id, value: e.value, startSample: toSample(e.approximateSegmentStartSeconds), endSample: toSample(e.approximateSegmentEndSeconds) }
       : { kind: "punctuation", value: e.value });
     const words = elements.flatMap(e => e.kind === "word" ? [{ id: e.id, value: e.value, startSample: e.startSample, endSample: e.endSample }] : []);
-    const frameSamples = Math.round((shared.config.speech.frameMs / 1000) * clip.sampleRateHz);
-    if (frameSamples < 1) return yield* fail("InvalidConfig", `speech.frameMs ${shared.config.speech.frameMs} is shorter than one sample at ${clip.sampleRateHz} Hz in ${shared.configPath}.`);
-    const peaksIdentity: PeaksIdentity = { audioSha256: clip.audioSha256, sampleRateHz: clip.sampleRateHz, sampleCount: clip.sampleCount, samplesPerBucket: shared.config.peaks.samplesPerBucket };
-    const speechIdentity: SpeechIdentity = { audioSha256: clip.audioSha256, sampleRateHz: clip.sampleRateHz, sampleCount: clip.sampleCount, frameSamples, thresholdDbfs: shared.config.speech.thresholdDbfs, minSilenceMs: shared.config.speech.minSilenceMs, minSpeechMs: shared.config.speech.minSpeechMs };
+    const frameSamples = Math.round((shared.settings.editor.speech.frameMs / 1000) * clip.sampleRateHz);
+    if (frameSamples < 1) return yield* fail("InvalidConfig", `speech.frameMs ${shared.settings.editor.speech.frameMs} is shorter than one sample at ${clip.sampleRateHz} Hz.`);
+    const peaksIdentity: PeaksIdentity = { audioSha256: clip.audioSha256, sampleRateHz: clip.sampleRateHz, sampleCount: clip.sampleCount, samplesPerBucket: shared.settings.editor.peaks.samplesPerBucket };
+    const speechIdentity: SpeechIdentity = { audioSha256: clip.audioSha256, sampleRateHz: clip.sampleRateHz, sampleCount: clip.sampleCount, frameSamples, thresholdDbfs: shared.settings.editor.speech.thresholdDbfs, minSilenceMs: shared.settings.editor.speech.minSilenceMs, minSpeechMs: shared.settings.editor.speech.minSpeechMs };
     return { ...shared, story, clip, storyDirectory, cacheDirectory: join(storyDirectory, "cache"), peaksPath: join(storyDirectory, "cache", "peaks.json"), peaksIdentity, speechPath: join(storyDirectory, "cache", "speech.json"), speechIdentity, elements, words };
   });
 }
 
-/** The configs and one verified story: `storyId` when given, else the story config's default (A18). The CLIs' entry point. */
-export function loadEditorContext(options: { readonly configPath: string; readonly storyId?: string }): Effect.Effect<EditorContext, EditorServerError | StoryError, FileSystem.FileSystem> {
+/** The shared settings and one verified story, for the CLIs. The story must be listed; anything else is NotFound naming what is. */
+export function loadEditorContext(options: EditorShared & { readonly storyId: string }): Effect.Effect<EditorContext, EditorServerError | StoryError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
-    const shared = yield* loadEditorConfig(options);
-    if (options.storyId !== undefined && !(yield* listStories(shared)).some(s => s.id === options.storyId)) return yield* fail("NotFound", `No story directory ${options.storyId} under ${shared.storiesDirectory}.`);
-    return yield* openStory(shared, options.storyId ?? shared.defaultStoryId);
+    const stories = yield* listStories(options);
+    if (!stories.some(s => s.id === options.storyId)) return yield* fail("NotFound", `No story ${options.storyId} under ${options.storiesDirectory}; stories: ${stories.map(s => s.id).join(", ")}.`);
+    return yield* openStory(options, options.storyId);
   });
 }
 
-/** The configs, the story listing taken once at start, and a lazy per-story cache of verified contexts. Stories added on disk later need a restart. */
-export function loadEditorLibrary(options: { readonly configPath: string }): Effect.Effect<EditorLibrary, EditorServerError, FileSystem.FileSystem> {
+/** The shared settings, the story listing taken once at start, and a lazy per-story cache of verified contexts. Stories added on disk later need a restart. */
+export function loadEditorLibrary(shared: EditorShared): Effect.Effect<EditorLibrary, EditorServerError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
-    const shared = yield* loadEditorConfig(options);
     const stories = yield* listStories(shared);
     const sessions = new Map<string, OpenStory>();
     const locks = new Map(stories.map(s => [s.id, Semaphore.makeUnsafe(1)] as const));
@@ -201,7 +164,7 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     Effect.gen(function* () { const { storyId } = yield* HttpRouter.params; return yield* f(yield* library.open(storyId)); });
   const timeline = (ctx: EditorContext) => Effect.gen(function* () {
     const { wordStarts } = yield* loadTiming(ctx);
-    const t = yield* loadVisualTimeline({ configPath: ctx.timelineConfigPath, storyDirectory: ctx.storyDirectory, wordStarts });
+    const t = yield* loadVisualTimeline({ story: ctx.story, settings: ctx.settings.timeline, wordStarts });
     return { ...t, records: t.records.map(imageUrl(ctx.clip.storyId)) } satisfies TimelineResponse;
   });
   const storyJson = (ctx: EditorContext) => Effect.map(storyPayload(ctx), json);
@@ -214,18 +177,18 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
   const ignoredChange = (ctx: EditorContext, path: string) => basename(path).startsWith(".") || path === ctx.cacheDirectory || path.startsWith(ctx.cacheDirectory + "/");
   const at = <P extends `/${string}`>(path: P) => `/api/stories/:storyId${path}` as const;
 
-  const stories = HttpRouter.add("GET", "/api/stories", json({ defaultStoryId: library.defaultStoryId, stories: library.stories } satisfies StoriesResponse));
+  const stories = HttpRouter.add("GET", "/api/stories", json({ stories: library.stories } satisfies StoriesResponse));
   const story = HttpRouter.add("GET", at("/story"), handle(withStory(s => storyJson(s.ctx))));
   const timelineRoute = HttpRouter.add("GET", at("/timeline"), handle(withStory(s => Effect.map(timeline(s.ctx), t => json(t)))));
   const decisions = HttpRouter.add("PUT", at("/decisions"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
-    const body = yield* readJsonObject(request, ctx.timelineConfig.limits.maxDecisionsBytes);
+    const body = yield* readJsonObject(request, ctx.settings.timeline.limits.maxDecisionsBytes);
     if (!("settings" in body) || !("shots" in body)) return yield* fail("InvalidRequest", "Body must be a JSON object with settings and shots.");
     const { wordStarts } = yield* loadTiming(ctx);
-    yield* writeDecisions({ configPath: ctx.timelineConfigPath, storyDirectory: ctx.storyDirectory, decisions: { settings: body["settings"], shots: body["shots"] } as DecisionsBody, wordStarts });
+    yield* writeDecisions({ story: ctx.story, settings: ctx.settings.timeline, decisions: { settings: body["settings"], shots: body["shots"] } as DecisionsBody, wordStarts });
     return json(yield* timeline(ctx));
   })), { decisionsFromClient: true }));
   const wordTiming = HttpRouter.add("PUT", at("/word-timing"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
-    const body = yield* readJsonObject(request, ctx.timelineConfig.limits.maxDecisionsBytes);
+    const body = yield* readJsonObject(request, ctx.settings.timeline.limits.maxDecisionsBytes);
     if (!("words" in body)) return yield* fail("InvalidRequest", "Body must be a JSON object with words.");
     yield* writeManualTiming(ctx, body["words"] as TimingEntries);
     return yield* storyJson(ctx);
@@ -240,9 +203,9 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
   const speech = HttpRouter.add("GET", at("/speech"), handle(withStory(s => Effect.map(s.caches.speech, json))));
   const shots = HttpRouter.add("POST", at("/shots"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
     const persisted = yield* request.multipart.pipe(
-      Effect.provideService(Multipart.MaxFileSize, ctx.timelineConfig.limits.maxImageBytes),
+      Effect.provideService(Multipart.MaxFileSize, ctx.settings.timeline.limits.maxImageBytes),
       Effect.provideService(Multipart.MaxParts, MAX_MULTIPART_PARTS),
-      Effect.provideService(HttpIncomingMessage.MaxBodySize, FileSystem.Size(ctx.config.limits.maxUploadBytes)));
+      Effect.provideService(HttpIncomingMessage.MaxBodySize, FileSystem.Size(ctx.settings.editor.limits.maxUploadBytes)));
     const text = (name: string) => {
       const value = persisted[name];
       return value === undefined || typeof value === "string" ? Effect.succeed(value) : fail("InvalidRequest", `Field ${name} must appear once as text.`);
@@ -258,7 +221,7 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     const mode = yield* text("mode");
     if (mode !== "graphic-illustration" && mode !== "poetic-abstraction") return yield* fail("InvalidRequest", `mode must be one of ${ShotMode.literals.join(", ")}.`);
     const [startSample, startSeconds, label, prompt, notes] = [yield* number("startSample", yield* text("startSample")), yield* number("startSeconds", yield* text("startSeconds")), yield* text("label"), yield* text("prompt"), yield* text("notes")];
-    const record = yield* addShot({ configPath: ctx.timelineConfigPath, storyDirectory: ctx.storyDirectory, mode, producer: options.producer,
+    const record = yield* addShot({ story: ctx.story, settings: ctx.settings.timeline, mode, producer: options.producer,
       ...(startSample !== undefined ? { startSample } : {}), ...(startSeconds !== undefined ? { startSeconds } : {}),
       ...(label !== undefined ? { label } : {}), ...(prompt !== undefined ? { prompt } : {}), ...(notes !== undefined ? { notes } : {}),
       ...(imageSourcePath !== undefined ? { imageSourcePath } : {}) });
@@ -269,7 +232,7 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     const { id } = yield* HttpRouter.params;
     if (id === undefined || !isUlid(id)) return yield* Effect.fail(notFound);
     const directory = join(ctx.storyDirectory, "shots", id);
-    const bytes = yield* read(join(directory, "record.json"), ctx.timelineConfig.limits.maxRecordBytes).pipe(Effect.mapError(() => notFound));
+    const bytes = yield* read(join(directory, "record.json"), ctx.settings.timeline.limits.maxRecordBytes).pipe(Effect.mapError(() => notFound));
     const record = yield* decode(ShotRecord, bytes, "NotFound", id).pipe(Effect.mapError(() => notFound));
     if (record.id !== id || record.imagePath === undefined) return yield* Effect.fail(notFound);
     const type = IMAGE_TYPES[extname(record.imagePath).toLowerCase()];
@@ -292,14 +255,14 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
   const events = HttpRouter.add("GET", at("/events"), handle(withStory(({ ctx }) => Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     // A watcher failure ends the stream; EventSource reconnects and receives a fresh `ready`.
-    const changes = fs.watch(ctx.storyDirectory, { recursive: true }).pipe(Stream.filter(e => !ignoredChange(ctx, e.path)), Stream.debounce(Duration.millis(ctx.config.watch.debounceMs)), Stream.map(() => sse("timeline-changed")), Stream.catchCause(() => Stream.empty));
+    const changes = fs.watch(ctx.storyDirectory, { recursive: true }).pipe(Stream.filter(e => !ignoredChange(ctx, e.path)), Stream.debounce(Duration.millis(ctx.settings.editor.watch.debounceMs)), Stream.map(() => sse("timeline-changed")), Stream.catchCause(() => Stream.empty));
     const heartbeats = Stream.tick(HEARTBEAT).pipe(Stream.map(() => ": heartbeat\n\n"));
     const body = Stream.make(sse("ready")).pipe(Stream.concat(Stream.merge(changes, heartbeats)), Stream.encodeText);
     return HttpServerResponse.stream(body, { contentType: "text/event-stream", headers: { "cache-control": "no-cache", "x-accel-buffering": "no" } });
   }))));
   const apiFallback = HttpRouter.add("*", "/api/*", errorJson(404, "NotFound", "No such API route."));
   const root = options.staticDirectory === undefined
-    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`animator-v2 editor server: ${library.stories.length} stories under ${library.storiesDirectory}, default ${library.defaultStoryId}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /audio /peaks /speech /events\n`))
+    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`animator-v2 editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /audio /peaks /speech /events\n`))
     : HttpStaticServer.layer({ root: resolve(options.staticDirectory), index: "index.html", spa: true, cacheControl: "no-cache" });
   return Layer.mergeAll(stories, story, timelineRoute, decisions, wordTiming, align, speech, shots, image, audio, peaks, events, apiFallback, root);
 }

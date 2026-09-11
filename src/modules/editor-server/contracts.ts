@@ -2,13 +2,10 @@ import { Data, Schema } from "effect";
 import { NonNegative, Path, Positive } from "@animator/domain";
 
 /**
- * `config/editor-server.json`. Paths resolve from the config file; the port and static directory are command-line arguments.
- * Every directory under `storiesDirectory` is a story the server can open (A55); the story config reached through the visual-timeline config names the default one (A18) and must live directly under it.
+ * Settings for the editor server and the word-timing tools. Defaults live in code; a run file may override any of them, and every
+ * artifact they write (the peaks and speech caches, the auto timing overlay) records the values it was produced with.
  */
-export const EditorServerConfig = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
-  storiesDirectory: Path,
-  visualTimelineConfigPath: Path,
+export const EditorSettings = Schema.Struct({
   ffmpegPath: Path,
   peaks: Schema.Struct({ samplesPerBucket: Positive, maxCacheBytes: Positive }),
   /** Speech-region detection (A45): RMS frames of `frameMs`, an absolute dBFS threshold, and the shortest silence and speech runs that survive cleanup. */
@@ -17,10 +14,19 @@ export const EditorServerConfig = Schema.Struct({
   alignment: Schema.Struct({ leadMs: Schema.Int, boundaryPauseMs: Positive }),
   watch: Schema.Struct({ debounceMs: Positive }),
   limits: Schema.Struct({ maxUploadBytes: Positive, requestTimeoutMs: Positive, maxWordTimingBytes: Positive }),
-  /** A gap between consecutive words at least this long ends a chunk in the editor's chunk lane. */
+  /** A gap between consecutive words at least this long ends a chunk in the editor's chunk lane; a story's manifest may override `minSentenceBreakMs` (A54). */
   chunking: Schema.Struct({ pauseBreakMs: Positive, minSentenceBreakMs: NonNegative }),
 });
-export type EditorServerConfig = typeof EditorServerConfig.Type;
+export type EditorSettings = typeof EditorSettings.Type;
+export const editorDefaults: EditorSettings = {
+  ffmpegPath: "ffmpeg",
+  peaks: { samplesPerBucket: 1024, maxCacheBytes: 16_777_216 },
+  speech: { frameMs: 10, thresholdDbfs: -50, minSilenceMs: 150, minSpeechMs: 50 },
+  alignment: { leadMs: 150, boundaryPauseMs: 300 },
+  watch: { debounceMs: 200 },
+  limits: { maxUploadBytes: 52_428_800, requestTimeoutMs: 30_000, maxWordTimingBytes: 16_777_216 },
+  chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 },
+};
 
 export { PeaksFile, SpeechFile } from "@animator/domain";
 

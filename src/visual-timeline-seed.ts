@@ -6,17 +6,20 @@ import { join, resolve } from "node:path";
 import { isDeepStrictEqual, parseArgs, promisify } from "node:util";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, FileSystem, Schema } from "effect";
+import { loadStoryContext, StoryError } from "./modules/story/index.js";
 import { addShot, DEFAULT_SETTINGS, loadVisualTimeline, type ShotRecord, VisualTimelineError, writeDecisions } from "./modules/visual-timeline/index.js";
+import { loadRun, RunError, selectStory } from "./run.js";
 import { checkTreatmentRows, PANELS, parseTreatmentTable, PrototypeAssets, PrototypePrompts, prototypeSeeds, type SeedShot, suggestedDecisions, treatmentSeeds } from "./modules/visual-timeline/seed.js";
 
 const usage = `Usage:
-  node dist/visual-timeline-seed.js --config config/visual-timeline.json --treatment <visual-treatment.md> --prototype <visual-prototype dir> [--dry-run] [--ffmpeg PATH] [--ffprobe PATH]
+  node dist/visual-timeline-seed.js --story <id> [--run <file>] --treatment <visual-treatment.md> --prototype <visual-prototype dir> [--dry-run] [--ffmpeg PATH] [--ffprobe PATH]
 
 One-time seed import for The Great Silence (PIPELINE A33 / B17). Imports the 14 treatment spans as image-less records and the 15 prototype
 panels (each board cropped into thirds with ffmpeg) as image records, all with deterministic ULIDs, so re-running is a no-op: an existing
 record must equal what would be written or the run fails with a diff summary. Writes a suggested decisions.json only when none exists.
 --dry-run validates everything, including the crops, and prints the plan without writing into the story directory.
---ffmpeg / --ffprobe default to the PATH commands. Treatment and prototype paths resolve from the working directory. Nothing is ever deleted.`;
+--ffmpeg / --ffprobe default to the PATH commands. Treatment and prototype paths resolve from the working directory. Nothing is ever deleted.
+Without --story the available ids are listed. Settings are the code defaults unless --run names a JSON file that overrides some of them.`;
 
 const invalid = (message: string) => new VisualTimelineError({ code: "InvalidRequest", message });
 const attempt = <A>(f: () => A) => Effect.try({ try: f, catch: e => invalid(e instanceof Error ? e.message : String(e)) });
@@ -39,17 +42,20 @@ function decodeJson<S extends Schema.Top>(schema: S, text: string, path: string)
 
 const main = Effect.gen(function* () {
   const values = yield* Effect.try({
-    try: () => parseArgs({ options: { config: { type: "string" }, treatment: { type: "string" }, prototype: { type: "string" }, "dry-run": { type: "boolean" },
+    try: () => parseArgs({ options: { story: { type: "string" }, run: { type: "string" }, treatment: { type: "string" }, prototype: { type: "string" }, "dry-run": { type: "boolean" },
       ffmpeg: { type: "string" }, ffprobe: { type: "string" }, help: { type: "boolean" } }, strict: true, allowPositionals: false }).values,
     catch: () => invalid("Invalid arguments. Run with --help for usage."),
   });
   if (values.help) return yield* Console.error(usage);
-  if (!values.config || !values.treatment || !values.prototype) return yield* Effect.fail(invalid("Supply explicit --config, --treatment, and --prototype paths. Run with --help for usage."));
+  if (!values.treatment || !values.prototype) return yield* Effect.fail(invalid("Supply explicit --treatment and --prototype paths. Run with --help for usage."));
   const dryRun = values["dry-run"] === true;
   const ffmpeg = values.ffmpeg ?? "ffmpeg";
   const ffprobe = values.ffprobe ?? "ffprobe";
   const fs = yield* FileSystem.FileSystem;
-  const timeline = yield* loadVisualTimeline({ configPath: values.config });
+  const run = yield* loadRun(values.run);
+  const story = yield* loadStoryContext({ storyDirectory: yield* selectStory(run, values.story), settings: run.story });
+  const target = { story, settings: run.timeline };
+  const timeline = yield* loadVisualTimeline(target);
   const { clip } = timeline;
   const shotsDirectory = join(timeline.storyDirectory, "shots");
   const decisionsPath = join(timeline.storyDirectory, "decisions.json");
@@ -110,7 +116,7 @@ const main = Effect.gen(function* () {
     for (const seed of additions) {
       const image = panels.get(seed.id);
       if (!dryRun) {
-        yield* addShot({ configPath: values.config!, id: seed.id, startSample: seed.startSample, mode: seed.mode, label: seed.label, notes: seed.notes, createdAt: seed.createdAt, producer: seed.producer,
+        yield* addShot({ ...target, id: seed.id, startSample: seed.startSample, mode: seed.mode, label: seed.label, notes: seed.notes, createdAt: seed.createdAt, producer: seed.producer,
           ...(seed.prompt !== undefined ? { prompt: seed.prompt } : {}), ...(image ? { imageSourcePath: image.path } : {}) });
       }
       yield* Console.log(`${dryRun ? "would add" : "added    "}  ${seed.id}  ${String(seed.startSample).padStart(9)}  ${seed.label}`);
@@ -124,7 +130,7 @@ const main = Effect.gen(function* () {
       const shots = yield* attempt(() => suggestedDecisions(seeds));
       const selected = Object.keys(shots).map(id => seeds.find(s => s.id === id)!.label).join(", ");
       if (dryRun) decisionsStatus = `would write decisions.json selecting: ${selected}`;
-      else { yield* writeDecisions({ configPath: values.config!, decisions: { settings: DEFAULT_SETTINGS, shots } }); decisionsStatus = `wrote decisions.json selecting: ${selected}`; }
+      else { yield* writeDecisions({ ...target, decisions: { settings: DEFAULT_SETTINGS, shots } }); decisionsStatus = `wrote decisions.json selecting: ${selected}`; }
     }
     yield* Console.log(`\n${seeds.length} seed records: ${seeds.length - additions.length} unchanged, ${additions.length} ${dryRun ? "to add (dry run, nothing written)" : "added"}.\n${decisionsStatus}`);
   });
@@ -132,7 +138,7 @@ const main = Effect.gen(function* () {
 });
 
 main.pipe(
-  Effect.catch((error) => Console.error("code" in error ? `${error.code}: ${error.message}` : "Cannot seed the visual timeline.").pipe(
+  Effect.catch((error) => Console.error(error instanceof VisualTimelineError || error instanceof StoryError || error instanceof RunError ? `${error.code}: ${error.message}` : "Cannot seed the visual timeline.").pipe(
     Effect.andThen(Effect.sync(() => { process.exitCode = 1; })),
   )),
   Effect.provide(NodeServices.layer),

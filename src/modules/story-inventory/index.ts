@@ -1,14 +1,13 @@
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { Effect, FileSystem } from "effect";
 import { durationDisplay, type LoadedStoryManifest, loadStoryManifest, StoryError } from "../story/index.js";
-import { decodeJson, readBounded } from "../../core/io.js";
-import { StoryInventoryConfig, StoryInventoryError } from "./contracts.js";
+import { type StoryInventorySettings, StoryInventoryError, storyInventoryDefaults } from "./contracts.js";
 
-export { StoryInventoryConfig, StoryInventoryError } from "./contracts.js";
+export { StoryInventoryError, StoryInventorySettings, storyInventoryDefaults } from "./contracts.js";
 
 const fail = (code: StoryInventoryError["code"], message: string) => Effect.fail(new StoryInventoryError({ code, message }));
 /** story's reader and manifest loader use the same code names; only the error type changes. */
-const own = <A, R>(effect: Effect.Effect<A, StoryError, R>) => effect.pipe(Effect.mapError(e => new StoryInventoryError({ code: e.code, message: e.message })));
+const own = <A, R>(effect: Effect.Effect<A, StoryError, R>) => effect.pipe(Effect.mapError(e => new StoryInventoryError({ code: e.code === "NotFound" ? "InvalidManifest" : e.code, message: e.message })));
 const jsonBytes = (value: unknown): Buffer => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 
 const markdown = (value: string): string => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
@@ -84,7 +83,7 @@ function checkOutputs(paths: ReadonlyArray<string>, inputs: ReadonlyArray<string
 }
 
 /** Every directory under the stories directory, each verified through its manifest. Files beside the story directories (the published views) are not stories. */
-function loadStories(storiesDirectory: string, config: StoryInventoryConfig) {
+function loadStories(storiesDirectory: string, config: StoryInventorySettings) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const entries = (yield* fs.readDirectory(storiesDirectory)).filter((name) => !name.startsWith(".")).sort();
@@ -101,39 +100,39 @@ function loadStories(storiesDirectory: string, config: StoryInventoryConfig) {
   });
 }
 
-/** Replace only mutable reader views after every input and complete output has passed validation. */
-export function renderStoryInventory(options: { readonly configPath: string }) {
+/**
+ * Replace only mutable reader views after every input and complete output has passed validation. Books are discovered from the story
+ * manifests; each book must have its extras inventory at `<booksDirectory>/<bookId>/split/inventory.md`. Outputs are fixed by layout:
+ * `<booksDirectory>/<bookId>/inventory.md` per book, `inventory.md` and `inventory.json` beside the stories.
+ */
+export function renderStoryInventory(options: { readonly storiesDirectory: string; readonly booksDirectory: string; readonly settings?: StoryInventorySettings }) {
   return Effect.scoped(Effect.gen(function* () {
-    if (!options.configPath || options.configPath.includes("\0")) return yield* fail("InvalidConfig", "Supply an explicit inventory configuration path.");
+    const config = options.settings ?? storyInventoryDefaults;
+    if (!options.storiesDirectory || !options.booksDirectory || options.storiesDirectory.includes("\0") || options.booksDirectory.includes("\0")) return yield* fail("InvalidConfig", "Supply the stories and books directories.");
     const fs = yield* FileSystem.FileSystem;
-    const configPath = resolve(options.configPath);
-    const configBytes = yield* readBounded(configPath, 65_536).pipe(Effect.mapError(e => new StoryInventoryError({ code: "IoFailed", message: e.message })));
-    const config = yield* decodeJson(StoryInventoryConfig, configBytes, configPath, true).pipe(Effect.mapError(e => new StoryInventoryError({ code: "InvalidConfig", message: e.message })));
-    const configDirectory = dirname(configPath);
-    if (config.books.length === 0 || config.books.length > config.limits.maxBooks || new Set(config.books.map((book) => book.bookId)).size !== config.books.length) {
-      return yield* fail("InvalidConfig", "Supply unique books within the configured book limit.");
-    }
-    const storiesDirectory = resolve(configDirectory, config.storiesDirectory);
+    const storiesDirectory = resolve(options.storiesDirectory);
+    const booksDirectory = resolve(options.booksDirectory);
     const stories = yield* loadStories(storiesDirectory, config);
+    const bookIds = [...new Set(stories.map((story) => story.manifest.book.id))].sort();
+    if (bookIds.length > config.limits.maxBooks) return yield* fail("InvalidConfig", `${bookIds.length} books exceed the configured limit of ${config.limits.maxBooks}.`);
     const books: LoadedBook[] = [];
-    for (const book of config.books) {
-      const own = stories.filter((story) => story.manifest.book.id === book.bookId);
-      if (own.length === 0) return yield* fail("InvalidConfig", `No story names book ${book.bookId}.`);
+    for (const bookId of bookIds) {
+      const own = stories.filter((story) => story.manifest.book.id === bookId);
       const titles = new Set(own.map((story) => story.manifest.book.title));
-      if (titles.size !== 1) return yield* fail("InvalidManifest", `Stories of book ${book.bookId} disagree on its title: ${[...titles].join(" / ")}.`);
-      const extrasPath = resolve(configDirectory, book.extrasInventoryPath);
+      if (titles.size !== 1) return yield* fail("InvalidManifest", `Stories of book ${bookId} disagree on its title: ${[...titles].join(" / ")}.`);
+      const extrasPath = join(booksDirectory, bookId, "split", "inventory.md");
+      if (!(yield* fs.exists(extrasPath))) return yield* fail("InvalidConfig", `Book ${bookId} has no extras inventory at ${extrasPath}.`);
       yield* requireFile(extrasPath);
-      books.push({ bookId: book.bookId, bookTitle: own[0]!.manifest.book.title, extrasPath, outputMarkdownPath: resolve(configDirectory, book.outputMarkdownPath), stories: own });
+      books.push({ bookId, bookTitle: own[0]!.manifest.book.title, extrasPath, outputMarkdownPath: join(booksDirectory, bookId, "inventory.md"), stories: own });
     }
-    const unknown = stories.find((story) => !config.books.some((book) => book.bookId === story.manifest.book.id));
-    if (unknown) return yield* fail("InvalidConfig", `Story ${unknown.manifest.id} names a book that is not configured: ${unknown.manifest.book.id}.`);
-    const outputMarkdownPath = resolve(configDirectory, config.outputMarkdownPath);
-    const outputJsonPath = resolve(configDirectory, config.outputJsonPath);
+    const outputMarkdownPath = join(storiesDirectory, "inventory.md");
+    const outputJsonPath = join(storiesDirectory, "inventory.json");
     const outputPaths = [...books.map((book) => book.outputMarkdownPath), outputMarkdownPath, outputJsonPath];
-    yield* checkOutputs(outputPaths, [configPath, ...books.map((book) => book.extrasPath)], stories.map((story) => story.storyDirectory));
+    yield* checkOutputs(outputPaths, books.map((book) => book.extrasPath), stories.map((story) => story.storyDirectory));
     const ordered = sorted(stories);
     const combined = {
       schemaVersion: 1, kind: "story-selection-inventory", spoilerPolicy: "premise-only", storyCount: ordered.length, storiesDirectory: pathFrom(outputJsonPath, storiesDirectory),
+      booksDirectory: pathFrom(outputJsonPath, booksDirectory), settings: config,
       books: books.map((book) => ({ bookId: book.bookId, bookTitle: book.bookTitle, storyCount: book.stories.length,
         extrasInventoryPath: pathFrom(outputJsonPath, book.extrasPath), inventoryMarkdownPath: pathFrom(outputJsonPath, book.outputMarkdownPath) })),
       stories: ordered.map(({ manifest, manifestSha256, storyDirectory, paths }) => ({

@@ -7,11 +7,12 @@ import test, { type TestContext } from "node:test";
 import { NodeServices } from "@effect/platform-node";
 import { Effect } from "effect";
 import { renderStoryInventory } from "./index.js";
-import type { StoryInventoryConfig } from "./contracts.js";
+import type { StoryInventorySettings } from "./contracts.js";
 
 const encode = (value: unknown): Buffer => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 const hash = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
-const run = (configPath: string) => Effect.runPromise(renderStoryInventory({ configPath }).pipe(Effect.provide(NodeServices.layer)));
+type Fixture = { readonly storiesDirectory: string; readonly booksDirectory: string; readonly settings: StoryInventorySettings };
+const run = (f: Fixture, settings: StoryInventorySettings = f.settings) => Effect.runPromise(renderStoryInventory({ storiesDirectory: f.storiesDirectory, booksDirectory: f.booksDirectory, settings }).pipe(Effect.provide(NodeServices.layer)));
 const hasCode = (code: string) => (error: unknown): boolean => typeof error === "object" && error !== null && "code" in error && error.code === code;
 const h = "a".repeat(64);
 
@@ -19,11 +20,10 @@ const h = "a".repeat(64);
 async function fixture(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), "animator-inventory-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  await mkdir(join(directory, "config"));
   const storiesDirectory = join(directory, "my stories (v2)");
   const inputPaths: string[] = [];
   const manifestPaths: string[] = [];
-  const books: Array<StoryInventoryConfig["books"][number]> = [];
+  const booksDirectory = join(directory, "books");
   const manifests: Array<Record<string, any>> = [];
   for (const [index, bookId] of ["first-book", "second-book"].entries()) {
     const bookDirectory = join(directory, "books", bookId);
@@ -65,16 +65,10 @@ async function fixture(t: TestContext) {
     }
     await writeFile(join(bookDirectory, "split", "inventory.md"), "# Original inventory\n\n## Extras\n\nNotes.\n");
     inputPaths.push(join(bookDirectory, "split", "inventory.md"));
-    books.push({ bookId, extrasInventoryPath: `../books/${bookId}/split/inventory.md`, outputMarkdownPath: `../books/${bookId}/inventory.md` });
   }
-  const config: StoryInventoryConfig = {
-    schemaVersion: 1, storiesDirectory: "../my stories (v2)", books, outputMarkdownPath: "../my stories (v2)/inventory.md", outputJsonPath: "../my stories (v2)/inventory.json",
-    limits: { maxBooks: 2, maxStories: 3, maxManifestBytes: 65_536, maxTranscriptBytes: 65_536, maxAudioManifestBytes: 65_536, maxOutputBytes: 65_536 },
-  };
-  const configPath = join(directory, "config", "inventory.json");
-  await writeFile(configPath, encode(config));
-  const outputPaths = [...books.map((book) => resolve(dirname(configPath), book.outputMarkdownPath)), resolve(dirname(configPath), config.outputMarkdownPath), resolve(dirname(configPath), config.outputJsonPath)];
-  return { directory, storiesDirectory, config, configPath, manifests, manifestPaths, inputPaths, outputPaths };
+  const settings: StoryInventorySettings = { limits: { maxBooks: 2, maxStories: 3, maxManifestBytes: 65_536, maxTranscriptBytes: 65_536, maxAudioManifestBytes: 65_536, maxOutputBytes: 65_536 } };
+  const outputPaths = [join(booksDirectory, "first-book", "inventory.md"), join(booksDirectory, "second-book", "inventory.md"), join(storiesDirectory, "inventory.md"), join(storiesDirectory, "inventory.json")];
+  return { directory, storiesDirectory, booksDirectory, settings, manifests, manifestPaths, inputPaths, outputPaths };
 }
 
 const capture = async (paths: ReadonlyArray<string>) => Promise.all(paths.map(async (path) => ({ path, bytes: await readFile(path), mtime: (await stat(path)).mtimeMs })));
@@ -88,7 +82,7 @@ const unchanged = async (files: Awaited<ReturnType<typeof capture>>) => {
 test("inventories sort across collections and preserve exact durations, escaped prose, and working artifact links", async (t) => {
   const f = await fixture(t);
   const originals = await capture([...f.inputPaths, ...f.manifestPaths]);
-  const result = await run(f.configPath);
+  const result = await run(f);
   assert.equal(result.storyCount, 3);
   assert.equal(result.bookCount, 2);
   assert.deepEqual(result.outputPaths, f.outputPaths);
@@ -124,9 +118,9 @@ test("inventories sort across collections and preserve exact durations, escaped 
   await unchanged(originals);
 });
 
-test("a manifest that disagrees with its directory, transcript, or configured books rejects without changing any views", async (t) => {
+test("a manifest that disagrees with its directory, transcript, or the books on disk rejects without changing any views", async (t) => {
   const f = await fixture(t);
-  await run(f.configPath);
+  await run(f);
   const outputs = await capture(f.outputPaths);
   const original = f.manifests[0]!;
   const changes: ReadonlyArray<[Record<string, unknown>, string]> = [
@@ -141,61 +135,57 @@ test("a manifest that disagrees with its directory, transcript, or configured bo
   ];
   for (const [change, code] of changes) {
     await writeFile(f.manifestPaths[0]!, encode(change));
-    await assert.rejects(run(f.configPath), hasCode(code), JSON.stringify(change));
+    await assert.rejects(run(f), hasCode(code), JSON.stringify(change));
     await unchanged(outputs);
   }
   await writeFile(f.manifestPaths[0]!, encode(original));
   await mkdir(join(f.storiesDirectory, "stray"));
-  await assert.rejects(run(f.configPath), hasCode("InvalidManifest"));
+  await assert.rejects(run(f), hasCode("InvalidManifest"));
   await unchanged(outputs);
 });
 
 test("stale paired files and inconsistent duration evidence stop before publication", async (t) => {
   const f = await fixture(t);
-  await run(f.configPath);
+  await run(f);
   const outputs = await capture(f.outputPaths);
   const manifestPath = f.manifestPaths[0]!;
   const manifestBytes = await readFile(manifestPath);
   await writeFile(manifestPath, encode({ ...f.manifests[0]!, durationSeconds: f.manifests[0]!["durationSeconds"] + 1 }));
-  await assert.rejects(run(f.configPath), hasCode("InvalidManifest"));
+  await assert.rejects(run(f), hasCode("InvalidManifest"));
   await unchanged(outputs);
   await writeFile(manifestPath, manifestBytes);
   const transcriptPath = join(dirname(manifestPath), "transcript.json");
   const transcriptBytes = await readFile(transcriptPath);
   await writeFile(transcriptPath, `${transcriptBytes.toString()} `);
-  await assert.rejects(run(f.configPath), hasCode("TranscriptMismatch"));
+  await assert.rejects(run(f), hasCode("TranscriptMismatch"));
   await unchanged(outputs);
   await writeFile(transcriptPath, transcriptBytes);
   await writeFile(join(dirname(manifestPath), "audio", "audio.flac"), "truncated");
-  await assert.rejects(run(f.configPath), hasCode("ArtifactMismatch"));
+  await assert.rejects(run(f), hasCode("ArtifactMismatch"));
   await unchanged(outputs);
 });
 
-test("output collisions, including symlinked story directories, cannot overwrite inputs or other views", async (t) => {
+test("a directory under the stories directory that is not a story of its own name is refused before any view changes", async (t) => {
   const f = await fixture(t);
-  await run(f.configPath);
+  await run(f);
   const outputs = await capture(f.outputPaths);
   const inputs = await capture([...f.inputPaths, ...f.manifestPaths]);
-  await symlink(join(f.storiesDirectory, "first-book-story-0"), join(f.directory, "story-link"));
-  for (const outputMarkdownPath of ["inventory.json", f.config.books[0]!.extrasInventoryPath, f.config.outputJsonPath,
-    "../my stories (v2)/first-book-story-0/story.json", "../my stories (v2)/first-book-story-0/new-reader-view.md", "../story-link/inventory.md"]) {
-    await writeFile(f.configPath, encode({ ...f.config, outputMarkdownPath }));
-    await assert.rejects(run(f.configPath), hasCode("InvalidConfig"), outputMarkdownPath);
-    await unchanged(outputs);
-    await unchanged(inputs);
-  }
+  await symlink(join(f.storiesDirectory, "first-book-story-0"), join(f.storiesDirectory, "story-link"));
+  await assert.rejects(run(f), hasCode("InvalidManifest"), "a symlink to another story carries that story's id, not its own name");
+  await unchanged(outputs);
+  await unchanged(inputs);
 });
 
 test("repeated renders and synopsis edits leave the verified files untouched", async (t) => {
   const f = await fixture(t);
   const inputs = await capture(f.inputPaths);
-  await run(f.configPath);
+  await run(f);
   const outputs = await Promise.all(f.outputPaths.map((path) => readFile(path)));
-  await run(f.configPath);
+  await run(f);
   for (const [index, path] of f.outputPaths.entries()) assert.deepEqual(await readFile(path), outputs[index]);
   const synopsis = "A visitor investigates a machine that remembers everyone it meets.";
   await writeFile(f.manifestPaths[0]!, encode({ ...f.manifests[0]!, synopsis }));
-  await run(f.configPath);
+  await run(f);
   assert.ok((await readFile(f.outputPaths[0]!, "utf8")).includes(synopsis));
   assert.ok((await readFile(f.outputPaths[2]!, "utf8")).includes(synopsis));
   assert.ok((await readFile(f.outputPaths[3]!, "utf8")).includes(synopsis));
@@ -205,11 +195,10 @@ test("repeated renders and synopsis edits leave the verified files untouched", a
 
 test("explicit read, count, and output limits reject oversized work before any view changes", async (t) => {
   const f = await fixture(t);
-  await run(f.configPath);
+  await run(f);
   const outputs = await capture(f.outputPaths);
-  for (const key of ["maxManifestBytes", "maxTranscriptBytes", "maxAudioManifestBytes", "maxOutputBytes", "maxStories"] as const) {
-    await writeFile(f.configPath, encode({ ...f.config, limits: { ...f.config.limits, [key]: 1 } }));
-    await assert.rejects(run(f.configPath), hasCode(key === "maxOutputBytes" || key === "maxStories" ? "InvalidConfig" : "IoFailed"), key);
+  for (const key of ["maxManifestBytes", "maxTranscriptBytes", "maxAudioManifestBytes", "maxOutputBytes", "maxStories", "maxBooks"] as const) {
+    await assert.rejects(run(f, { limits: { ...f.settings.limits, [key]: 1 } }), hasCode(key === "maxOutputBytes" || key === "maxStories" || key === "maxBooks" ? "InvalidConfig" : "IoFailed"), key);
     await unchanged(outputs);
   }
 });

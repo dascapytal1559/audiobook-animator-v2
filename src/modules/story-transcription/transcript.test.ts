@@ -29,13 +29,10 @@ test("GPT is the working planning/editor transcript; edits use GPT IDs and rejec
     await writeFile(join(f.dir, "story.json"), encode({ ...f.story, transcriptProvider: "openai", transcriptSha256: hash(encode(value)), textSha256: hash(Buffer.from(value.text)) }));
   };
   await save(transcript);
-  assert.equal((await run(loadStoryContext({ configPath: f.configPath }))).transcript.kind, "story-transcript");
-  await writeFile(join(f.root, "visual.json"), encode({ schemaVersion: 1, storyConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } }));
-  const editorConfig = join(f.root, "editor.json");
-  await writeFile(editorConfig, encode({ schemaVersion: 1, storiesDirectory: ".", visualTimelineConfigPath: "visual.json", ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 },
-    speech: { frameMs: 100, thresholdDbfs: -50, minSilenceMs: 150, minSpeechMs: 50 }, alignment: { leadMs: 150, boundaryPauseMs: 300 },
-    watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } }));
-  const library = await run(loadEditorLibrary({ configPath: editorConfig }));
+  assert.equal((await run(loadStoryContext({ storyDirectory: f.dir, settings: f.settings }))).transcript.kind, "story-transcript");
+  const library = await run(loadEditorLibrary({ storiesDirectory: f.root, settings: { story: f.settings, timeline: { limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } },
+    editor: { ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 }, speech: { frameMs: 100, thresholdDbfs: -50, minSilenceMs: 150, minSpeechMs: 50 }, alignment: { leadMs: 150, boundaryPauseMs: 300 },
+      watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } } } }));
   const { ctx } = await run(library.open("pilot"));
   const payload = await run(storyPayload(ctx));
   assert.equal(payload.story.transcriptProvider, "openai");
@@ -52,6 +49,6 @@ test("GPT is the working planning/editor transcript; edits use GPT IDs and rejec
     { ...transcript, audio: { ...transcript.audio, sourceStartSample: 101 } },
   ]) {
     await save(bad);
-    await assert.rejects(run(loadStoryContext({ configPath: f.configPath })));
+    await assert.rejects(run(loadStoryContext({ storyDirectory: f.dir, settings: f.settings })));
   }
 });

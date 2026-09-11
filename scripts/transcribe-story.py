@@ -39,10 +39,10 @@ def transcribe(audio, config, key):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--story', type=Path, required=True)
-    parser.add_argument('--config', type=Path, required=True)
+    parser.add_argument('--run', type=Path, required=True, help='JSON run file; its schema and defaults are TranscriptionSettings in src/modules/story-transcription/contracts.ts')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    config = json.loads(args.config.read_text())
+    config = json.loads(args.run.read_text())
     key = os.environ.get('OPENAI_API_KEY')
     if not key:
         env = Path(__file__).resolve().parents[1]/'.env'

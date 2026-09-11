@@ -1,6 +1,6 @@
 #!/bin/sh
 # Start, stop, or show the local editor dev servers. Both bind to loopback only.
-#   API server:  http://127.0.0.1:63620  (node dist/editor-server.js, serves the built client at /)
+#   API server:  http://127.0.0.1:63620  (node dist/editor-server.js with code defaults, serves the built client at /)
 #   Vite client: http://127.0.0.1:5173   (live reload, proxies /api to 63620)
 # Logs: .dev/api.log and .dev/vite.log. PID files are informational only;
 # shutdown verifies the live command, working directory, and start time.

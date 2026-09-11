@@ -23,13 +23,11 @@ async function serve(t: TestContext, options: { readonly staticDirectory?: strin
   }
   await mkdir(join(planningDirectory, "shots"), { recursive: true });
   await mkdir(join(planningDirectory, "cache"), { recursive: true });
-  await writeFile(join(story.root, "visual-timeline.json"), encode({ schemaVersion: 1, storyConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } }));
-  const configPath = join(story.root, "editor-server.json");
   // At 10 Hz a 100 ms frame is one sample; the lead is 2 samples.
-  await writeFile(configPath, encode({ schemaVersion: 1, storiesDirectory: ".", visualTimelineConfigPath: "visual-timeline.json", ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 },
-    speech: { frameMs: 100, thresholdDbfs: -50, minSilenceMs: 200, minSpeechMs: 100 }, alignment: { leadMs: 200, boundaryPauseMs: 300 },
-    watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } }));
-  const library = await Effect.runPromise(loadEditorLibrary({ configPath }).pipe(Effect.provide(NodeServices.layer)));
+  const settings = { story: story.settings, timeline: { limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } },
+    editor: { ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 }, speech: { frameMs: 100, thresholdDbfs: -50, minSilenceMs: 200, minSpeechMs: 100 }, alignment: { leadMs: 200, boundaryPauseMs: 300 },
+      watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } } };
+  const library = await Effect.runPromise(loadEditorLibrary({ storiesDirectory: story.root, settings }).pipe(Effect.provide(NodeServices.layer)));
   const { ctx } = await Effect.runPromise(library.open("pilot").pipe(Effect.provide(NodeServices.layer)));
   const layer = HttpRouter.serve(makeEditorRoutes(library, { producer: { name: "editor", version: "test" }, ...(options.staticDirectory !== undefined ? { staticDirectory: options.staticDirectory } : {}) }), { disableLogger: true, disableListenLog: true })
     .pipe(Layer.provideMerge(NodeHttpServer.layerTest), Layer.provideMerge(NodeServices.layer));
@@ -72,7 +70,7 @@ test("/api/stories lists every story directory with its manifest summary and the
   await s.run(Effect.gen(function* () {
     const listing = yield* get("/api/stories");
     assert.equal(listing.status, 200);
-    assert.deepEqual(yield* bodyJson(listing), { defaultStoryId: "pilot", stories: [{ id: "pilot", title: "Pilot", bookId: "book", bookTitle: "Book", wordCount: 1, sampleRateHz: 10, sampleCount: 100, durationSeconds: 10, durationDisplay: "00:00:10.000" }] });
+    assert.deepEqual(yield* bodyJson(listing), { stories: [{ id: "pilot", title: "Pilot", bookId: "book", bookTitle: "Book", wordCount: 1, sampleRateHz: 10, sampleCount: 100, durationSeconds: 10, durationDisplay: "00:00:10.000" }] });
     for (const path of ["/api/stories/other/story", "/api/stories/../story", "/api/stories//story", "/api/stories/pilot", "/api/stories/pilot/"]) {
       const response = yield* get(path);
       assert.equal(response.status, 404, path);
@@ -80,7 +78,6 @@ test("/api/stories lists every story directory with its manifest summary and the
     }
   }));
   assert.deepEqual(s.library.stories.map(story => story.id), ["pilot"]);
-  assert.equal(s.library.defaultStoryId, "pilot");
 });
 
 test("/api/speech serves a cache pinned to the clip and its parameters; a stale or missing speech cache beside a valid peaks cache forces one decode, which fails loudly on the fixture's fake audio", async t => {
@@ -377,7 +374,7 @@ test("static mode serves the client with index.html fallback while unknown API p
   await plain.run(Effect.gen(function* () {
     const root = yield* get("/");
     assert.equal(root.status, 200);
-    assert.match(yield* bodyText(root), /editor server: 1 stories under .*, default pilot\./);
+    assert.match(yield* bodyText(root), /editor server: 1 stories under .*\./);
   }));
   const client = await mkdtemp(join(tmpdir(), "editor-client-"));
   t.after(() => rm(client, { recursive: true, force: true }));

@@ -1,11 +1,19 @@
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Effect, FileSystem, Schema } from "effect";
 import { decodeJson, readBounded as readBoundedBytes } from "../../core/io.js";
 import { StoryTranscript, validateStoryTranscript } from "../story-transcription/contracts.js";
 import { StoryAudioManifest } from "../../intake/story-audio/contracts.js";
-import { type ManifestLimits, PairedAudioManifest, PairedTranscript, PlanningTranscript, StoryManifest, StoryConfig, StoryError } from "./contracts.js";
-export { type ManifestLimits, PairedAudioManifest, PairedTranscript, PlanningTranscript, StoryManifest, StoryOrigin, StoryConfig, StoryError } from "./contracts.js";
+import { type ClipIdentity, type StorySummary } from "@animator/domain";
+import { type ManifestLimits, PairedAudioManifest, PairedTranscript, PlanningTranscript, StoryManifest, StoryError, type StorySettings, storyDefaults } from "./contracts.js";
+export { type ManifestLimits, PairedAudioManifest, PairedTranscript, PlanningTranscript, StoryManifest, StoryOrigin, StoryError, StorySettings, storyDefaults } from "./contracts.js";
+/** The checkout this code runs from, so defaults never depend on the working directory. */
+export const REPOSITORY_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+/** Where stories live unless a run says otherwise: `data/stories/` under the checkout. */
+export const DEFAULT_STORIES_DIRECTORY = join(REPOSITORY_ROOT, "data", "stories");
+/** Where book intake lives unless a run says otherwise: `data/books/` under the checkout. */
+export const DEFAULT_BOOKS_DIRECTORY = join(REPOSITORY_ROOT, "data", "books");
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const fail = (code: StoryError["code"], message: string) => Effect.fail(new StoryError({ code, message }));
 const readBounded = (path: string, limit: number) => readBoundedBytes(path, limit).pipe(Effect.mapError(e => new StoryError({ code: "IoFailed", message: e.message })));
@@ -82,15 +90,13 @@ export type LoadedStoryManifest = Effect.Success<ReturnType<typeof loadStoryMani
 
 /**
  * Read-only planning input: the manifest-verified story plus its complete paired transcript, checked element by element. Historical evidence locators are retained, not reopened.
- * The story is the config's `storyDirectory` (the default story, A18) unless an explicit `storyDirectory` is given; the config always supplies the limits.
+ * `settings` defaults to `storyDefaults`; a caller that read a run file passes the merged result.
  */
-export function loadStoryContext(options: { readonly configPath: string; readonly storyDirectory?: string }) {
+export function loadStoryContext(options: { readonly storyDirectory: string; readonly settings?: StorySettings }) {
   return Effect.gen(function* () {
-    if (!options.configPath || options.configPath.includes("\0")) return yield* fail("InvalidConfig", "Supply an explicit configuration path.");
-    if (options.storyDirectory !== undefined && (options.storyDirectory === "" || options.storyDirectory.includes("\0"))) return yield* fail("InvalidConfig", "An explicit story directory must be a non-empty path.");
-    const configPath = resolve(options.configPath);
-    const config = yield* decode(StoryConfig, yield* readBounded(configPath, 65_536), "InvalidConfig", configPath, true);
-    const loaded = yield* loadStoryManifest({ storyDirectory: options.storyDirectory ?? resolve(dirname(configPath), config.storyDirectory), limits: config.limits });
+    if (options.storyDirectory === "" || options.storyDirectory.includes("\0")) return yield* fail("InvalidConfig", "A story directory must be a non-empty path.");
+    const config = options.settings ?? storyDefaults;
+    const loaded = yield* loadStoryManifest({ storyDirectory: options.storyDirectory, limits: config.limits });
     const { manifest: story, paths, storyDirectory } = loaded;
     if (loaded.transcript.kind === "story-transcript") {
       const transcript = yield* decode(StoryTranscript, loaded.transcriptBytes, "TranscriptMismatch", paths.transcriptPath, true);
@@ -150,3 +156,46 @@ export function loadStoryContext(options: { readonly configPath: string; readonl
   }).pipe(Effect.mapError(error => error instanceof StoryError ? error : new StoryError({ code: "IoFailed", message: "Cannot read a linked story artifact." })));
 }
 export type StoryContext = Effect.Success<ReturnType<typeof loadStoryContext>>;
+
+/** The identity every per-story artifact is pinned to, taken from a verified context. */
+export const clipOf = (story: StoryContext): ClipIdentity => ({
+  bookId: story.bookId, storyId: story.story.id, audioSha256: story.story.audioSha256, transcriptSha256: story.story.transcriptSha256,
+  sampleRateHz: story.story.sampleRateHz, sampleCount: story.story.sampleCount,
+});
+
+/** Every direct subdirectory of the stories directory, summarized from its `story.json` (id checked against the directory name). Files beside them are not stories. */
+export function listStories(storiesDirectory: string, limits: Pick<ManifestLimits, "maxManifestBytes">) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const io = (message: string) => (e: unknown) => e instanceof StoryError ? e : new StoryError({ code: "IoFailed", message });
+    const root = resolve(storiesDirectory);
+    const entries = (yield* fs.readDirectory(root).pipe(Effect.mapError(io(`Cannot list ${root}.`)))).filter(name => !name.startsWith(".")).sort();
+    const stories: StorySummary[] = [];
+    for (const name of entries) {
+      const storyDirectory = join(root, name);
+      if ((yield* fs.stat(storyDirectory).pipe(Effect.mapError(io(`Cannot inspect ${storyDirectory}.`)))).type !== "Directory") continue;
+      const manifestPath = join(storyDirectory, "story.json");
+      const manifest = yield* decode(StoryManifest, yield* readBounded(manifestPath, limits.maxManifestBytes), "InvalidManifest", manifestPath, true);
+      if (manifest.id !== name) return yield* fail("InvalidManifest", `Manifest id ${manifest.id} does not match its directory name: ${storyDirectory}.`);
+      stories.push({ id: manifest.id, title: manifest.title, bookId: manifest.book.id, bookTitle: manifest.book.title, wordCount: manifest.wordCount,
+        sampleRateHz: manifest.sampleRateHz, sampleCount: manifest.sampleCount, durationSeconds: manifest.durationSeconds, durationDisplay: manifest.durationDisplay });
+    }
+    return stories as ReadonlyArray<StorySummary>;
+  });
+}
+
+/** The story directory for an id under the stories directory, or NotFound naming every id that is there. An absent id is the same error, so a tool run without `--story` lists what it could open. */
+export function requireStory(storiesDirectory: string, storyId: string | undefined) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const root = resolve(storiesDirectory);
+    const available = (yield* fs.readDirectory(root).pipe(Effect.mapError(() => new StoryError({ code: "IoFailed", message: `Cannot list ${root}.` })))).filter(n => !n.startsWith(".")).sort();
+    const listing = available.length === 0 ? `no story directories under ${root}` : `stories under ${root}: ${available.join(", ")}`;
+    if (storyId === undefined || storyId === "") return yield* fail("NotFound", `Name a story with --story <id>; ${listing}.`);
+    if (!/^[a-z0-9][a-z0-9-]{0,100}$/.test(storyId)) return yield* fail("NotFound", `A story id is lowercase letters, digits, and hyphens, not ${JSON.stringify(storyId)}; ${listing}.`);
+    const storyDirectory = join(root, storyId);
+    const exists = yield* fs.exists(join(storyDirectory, "story.json")).pipe(Effect.mapError(() => new StoryError({ code: "IoFailed", message: `Cannot inspect ${storyDirectory}.` })));
+    if (!exists) return yield* fail("NotFound", `No story ${storyId} under ${root}; ${listing}.`);
+    return storyDirectory;
+  });
+}

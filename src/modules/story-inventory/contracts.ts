@@ -1,28 +1,12 @@
 import { Data, Schema } from "effect";
-import { Id, Path, Positive } from "@animator/domain";
+import { Positive } from "@animator/domain";
 
-
-/**
- * `config/story-inventory.json`. Every directory under `storiesDirectory` is a story with a `story.json`; each story's book must be listed
- * here with the book's extras inventory (notes and credits stay with the book) and the per-book reading view to write. Paths resolve from
- * the config file.
- */
-export const StoryInventoryConfig = Schema.Struct({
-  schemaVersion: Schema.Literal(1),
-  storiesDirectory: Path,
-  books: Schema.Array(Schema.Struct({ bookId: Id, extrasInventoryPath: Path, outputMarkdownPath: Path })),
-  outputMarkdownPath: Path,
-  outputJsonPath: Path,
-  limits: Schema.Struct({
-    maxBooks: Positive,
-    maxStories: Positive,
-    maxManifestBytes: Positive,
-    maxTranscriptBytes: Positive,
-    maxAudioManifestBytes: Positive,
-    maxOutputBytes: Positive,
-  }),
+/** Settings for publishing the reading views: count and byte ceilings. Defaults live in code; a run file may override any of them. Where the stories and books live is the run's `storiesDirectory` and `booksDirectory`. */
+export const StoryInventorySettings = Schema.Struct({
+  limits: Schema.Struct({ maxBooks: Positive, maxStories: Positive, maxManifestBytes: Positive, maxTranscriptBytes: Positive, maxAudioManifestBytes: Positive, maxOutputBytes: Positive }),
 });
-export type StoryInventoryConfig = typeof StoryInventoryConfig.Type;
+export type StoryInventorySettings = typeof StoryInventorySettings.Type;
+export const storyInventoryDefaults: StoryInventorySettings = { limits: { maxBooks: 16, maxStories: 512, maxManifestBytes: 65_536, maxTranscriptBytes: 134_217_728, maxAudioManifestBytes: 1_048_576, maxOutputBytes: 4_194_304 } };
 
 export class StoryInventoryError extends Data.TaggedError("StoryInventoryError")<{
   readonly code: "InvalidConfig" | "InvalidManifest" | "TranscriptMismatch" | "ArtifactMismatch" | "IoFailed";

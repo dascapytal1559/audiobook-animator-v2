@@ -19,20 +19,20 @@ export function makeCaches(ctx: EditorContext) {
   let peaks: PeaksFile | undefined;
   let speech: SpeechFile | undefined;
   const decode = Effect.gen(function* () {
-    yield* Console.error(`Computing waveform peaks and speech regions for ${ctx.clip.bookId}/${ctx.clip.storyId} with ${ctx.config.ffmpegPath}.`);
-    const computed = yield* computePeaksAndSpeech({ ffmpegPath: ctx.config.ffmpegPath, audioPath: ctx.story.paths.audioPath, identity: ctx.peaksIdentity, speech: ctx.speechIdentity });
+    yield* Console.error(`Computing waveform peaks and speech regions for ${ctx.clip.bookId}/${ctx.clip.storyId} with ${ctx.settings.editor.ffmpegPath}.`);
+    const computed = yield* computePeaksAndSpeech({ ffmpegPath: ctx.settings.editor.ffmpegPath, audioPath: ctx.story.paths.audioPath, identity: ctx.peaksIdentity, speech: ctx.speechIdentity });
     yield* writeCache(ctx.peaksPath, computed.peaks);
     yield* writeCache(ctx.speechPath, computed.speech);
     peaks = computed.peaks; speech = computed.speech;
   });
   return {
     peaks: lock.withPermits(1)(Effect.gen(function* () {
-      if (peaks === undefined) peaks = Option.getOrUndefined(yield* readPeaksCache(ctx.peaksPath, ctx.config.peaks.maxCacheBytes, ctx.peaksIdentity));
+      if (peaks === undefined) peaks = Option.getOrUndefined(yield* readPeaksCache(ctx.peaksPath, ctx.settings.editor.peaks.maxCacheBytes, ctx.peaksIdentity));
       if (peaks === undefined) yield* decode;
       return peaks!;
     })),
     speech: lock.withPermits(1)(Effect.gen(function* () {
-      if (speech === undefined) speech = Option.getOrUndefined(yield* readSpeechCache(ctx.speechPath, ctx.config.peaks.maxCacheBytes, ctx.speechIdentity));
+      if (speech === undefined) speech = Option.getOrUndefined(yield* readSpeechCache(ctx.speechPath, ctx.settings.editor.peaks.maxCacheBytes, ctx.speechIdentity));
       if (speech === undefined) yield* decode;
       return speech!;
     })),
@@ -40,7 +40,7 @@ export function makeCaches(ctx: EditorContext) {
 }
 export type Caches = ReturnType<typeof makeCaches>;
 
-const overlayContext = (ctx: EditorContext): OverlayContext => ({ storyDirectory: ctx.storyDirectory, clip: ctx.clip, wordIds: new Set(ctx.words.map(w => w.id)), maxBytes: ctx.config.limits.maxWordTimingBytes });
+const overlayContext = (ctx: EditorContext): OverlayContext => ({ storyDirectory: ctx.storyDirectory, clip: ctx.clip, wordIds: new Set(ctx.words.map(w => w.id)), maxBytes: ctx.settings.editor.limits.maxWordTimingBytes });
 export const timingPaths = (ctx: EditorContext) => { const o = overlayContext(ctx); return { auto: autoPath(o), manual: manualPath(o) }; };
 
 /** The overlays merged over the transcript (A37): effective words, chunks recomputed on effective times, and the map shot anchors resolve against. */
@@ -52,13 +52,13 @@ export function loadTiming(ctx: EditorContext) {
     const elements = ctx.elements.map(e => e.kind === "word" ? { ...e, startSample: byId.get(e.id)!.startSample, endSample: byId.get(e.id)!.endSample } : e);
     const toSamples = (ms: number) => Math.round((ms / 1000) * ctx.clip.sampleRateHz);
     // The story's manifest may override the config default (A54): the rule is enabled story by story after listening.
-    const minSentenceBreakMs = ctx.story.story.chunking?.minSentenceBreakMs ?? ctx.config.chunking.minSentenceBreakMs;
+    const minSentenceBreakMs = ctx.story.story.chunking?.minSentenceBreakMs ?? ctx.settings.editor.chunking.minSentenceBreakMs;
     const minSentenceBreakSamples = toSamples(minSentenceBreakMs);
-    const chunks = computeChunks(elements, toSamples(ctx.config.chunking.pauseBreakMs), minSentenceBreakSamples);
+    const chunks = computeChunks(elements, toSamples(ctx.settings.editor.chunking.pauseBreakMs), minSentenceBreakSamples);
     const mergedSentenceBreaks = listSentenceBreaks(elements).filter(b => b.gapSamples < minSentenceBreakSamples)
       .map(b => ({ ...b, gapMs: Math.round((b.gapSamples / ctx.clip.sampleRateHz) * 1000) }));
     const wordStarts: ReadonlyMap<string, number> = new Map(effective.words.map(w => [w.id, w.startSample] as const));
-    return { auto, manual, effective, chunks, wordStarts, chunking: { minSentenceBreakMs, pauseBreakMs: ctx.config.chunking.pauseBreakMs, mergedSentenceBreaks } };
+    return { auto, manual, effective, chunks, wordStarts, chunking: { minSentenceBreakMs, pauseBreakMs: ctx.settings.editor.chunking.pauseBreakMs, mergedSentenceBreaks } };
   });
 }
 /** `GET /api/story`: identity, titles, the element order, effective words with their layers, chunks on effective times, and the timing summary, in the shared wire shape. */
@@ -96,10 +96,10 @@ export function alignTiming(ctx: EditorContext, caches: Caches, options: AlignOp
     }
     if (range.startSample === 0 && range.endSample === ctx.clip.sampleCount && !options.wholeClip) return yield* fail("InvalidRequest", "The range covers the whole clip; pass wholeClip to align everything at once (A43).");
     const speech = yield* caches.speech;
-    const { entries, report } = alignRange({ words: ctx.words, sentenceStartIds: sentenceStartIds(ctx), regions: speech.regions, range, sampleRateHz: ctx.clip.sampleRateHz, leadMs: ctx.config.alignment.leadMs, boundaryPauseMs: ctx.config.alignment.boundaryPauseMs });
+    const { entries, report } = alignRange({ words: ctx.words, sentenceStartIds: sentenceStartIds(ctx), regions: speech.regions, range, sampleRateHz: ctx.clip.sampleRateHz, leadMs: ctx.settings.editor.alignment.leadMs, boundaryPauseMs: ctx.settings.editor.alignment.boundaryPauseMs });
     if (options.dryRun) return report;
     yield* writeAutoRun(overlayContext(ctx), { range, entries, report, originalStarts: new Map(ctx.words.map(w => [w.id, w.startSample] as const)), ranAt: new Date().toISOString(), producer: options.producer,
-      parameters: { leadMs: ctx.config.alignment.leadMs, thresholdDbfs: ctx.config.speech.thresholdDbfs, minSilenceMs: ctx.config.speech.minSilenceMs, minSpeechMs: ctx.config.speech.minSpeechMs } });
+      parameters: { leadMs: ctx.settings.editor.alignment.leadMs, thresholdDbfs: ctx.settings.editor.speech.thresholdDbfs, minSilenceMs: ctx.settings.editor.speech.minSilenceMs, minSpeechMs: ctx.settings.editor.speech.minSpeechMs } });
     return report;
   });
 }

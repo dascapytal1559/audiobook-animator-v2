@@ -1,6 +1,14 @@
 import { Schema } from "effect";
 import { NonNegative, Positive, Sha256, Text } from "@animator/domain";
 
+/** The run file `scripts/transcribe-story.py --run` reads. The script has no defaults of its own; write a run file from these. `keywords` are spelling hints for one story. */
+export const TranscriptionSettings = Schema.Struct({
+  model: Text, chunkSeconds: Positive, overlapSeconds: NonNegative, concurrency: Positive, timeoutSeconds: Positive, sampleRateHz: Positive, bitrate: Text,
+  languages: Schema.Array(Text), keywords: Schema.Array(Text),
+});
+export type TranscriptionSettings = typeof TranscriptionSettings.Type;
+export const transcriptionDefaults: TranscriptionSettings = { model: "gpt-transcribe", chunkSeconds: 240, overlapSeconds: 10, concurrency: 3, timeoutSeconds: 240, sampleRateHz: 22050, bitrate: "64k", languages: ["en"], keywords: [] };
+
 /** The working story transcript. Timing overlays refer to these GPT word IDs, never Rev's book IDs. */
 export const StoryTranscript = Schema.Struct({
   schemaVersion: Schema.Literal(1), kind: Schema.Literal("story-transcript"), storyId: Text,

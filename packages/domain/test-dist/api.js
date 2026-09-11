@@ -10,7 +10,7 @@ export const StorySummary = Schema.Struct({
     id: Id, title: Text, bookId: Id, bookTitle: Text,
     wordCount: Positive, sampleRateHz: Positive, sampleCount: Positive, durationSeconds: PositiveSeconds, durationDisplay: Text,
 });
-export const StoriesResponse = Schema.Struct({ defaultStoryId: Id, stories: Schema.Array(StorySummary) });
+export const StoriesResponse = Schema.Struct({ stories: Schema.Array(StorySummary) });
 /** A transcript word with its three timing layers (A42): the top-level times are effective (manual, else auto, else original). */
 export const StoryWord = Schema.Struct({
     id: Text, value: Text, startSample: NonNegative, endSample: NonNegative,

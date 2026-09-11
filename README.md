@@ -25,7 +25,7 @@ The source-media module reads a local file, computes its SHA-256 identity, probe
 The module is independently callable from `src/intake/source-media/index.ts`. It accepts an explicit request and uses Effect's filesystem and child-process services. The CLI is the application entry point; operational configuration belongs at that boundary.
 
 ```sh
-pnpm run cli inspect --source data/books/exhalation/input/book.mp3 --config config/source-media.json
+pnpm run cli inspect --source data/books/exhalation/input/book.mp3 --run data/books/exhalation/artifacts/source-inspection.request.json
 ```
 
 Both flags are required. Source and config paths resolve from the current directory. A bare `ffprobe` command uses PATH; a relative executable path containing a separator resolves from the configuration directory. The checked-in config spells out process timeout, output limits, hash buffer size, and a 20 ms diagnostic comparison tolerance. That tolerance is not approval of story boundaries.
@@ -34,7 +34,7 @@ Successful inspection emits JSON on stdout. Errors, help, and version text use s
 
 ```sh
 mkdir -p data/inspections
-pnpm --silent run cli inspect --source data/books/exhalation/input/book.mp3 --config config/source-media.json > data/inspections/exhalation.json
+pnpm --silent run cli inspect --source data/books/exhalation/input/book.mp3 --run <run.json> > data/inspections/exhalation.json
 ```
 
 The original MP3s and raw transcript exports live under each book's `input/` directory. They contain 21 hours 45 minutes of audio in total and are excluded from Git. The `animator` symlink points to the legacy project, whose assets and implementation serve as reference.
@@ -64,12 +64,12 @@ All `data/` files remain local. Source code, explicit configuration, project doc
 The full-book path submits the original MP3 through the Rev AI dashboard and imports its JSON export locally. Both collections have completed this step. The prepare/import commands make no provider requests and need no API key:
 
 ```sh
-node dist/book-transcription.js prepare --config config/rev-book.json
-node dist/book-transcription.js import --config config/rev-book.json --transcript data/books/exhalation/input/rev-export.json --job-id eekQ2vQNJp3XjfF6
-node dist/book-transcription.js import --config config/rev-stories-book.json --transcript data/books/stories-of-your-life-and-others/input/rev-export.json --job-id gbuckIu5tGOf8MiK
+node dist/book-transcription.js prepare --run <run.json>
+node dist/book-transcription.js import --run <run.json> --transcript data/books/exhalation/input/rev-export.json --job-id eekQ2vQNJp3XjfF6
+node dist/book-transcription.js import --run <run.json> --transcript data/books/stories-of-your-life-and-others/input/rev-export.json --job-id gbuckIu5tGOf8MiK
 ```
 
-`config/rev-book.json` pins the Exhalation source hash and byte length. It explicitly supplies the audio stream, inspection settings, 17-hour/2-GB source limits, 64-MiB raw transcript limit, normalized-output limit, and timestamp tolerance. Config paths resolve from the config directory; command paths resolve from the working directory.
+The run file for Exhalation, recorded verbatim in `artifacts/preparation.json`, pins the source hash and byte length. It explicitly supplies the audio stream, inspection settings, 17-hour/2-GB source limits, 64-MiB raw transcript limit, normalized-output limit, and timestamp tolerance. Run-file paths resolve from the run file's directory; command paths resolve from the working directory.
 
 Preparation and import verify the original source through the source-media module. Artifacts under `data/books/exhalation/artifacts/` retain source inspection, preparation, exact raw transcript bytes, normalized words and punctuation, and plain text. Import requires the job ID shown for the exported file; dashboard JSON alone does not prove that association. Incompatible sources, job IDs, or exports cannot silently overwrite existing evidence.
 
@@ -80,8 +80,8 @@ Exhalation job `eekQ2vQNJp3XjfF6` returned 100,593 timed words; Stories of Your 
 The story-split module consumes a reviewed plan, slices the timed transcript, calls the verified audio extractor for every story and extra, and publishes a duration inventory after all pairs succeed. The existing stories were moved into `data/stories/<story>/` by a one-time relocation on 2026-09-09 that hash-checked every file before and after the move and wrote each story's `story.json`; `data/story-relocation.json` records those moves, and the script was removed afterwards. Extras stay with the book. A future split run still writes into `split/segments/`, so its stories need the same relocation and manifest step. Discovery is separate: the first Exhalation plan was produced by agents using transcript content and measured audio gaps. A reusable autonomous discovery service is still to be implemented.
 
 ```sh
-node dist/split-stories.js --plan data/books/exhalation/split-plan.json --source data/books/exhalation/input/book.mp3 --config config/story-split.json --validate-only
-node dist/split-stories.js --plan data/books/exhalation/split-plan.json --source data/books/exhalation/input/book.mp3 --config config/story-split.json --output data/books/exhalation/split
+node dist/split-stories.js --plan data/books/exhalation/split-plan.json --source data/books/exhalation/input/book.mp3 --run <run.json> --validate-only
+node dist/split-stories.js --plan data/books/exhalation/split-plan.json --source data/books/exhalation/input/book.mp3 --run <run.json> --output data/books/exhalation/split
 ```
 
 The plan pins source, normalized transcript, provider job, raw export, and supporting evidence identities. It partitions every transcript element exactly once and supplies ordered, nonoverlapping integer audio sample intervals. The intervals use FFmpeg's decoded-audio clock, with an inclusive start and exclusive end. Source chapter metadata does not choose or override cuts. Validation checks the supplied plan and identities; it does not independently establish the semantic quality of a cut.
@@ -104,7 +104,7 @@ Each story's `story.json` is its manifest: id and title, the book it came from, 
 
 ```sh
 pnpm run build
-node dist/story-inventory.js --config config/story-inventory.json
+node dist/story-inventory.js
 ```
 
 The independently callable module is `src/modules/story-inventory/index.ts`. Its explicit configuration supplies the stories directory, each book's extras inventory and reading-view output, the combined outputs, and file-size limits; paths resolve from the config file. Every directory under the stories directory must hold a valid manifest for a configured book. It checks transcript hashes, audio manifests, file links, and sample-based durations through the shared story loader before publishing, without decoding audio or making provider requests.
@@ -129,7 +129,7 @@ The `story` module loads a verified story for downstream analysis. It supplies t
 
 ```sh
 pnpm run build
-node dist/story.js --config config/story.json
+node dist/story.js --story the-great-silence
 ```
 
 The checked-in configuration selects the story directory for Tower of Babylon and supplies explicit read/element limits. Config paths resolve from the config file. The CLI prints JSON to stdout; help and errors use stderr. Code can call `loadStoryContext` from `src/modules/story/index.ts` directly through Effect.
@@ -140,14 +140,14 @@ The pilot's narrative analysis is a separate, agent-authored document. Its timin
 
 ## Visual timeline
 
-The `visual-timeline` module owns the storyboard for one verified clip, stored in the story directory `data/stories/<story>/` in two kinds of file. Generation records are immutable: any script writes `shots/<ulid>/record.json` with its image beside it, holding the clip identity (book, story, audio and transcript hashes, sample rate and count), an integer `startSample` on the clip's own clock, the mode, optional label/prompt/image/notes, `createdAt`, and the producer. The decisions overlay `decisions.json` is written only by the editor or CLI and holds per-shot overrides (`startSample`, `mode`, `selected`, `hidden`, `notes`) keyed by shot id, plus story settings such as the 16:9 frame aspect. Both files pin the clip identity, and every load verifies them against the story selected by `config/story.json`; a mismatch, an id that differs from its directory name, an image path outside its directory, or a decision for an unknown shot is an error that names the file.
+The `visual-timeline` module owns the storyboard for one verified clip, stored in the story directory `data/stories/<story>/` in two kinds of file. Generation records are immutable: any script writes `shots/<ulid>/record.json` with its image beside it, holding the clip identity (book, story, audio and transcript hashes, sample rate and count), an integer `startSample` on the clip's own clock, the mode, optional label/prompt/image/notes, `createdAt`, and the producer. The decisions overlay `decisions.json` is written only by the editor or CLI and holds per-shot overrides (`startSample`, `mode`, `selected`, `hidden`, `notes`) keyed by shot id, plus story settings such as the 16:9 frame aspect. Both files pin the clip identity, and every load verifies them against the story named by `--story`; a mismatch, an id that differs from its directory name, an image path outside its directory, or a decision for an unknown shot is an error that names the file.
 
 The merge applies decision overrides over record fields, then groups shots with the same effective start as candidates. One candidate is selected per start: the explicitly selected one, otherwise the newest by `createdAt`. Hidden shots are never selected. The stitched timeline is the selected shots in start order, each holding until the next start and the last until the end of the clip; when nothing starts at sample 0 it opens with an explicit gap, so coverage is always total and visible.
 
 ```sh
 pnpm run build
-node dist/visual-timeline.js show --config config/visual-timeline.json
-node dist/visual-timeline.js add --config config/visual-timeline.json --at-seconds 12.5 --mode graphic-illustration --label "Opening" --image path/to/image.png
+node dist/visual-timeline.js show --story the-great-silence
+node dist/visual-timeline.js add --story the-great-silence --at-seconds 12.5 --mode graphic-illustration --label "Opening" --image path/to/image.png
 ```
 
 `show` prints the records, decisions, candidate groups, and stitched timeline as JSON. `add` mints a ULID, copies the image (within the configured size limit) beside a new `record.json` written through a temporary file and rename, and prints the record; it never overwrites an existing shot. The configuration points at the story config and the story directory and sets explicit byte and count limits; paths resolve from the config file. Code can call `loadVisualTimeline`, `addShot`, and `writeDecisions` from `src/modules/visual-timeline/index.ts`.
@@ -158,8 +158,8 @@ The Great Silence starts populated (PIPELINE A33). A one-time import turns the 1
 
 ```sh
 pnpm run build
-node dist/visual-timeline-seed.js --config config/visual-timeline.json --treatment data/stories/the-great-silence/visual-treatment.md --prototype data/stories/the-great-silence/visual-prototype --dry-run
-node dist/visual-timeline-seed.js --config config/visual-timeline.json --treatment data/stories/the-great-silence/visual-treatment.md --prototype data/stories/the-great-silence/visual-prototype
+node dist/visual-timeline-seed.js --story the-great-silence --treatment data/stories/the-great-silence/visual-treatment.md --prototype data/stories/the-great-silence/visual-prototype --dry-run
+node dist/visual-timeline-seed.js --story the-great-silence --treatment data/stories/the-great-silence/visual-treatment.md --prototype data/stories/the-great-silence/visual-prototype
 ```
 
 Treatment rows are parsed from the fixed six-column table under "Proposed sequences" and must be exactly 14 adjacent spans from 0 to the clip end; they become image-less records (`seed-treatment`). Each prototype board is checked against the hash in `assets.json`, cropped into thirds with ffmpeg (the wide board splits 341/342/341 px), verified with ffprobe, and imported as three image records carrying the board prompt (`seed-prototype`). Boards outside the two selected looks say so in their notes. Record ids are deterministic (sha256 of producer and a stable key, ULID-encoded with the fixed `createdAt`), so a re-run reports every record as unchanged; a record that differs from what would be written fails the run with the differing fields, and an existing `decisions.json` is never overwritten. `--dry-run` performs every check, including the crops, without writing. Pure helpers live in `src/modules/visual-timeline/seed.ts`.
@@ -184,12 +184,12 @@ Word timing in the Edited row: click selects a word (or a whole sentence in Sent
 
 ## Editor server
 
-The editor server is a thin Effect HTTP layer over the story, visual-timeline, and word-timing modules. It serves every story directory under the `storiesDirectory` named in `config/editor-server.json` on 127.0.0.1 with no authentication; the story selected through `config/visual-timeline.json` and `config/story.json` is the default and must live directly under that directory. The listing is taken once at start-up from each story's `story.json` (stories added later need a restart), the default story is verified before the server listens, and every other story is verified on its first open and kept for the process lifetime; a story that fails verification answers 500 and is retried on the next request. Records, decisions, and timing overlays are reread on every request because scripts write them independently, and a recursive watch on the open story's directory pushes change notices to the browser over server-sent events. Nothing in the server touches FFmpeg except the one-time waveform peaks and speech-region computation.
+The editor server is a thin Effect HTTP layer over the story, visual-timeline, and word-timing modules. It serves every story directory under the stories directory (`data/stories/` unless a run file says otherwise) on 127.0.0.1 with no authentication. There is no default story: the browser remembers the last story it showed and otherwise shows the picker. The listing is taken once at start-up from each story's `story.json` (stories added later need a restart), and every story is verified on its first open and kept for the process lifetime; a story that fails verification answers 500 and is retried on the next request. Records, decisions, and timing overlays are reread on every request because scripts write them independently, and a recursive watch on the open story's directory pushes change notices to the browser over server-sent events. Nothing in the server touches FFmpeg except the one-time waveform peaks and speech-region computation.
 
 ```sh
 pnpm run build
-node dist/editor-server.js --config config/editor-server.json --port 63620
-node dist/editor-server.js --config config/editor-server.json --port 63620 --static packages/editor/dist
+node dist/editor-server.js --port 63620
+node dist/editor-server.js --port 63620 --static packages/editor/dist
 ```
 
 The listening URL, help, and errors go to stderr. Ctrl-C stops the server. With `--static`, files under the directory are served at `/` and `index.html` answers unknown paths without an extension for HTML navigations, so a single-page client can deep-link; without it, `/` is a short text pointer to the API.
@@ -211,7 +211,7 @@ All story routes are under `/api/stories/<story-id>/`; an id that is not in the 
 | `GET …/peaks` | Waveform peaks: `{ schemaVersion: 1, audioSha256, sampleRateHz, sampleCount, samplesPerBucket, min, max }` with int16 extremes per bucket, the last bucket partial. Computed with `ffmpeg` streaming mono s16le into the peaks and speech reductions at once, checked against the verified sample count, written atomically to `<story>/cache/peaks.json`, and recomputed whenever the cache's pins differ. A miss on either cache decodes once and rewrites both. |
 | `GET …/events` | Server-sent events: `ready` on connect, `timeline-changed` (debounced) after any change under the story directory, and a comment heartbeat every 15 seconds. The client refetches the story and timeline; no payload is pushed. |
 
-Errors are JSON `{ code, message }`: 400 for a bad request or invalid client-supplied decisions or timing, 404 for unknown shots and routes, 409 for an identity mismatch or an existing record, 413 for oversized bodies and uploads, 500 for invalid files on disk or a failed decode. `config/editor-server.json` names the stories directory, the visual-timeline config, the ffmpeg executable, the peaks bucket size and cache limit, the speech-detection parameters, the alignment lead and boundary pause, the watch debounce, the upload, request-timeout, and word-timing overlay size limits (`maxWordTimingBytes`; the auto overlay is about 90 bytes per word, so the 3.7-hour story needs several MB), and the chunking thresholds (`pauseBreakMs`, and `minSentenceBreakMs`: a transcriber's sentence mark only ends a chunk when the gap to the next word is at least this long, since a period with no audible pause behind it is treated as misplaced; the config value is the default and a story's `story.json` may override it under `chunking.minSentenceBreakMs`, which is how the rule is enabled story by story; the story payload lists every break merged this way under `chunking.mergedSentenceBreaks`); paths resolve from the config file. The pieces live in `src/modules/editor-server/`: `range.ts` (Range header parsing), `peaks.ts` (the shared decode, bucket reduction, and both caches), `chunks.ts` (sentence/pause chunking of the transcript), `timing.ts` (caches, the effective-timing merge for the story payload, and the align run), `routes.ts` (the config and story loaders, the story library, and the router layer), and `index.ts` (`makeEditorServer`, the full layer for `Layer.launch`).
+Errors are JSON `{ code, message }`: 400 for a bad request or invalid client-supplied decisions or timing, 404 for unknown shots and routes, 409 for an identity mismatch or an existing record, 413 for oversized bodies and uploads, 500 for invalid files on disk or a failed decode. The editor settings (`editorDefaults` in `src/modules/editor-server/contracts.ts`, overridable under `editor` in a run file) name the ffmpeg executable, the peaks bucket size and cache limit, the speech-detection parameters, the alignment lead and boundary pause, the watch debounce, the upload, request-timeout, and word-timing overlay size limits (`maxWordTimingBytes`; the auto overlay is about 90 bytes per word, so the 3.7-hour story needs several MB), and the chunking thresholds (`pauseBreakMs`, and `minSentenceBreakMs`: a transcriber's sentence mark only ends a chunk when the gap to the next word is at least this long, since a period with no audible pause behind it is treated as misplaced; the setting is the default and a story's `story.json` may override it under `chunking.minSentenceBreakMs`, which is how the rule is enabled story by story; the story payload lists every break merged this way under `chunking.mergedSentenceBreaks`). The pieces live in `src/modules/editor-server/`: `range.ts` (Range header parsing), `peaks.ts` (the shared decode, bucket reduction, and both caches), `timing.ts` (caches, the effective-timing merge for the story payload, and the align run), `routes.ts` (the story library and the router layer), and `index.ts` (`makeEditorServer`, the full layer for `Layer.launch`).
 
 ## Word timing
 
@@ -229,11 +229,11 @@ Speech regions come from the same ffmpeg decode as the waveform peaks: RMS per 1
 The align pass (`alignRange`) is pure and takes the original transcript timing as input, never the overlays: the words whose original start lies in the range are shifted later by `alignment.leadMs`, each is assigned to the speech region it overlaps most (the nearest region when it overlaps none), and each region's words are mapped linearly so the earliest start lands on the region start and the latest end on the region end; a lone word fills its region. Regions are clipped to the range first, so no result leaves it, and a range with no region inside yields no entries. The report (`measureRange`) is computed before and after for the range: at phrase boundaries (the first word and every word following a pause of at least `alignment.boundaryPauseMs`), the median, p10, and p90 of the signed distance in ms from the word start to the nearest speech onset, plus the count and fraction of words lying wholly inside a speech region.
 
 ```sh
-node dist/word-timing.js measure --config config/editor-server.json --from 0 --to 30
-node dist/word-timing.js align   --config config/editor-server.json --from 0 --to 30 --dry-run
-node dist/word-timing.js align   --config config/editor-server.json --from 0 --to 30
-node dist/word-timing.js align   --config config/editor-server.json --all
-node dist/word-timing.js align   --config config/editor-server.json --story exhalation --from 0 --to 30
+node dist/word-timing.js measure --story the-great-silence --from 0 --to 30
+node dist/word-timing.js align   --story the-great-silence --from 0 --to 30 --dry-run
+node dist/word-timing.js align   --story the-great-silence --from 0 --to 30
+node dist/word-timing.js align   --story the-great-silence --all
+node dist/word-timing.js align   --story exhalation --from 0 --to 30 --run my-run.json
 ```
 
 `measure` prints the statistics for the original and the effective timing of the range without writing. `align` writes the range's entries into `word-timing.auto.json` and prints the run report; `--dry-run` prints without writing, and `--all` is the explicit whole-clip flag. `--story` names a directory under the editor config's `storiesDirectory`; without it the story config's default story is used. Ranges are in seconds and resolve to `[from, to)` on the clip clock. The editor reaches the same operations through `PUT /api/word-timing` and `POST /api/word-timing/align`, and reads the regions from `GET /api/speech`. Help and errors go to stderr.
@@ -258,13 +258,13 @@ Book-level Rev.ai transcription is used to identify and split stories. After sel
 | `word-timing.auto.json` / `word-timing.json` | Automatic waveform timing and manual edits keyed by GPT IDs and the working transcript hash. |
 | `archive/` | Earlier identities, overlays, Rev evidence and retired review material; see its README and relocation manifest. |
 
-`config/story-transcription.json` explicitly selects `gpt-transcribe`, chunk size, overlap, encoding, concurrency, language and spelling hints. Its current hints are for Tower of Babylon; use story-appropriate explicit configuration for other stories. `OPENAI_API_KEY` comes from the environment or this repository's `.env`.
+The transcription run file (schema and defaults: `TranscriptionSettings` in `src/modules/story-transcription/contracts.ts`; the run Tower of Babylon used is recorded in its `transcription/run.json`) explicitly selects `gpt-transcribe`, chunk size, overlap, encoding, concurrency, language and spelling hints. Write a run file with story-appropriate hints for other stories; the Python script has no defaults of its own. `OPENAI_API_KEY` comes from the environment or this repository's `.env`.
 
 ```sh
 pnpm run build
 python3 scripts/transcribe-story.py \
   --story data/stories/tower-of-babylon \
-  --config config/story-transcription.json \
+  --run <run.json> \
   --output data/stories/tower-of-babylon/transcription
 python3 scripts/stitch-story-transcript.py \
   --story data/stories/tower-of-babylon \
@@ -277,9 +277,9 @@ python3 scripts/prepare-story-transcript.py \
   --output data/stories/tower-of-babylon/transcription/prepared.json
 sh scripts/editor-dev.sh stop
 node scripts/promote-story-transcript.mjs \
-  --story data/stories/tower-of-babylon \
+  --story tower-of-babylon \
   --input data/stories/tower-of-babylon/transcription/prepared.json
-node dist/word-timing.js align --config config/editor-server.json --story tower-of-babylon --all
+node dist/word-timing.js align --story tower-of-babylon --all
 sh scripts/editor-dev.sh start
 ```
 
@@ -290,3 +290,7 @@ Promotion validates the prepared transcript and run evidence, archives the prior
 In the editor, **GPT initial**, **Auto**, and **Edited** are timing views of the same GPT words. Selection, manual timing, alignment and shot anchors operate on GPT IDs. Rev-only stories remain available as clearly labelled split evidence, with existing work preserved. Tower of Babylon's 9,808 GPT words and waveform adjustment are migrated; no new transcription request was made during this refactor.
 
 Validation: `pnpm test`, `pnpm --filter editor test`, and `python3 scripts/test-story-transcription.py`.
+
+## Runs and settings
+
+There is no settings folder. Every module declares its defaults in code (`storyDefaults`, `visualTimelineDefaults`, `editorDefaults`, `storyInventoryDefaults`, `transcriptionDefaults`), and every story-level tool takes `--story <id>` plus an optional `--run <file>`: a JSON object with any subset of the sections `storiesDirectory`, `booksDirectory`, `story`, `timeline`, `editor`, `inventory`, and `transcription`, laid over the defaults and then checked strictly, so a misspelt key fails by name. Directory paths in a run file resolve from the file. The editor server prints its effective settings beside the listening URL; the caches and the auto timing overlay record the values they were produced with. The book intake tools take their run file as `--run`; the run they were last given is recorded beside their outputs (`artifacts/preparation.json`, `split/run-manifest.json`, and `artifacts/source-inspection.request.json`).

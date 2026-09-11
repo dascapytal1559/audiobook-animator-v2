@@ -4,13 +4,13 @@ import { StorySplitSegment } from "../../intake/story-split/contracts.js";
 import { ProviderTimedWord } from "../../intake/transcription/normalize.js";
 import { Punctuation } from "../../intake/transcription/contracts.js";
 
-/** `config/story.json`: the one story directory this configuration selects. Paths resolve from the config file. */
-export const StoryConfig = Schema.Struct({
-  schemaVersion: Schema.Literal(1), storyDirectory: Path,
+/** Settings for loading a story: read ceilings. Defaults live in code; a run file may override any of them. */
+export const StorySettings = Schema.Struct({
   limits: Schema.Struct({ maxManifestBytes: Positive, maxTranscriptBytes: Positive, maxAudioManifestBytes: Positive, maxElements: Positive }),
 });
-export type StoryConfig = typeof StoryConfig.Type;
-export type ManifestLimits = Pick<StoryConfig["limits"], "maxManifestBytes" | "maxTranscriptBytes" | "maxAudioManifestBytes">;
+export type StorySettings = typeof StorySettings.Type;
+export const storyDefaults: StorySettings = { limits: { maxManifestBytes: 65_536, maxTranscriptBytes: 134_217_728, maxAudioManifestBytes: 1_048_576, maxElements: 1_000_000 } };
+export type ManifestLimits = Pick<StorySettings["limits"], "maxManifestBytes" | "maxTranscriptBytes" | "maxAudioManifestBytes">;
 
 /** Where a story came from: the book split that produced it. Historical locators and the split's pinned hashes; the split inventory is not reopened. */
 export const StoryOrigin = Schema.Struct({
@@ -67,6 +67,6 @@ export const PlanningTranscript = Schema.Struct({ ...PairedTranscript.fields,
 });
 export type PlanningTranscript = typeof PlanningTranscript.Type;
 export class StoryError extends Data.TaggedError("StoryError")<{
-  readonly code: "InvalidConfig" | "InvalidManifest" | "TranscriptMismatch" | "ArtifactMismatch" | "IoFailed";
+  readonly code: "InvalidConfig" | "NotFound" | "InvalidManifest" | "TranscriptMismatch" | "ArtifactMismatch" | "IoFailed";
   readonly message: string;
 }> {}

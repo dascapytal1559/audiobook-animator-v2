@@ -1,11 +1,11 @@
-import { dirname, extname, join, resolve } from "node:path";
+import { extname, join, resolve } from "node:path";
 import { Effect, FileSystem, type Schema } from "effect";
 import { type DecisionsBody as MergeBody, mergeTimeline, sameClip, type ServedShotRecord } from "@animator/domain";
 import { decodeJson, encodeJson as encode, readBounded, writeAtomic as writeAtomicBytes } from "../../core/io.js";
-import { loadStoryContext, StoryError } from "../story/index.js";
-import { ClipIdentity, DEFAULT_SETTINGS, Decisions, type DecisionsBody, type ShotMode, ShotRecord, VisualTimelineConfig, VisualTimelineError } from "./contracts.js";
+import { clipOf, type StoryContext } from "../story/index.js";
+import { DEFAULT_SETTINGS, Decisions, type DecisionsBody, type ShotMode, ShotRecord, type VisualTimelineSettings, VisualTimelineError, visualTimelineDefaults } from "./contracts.js";
 import { isUlid, mintUlid } from "./ulid.js";
-export { ClipIdentity, Decisions, DEFAULT_SETTINGS, type DecisionsBody, IsoUtc, Producer, ShotDecision, ShotMode, ShotRecord, TimelineSettings, VisualTimelineConfig, VisualTimelineError } from "./contracts.js";
+export { ClipIdentity, Decisions, DEFAULT_SETTINGS, type DecisionsBody, IsoUtc, Producer, ShotDecision, ShotMode, ShotRecord, TimelineSettings, VisualTimelineError, VisualTimelineSettings, visualTimelineDefaults } from "./contracts.js";
 export { type CandidateGroup, type EffectiveShot, mergeTimeline, type MergedTimeline, type StitchedEntry } from "@animator/domain";
 export { isUlid, mintUlid, ULID_PATTERN } from "./ulid.js";
 type Code = VisualTimelineError["code"];
@@ -21,20 +21,14 @@ const checkedMerge = (records: ReadonlyArray<ServedShotRecord>, decisions: Merge
 };
 const writeAtomic = (path: string, bytes: Uint8Array) => writeAtomicBytes(path, bytes).pipe(Effect.mapError(() => new VisualTimelineError({ code: "IoFailed", message: `Cannot write ${path}.` })));
 
-/** Config, verified clip identity from story, and the story directory every timeline file lives in. `storyDirectory` overrides the story config's default story. */
-function loadContext(configPath: string, explicitStoryDirectory?: string) {
-  return Effect.gen(function* () {
-    if (!configPath || configPath.includes("\0")) return yield* fail("InvalidConfig", "Supply an explicit configuration path.");
-    const path = resolve(configPath);
-    const config = yield* decode(VisualTimelineConfig, yield* read(path, 65_536), "InvalidConfig", path);
-    const context = yield* loadStoryContext({ configPath: resolve(dirname(path), config.storyConfigPath), ...(explicitStoryDirectory !== undefined ? { storyDirectory: explicitStoryDirectory } : {}) });
-    const clip: ClipIdentity = { bookId: context.bookId, storyId: context.story.id, audioSha256: context.story.audioSha256,
-      transcriptSha256: context.story.transcriptSha256, sampleRateHz: context.story.sampleRateHz, sampleCount: context.story.sampleCount };
-    const storyDirectory = context.storyDirectory;
-    return { config, clip, storyDirectory, shotsDirectory: join(storyDirectory, "shots"), decisionsPath: join(storyDirectory, "decisions.json") };
-  });
+/** Where one story's timeline files live: the verified clip identity from the story context, and the settings (defaults unless a run overrides them). */
+export type TimelineTarget = { readonly story: StoryContext; readonly settings?: VisualTimelineSettings };
+function context(target: TimelineTarget) {
+  const settings = target.settings ?? visualTimelineDefaults;
+  const storyDirectory = target.story.storyDirectory;
+  return { settings, clip: clipOf(target.story), storyDirectory, shotsDirectory: join(storyDirectory, "shots"), decisionsPath: join(storyDirectory, "decisions.json") };
 }
-type Context = Effect.Success<ReturnType<typeof loadContext>>;
+type Context = ReturnType<typeof context>;
 
 /** Every `shots/<id>/record.json`, each checked against its directory name, the clip identity, the clip length, and its image on disk. Dot entries are ignored. */
 function loadRecords(ctx: Context) {
@@ -42,13 +36,13 @@ function loadRecords(ctx: Context) {
     const fs = yield* FileSystem.FileSystem;
     if (!(yield* io(fs.exists(ctx.shotsDirectory), `Cannot inspect ${ctx.shotsDirectory}.`))) return [] as ReadonlyArray<ShotRecord>;
     const entries = (yield* io(fs.readDirectory(ctx.shotsDirectory), `Cannot list ${ctx.shotsDirectory}.`)).filter(e => !e.startsWith(".")).sort();
-    if (entries.length > ctx.config.limits.maxRecords) return yield* fail("InvalidRecord", `${ctx.shotsDirectory} holds ${entries.length} entries, above the configured limit of ${ctx.config.limits.maxRecords}.`);
+    if (entries.length > ctx.settings.limits.maxRecords) return yield* fail("InvalidRecord", `${ctx.shotsDirectory} holds ${entries.length} entries, above the configured limit of ${ctx.settings.limits.maxRecords}.`);
     const records: ShotRecord[] = [];
     for (const entry of entries) {
       const directory = join(ctx.shotsDirectory, entry);
       const path = join(directory, "record.json");
       if (!isUlid(entry) || (yield* io(fs.stat(directory), `Cannot inspect ${directory}.`)).type !== "Directory") return yield* fail("InvalidRecord", `Unexpected entry in the shots directory; every entry must be a ULID-named directory: ${directory}.`);
-      const record = yield* decode(ShotRecord, yield* read(path, ctx.config.limits.maxRecordBytes), "InvalidRecord", path);
+      const record = yield* decode(ShotRecord, yield* read(path, ctx.settings.limits.maxRecordBytes), "InvalidRecord", path);
       if (record.id !== entry) return yield* fail("InvalidRecord", `Record id ${record.id} does not match its directory name in ${path}.`);
       if (!sameClip(record.clip, ctx.clip)) return yield* fail("IdentityMismatch", `Record is pinned to a different clip than the verified story: ${path}.`);
       if (record.startSample >= ctx.clip.sampleCount) return yield* fail("InvalidRecord", `startSample ${record.startSample} is outside the clip's ${ctx.clip.sampleCount} samples in ${path}.`);
@@ -69,22 +63,21 @@ function loadDecisions(ctx: Context) {
     if (!(yield* io(fs.exists(ctx.decisionsPath), `Cannot inspect ${ctx.decisionsPath}.`))) {
       return { schemaVersion: 1, kind: "visual-timeline-decisions", clip: ctx.clip, updatedAt: new Date(0).toISOString(), settings: DEFAULT_SETTINGS, shots: {} } as Decisions;
     }
-    const decisions = yield* decode(Decisions, yield* read(ctx.decisionsPath, ctx.config.limits.maxDecisionsBytes), "InvalidDecisions", ctx.decisionsPath);
+    const decisions = yield* decode(Decisions, yield* read(ctx.decisionsPath, ctx.settings.limits.maxDecisionsBytes), "InvalidDecisions", ctx.decisionsPath);
     if (!sameClip(decisions.clip, ctx.clip)) return yield* fail("IdentityMismatch", `Decisions are pinned to a different clip than the verified story: ${ctx.decisionsPath}.`);
     return decisions;
   });
 }
-const wrap = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.mapError(e => e instanceof VisualTimelineError || e instanceof StoryError ? e : new VisualTimelineError({ code: "IoFailed", message: "Cannot read the visual timeline." })));
+const wrap = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.mapError(e => e instanceof VisualTimelineError ? e : new VisualTimelineError({ code: "IoFailed", message: "Cannot read the visual timeline." })));
 
 const NO_WORDS: ReadonlyMap<string, number> = new Map();
 /**
  * Records plus decisions, merged into candidate groups and a stitched timeline covering the whole clip. Read-only.
- * `storyDirectory` opens that story instead of the story config's default (A18).
  * `wordStarts` (word id to effective start sample) resolves shot anchors; without it every anchor is unresolved and falls back to its override or record.
  */
-export function loadVisualTimeline(options: { readonly configPath: string; readonly storyDirectory?: string; readonly wordStarts?: ReadonlyMap<string, number> }) {
+export function loadVisualTimeline(options: TimelineTarget & { readonly wordStarts?: ReadonlyMap<string, number> }) {
   return wrap(Effect.gen(function* () {
-    const ctx = yield* loadContext(options.configPath, options.storyDirectory);
+    const ctx = context(options);
     const records = yield* loadRecords(ctx);
     const decisions = yield* loadDecisions(ctx);
     const { candidates, stitched, unresolvedAnchors } = yield* checkedMerge(records, decisions, ctx.clip.sampleCount, ctx.decisionsPath, options.wordStarts ?? NO_WORDS);
@@ -93,10 +86,7 @@ export function loadVisualTimeline(options: { readonly configPath: string; reado
 }
 export type VisualTimeline = Effect.Success<ReturnType<typeof loadVisualTimeline>>;
 
-export type AddShotRequest = {
-  readonly configPath: string;
-  /** The story to write into; the story config's default story when absent (A18). */
-  readonly storyDirectory?: string;
+export type AddShotRequest = TimelineTarget & {
   readonly startSample?: number; readonly startSeconds?: number; readonly mode: ShotMode;
   /** Explicit ULID for reproducible imports; a fresh one is minted when absent. */
   readonly id?: string;
@@ -109,7 +99,7 @@ export type AddShotRequest = {
 export function addShot(request: AddShotRequest) {
   return wrap(Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const ctx = yield* loadContext(request.configPath, request.storyDirectory);
+    const ctx = context(request);
     if ((request.startSample === undefined) === (request.startSeconds === undefined)) return yield* fail("InvalidRequest", "Supply exactly one of startSample or startSeconds.");
     if (request.startSeconds !== undefined && !Number.isFinite(request.startSeconds)) return yield* fail("InvalidRequest", "startSeconds must be a finite number.");
     const startSample = request.startSample ?? Math.round(request.startSeconds! * ctx.clip.sampleRateHz);
@@ -117,7 +107,7 @@ export function addShot(request: AddShotRequest) {
     let image: { readonly name: string; readonly bytes: Uint8Array } | undefined;
     if (request.imageSourcePath !== undefined) {
       const source = resolve(request.imageSourcePath);
-      const bytes = yield* read(source, ctx.config.limits.maxImageBytes);
+      const bytes = yield* read(source, ctx.settings.limits.maxImageBytes);
       image = { name: `image${extname(source).toLowerCase()}`, bytes };
     }
     if (request.id !== undefined && !isUlid(request.id)) return yield* fail("InvalidRequest", `Explicit id is not a ULID: ${request.id}.`);
@@ -131,7 +121,7 @@ export function addShot(request: AddShotRequest) {
       createdAt: request.createdAt ?? new Date().toISOString(), producer: request.producer };
     const bytes = encode(record);
     const decoded = yield* decode(ShotRecord, bytes, "InvalidRequest", `the new record ${id}`);
-    if (bytes.byteLength > ctx.config.limits.maxRecordBytes) return yield* fail("InvalidRequest", `The new record would exceed maxRecordBytes (${ctx.config.limits.maxRecordBytes}).`);
+    if (bytes.byteLength > ctx.settings.limits.maxRecordBytes) return yield* fail("InvalidRequest", `The new record would exceed maxRecordBytes (${ctx.settings.limits.maxRecordBytes}).`);
     yield* io(fs.makeDirectory(ctx.shotsDirectory, { recursive: true }), `Cannot create ${ctx.shotsDirectory}.`);
     yield* fs.makeDirectory(directory).pipe(Effect.mapError(() => new VisualTimelineError({ code: "RecordExists", message: `Cannot create a fresh record directory: ${directory}.` })));
     if (image) yield* io(fs.writeFile(join(directory, image.name), image.bytes, { flag: "wx" }), `Cannot copy the image into ${directory}.`);
@@ -140,14 +130,14 @@ export function addShot(request: AddShotRequest) {
   }));
 }
 
-/** Validate the overlay against the current records (and anchors against `wordStarts` when given), then replace `decisions.json` atomically with a fresh `updatedAt`. `storyDirectory` overrides the default story. */
-export function writeDecisions(options: { readonly configPath: string; readonly storyDirectory?: string; readonly decisions: DecisionsBody; readonly wordStarts?: ReadonlyMap<string, number> }) {
+/** Validate the overlay against the current records (and anchors against `wordStarts` when given), then replace `decisions.json` atomically with a fresh `updatedAt`. */
+export function writeDecisions(options: TimelineTarget & { readonly decisions: DecisionsBody; readonly wordStarts?: ReadonlyMap<string, number> }) {
   return wrap(Effect.gen(function* () {
-    const ctx = yield* loadContext(options.configPath, options.storyDirectory);
+    const ctx = context(options);
     const records = yield* loadRecords(ctx);
     const bytes = encode({ schemaVersion: 1, kind: "visual-timeline-decisions", clip: ctx.clip, updatedAt: new Date().toISOString(), settings: options.decisions.settings, shots: options.decisions.shots });
     const decisions = yield* decode(Decisions, bytes, "InvalidDecisions", "the supplied decisions");
-    if (bytes.byteLength > ctx.config.limits.maxDecisionsBytes) return yield* fail("InvalidDecisions", `The decisions would exceed maxDecisionsBytes (${ctx.config.limits.maxDecisionsBytes}).`);
+    if (bytes.byteLength > ctx.settings.limits.maxDecisionsBytes) return yield* fail("InvalidDecisions", `The decisions would exceed maxDecisionsBytes (${ctx.settings.limits.maxDecisionsBytes}).`);
     yield* checkedMerge(records, decisions, ctx.clip.sampleCount, "the supplied decisions", options.wordStarts ?? NO_WORDS);
     yield* writeAtomic(ctx.decisionsPath, bytes);
     return decisions;

@@ -1,8 +1,0 @@
-{
-  "ffprobePath": "ffprobe",
-  "probeTimeoutMs": 30000,
-  "maxProbeOutputBytes": 8388608,
-  "maxProbeErrorBytes": 65536,
-  "hashChunkBytes": 1048576,
-  "cueChapterToleranceSeconds": 0.02
-}

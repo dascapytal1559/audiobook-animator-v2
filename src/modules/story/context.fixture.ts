@@ -10,7 +10,7 @@ const h = "a".repeat(64);
 export type FixtureWord = { readonly value: string; readonly startSeconds: number; readonly endSeconds: number; readonly punctuation: string };
 /**
  * A complete synthetic verified story (10 Hz, 100 samples) that passes loadStoryContext. The story directory is `<root>/pilot`, holding
- * `story.json` and its linked files; the story config lives in `<root>` beside it. Test-only; not matched by the test glob.
+ * `story.json` and its linked files, so `<root>` doubles as a stories directory. `settings` carries the read limits a run would. Test-only; not matched by the test glob.
  */
 export async function fixture(t: TestContext, options: { readonly words?: ReadonlyArray<FixtureWord> } = {}) {
   const root = await mkdtemp(join(tmpdir(), "planning-input-"));
@@ -43,14 +43,11 @@ export async function fixture(t: TestContext, options: { readonly words?: Readon
     audioPath: "audio.flac", audioSha256: hash(audioBytes), audioManifestPath: "manifest.json", audioManifestSha256: hash(encode(manifest)),
     transcriptProvider: "rev-ai", transcriptPath: "transcript.json", transcriptSha256: hash(encode(transcript)), textPath: "transcript.txt", textSha256: hash(Buffer.from(transcript.text + "\n")),
     origin: { splitInventoryPath: "../inventory.json", splitInventorySha256: h, segmentPath: "../segments/pilot", planSha256: h, transcriptSha256: h, sourceSha256: h, providerJobId: "job" } };
-  const config = { schemaVersion: 1, storyDirectory: "pilot",
-    limits: { maxManifestBytes: 65536, maxTranscriptBytes: 65536, maxAudioManifestBytes: 65536, maxElements: Math.max(10, transcript.elements.length) } };
-  const configPath = join(root, "config.json");
+  const settings = { limits: { maxManifestBytes: 65536, maxTranscriptBytes: 65536, maxAudioManifestBytes: 65536, maxElements: Math.max(10, transcript.elements.length) } };
   async function save() {
     story.transcriptSha256 = hash(encode(transcript));
-    await writeFile(configPath, encode(config));
     for (const [name, value] of [["story.json", story], ["transcript.json", transcript], ["manifest.json", manifest]] as const) await writeFile(join(dir, name), encode(value));
   }
   await save(); await writeFile(join(dir, "audio.flac"), audioBytes); await writeFile(join(dir, "transcript.txt"), transcript.text + "\n");
-  return { root, dir, config, configPath, story, transcript, save };
+  return { root, dir, settings, story, transcript, save };
 }

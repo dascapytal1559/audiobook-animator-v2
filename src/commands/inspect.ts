@@ -14,23 +14,23 @@ export const inspectCommand = Command.make("inspect", {
     Flag.withSchema(SourceMediaRequest.fields.sourcePath),
     Flag.withDescription("Local source audio path, relative to the current directory or absolute."),
   ),
-  config: Flag.string("config").pipe(
+  run: Flag.string("run").pipe(
     Flag.withSchema(SourceMediaRequest.fields.sourcePath),
-    Flag.withDescription("Required JSON configuration path, relative to the current directory or absolute."),
+    Flag.withDescription("Required run file (JSON) with the probe settings, relative to the current directory or absolute."),
   ),
-}, Effect.fn("inspectCommand")(function* ({ source, config }: { readonly source: string; readonly config: string }) {
+}, Effect.fn("inspectCommand")(function* ({ source, run }: { readonly source: string; readonly run: string }) {
   const fs = yield* FileSystem.FileSystem;
-  const configPath = resolve(config);
+  const configPath = resolve(run);
   const text = yield* fs.readFileString(configPath, "utf8").pipe(
     Effect.mapError((cause) => new CliError.UserError({
       cause,
-      userMessage: `Cannot read source inspection config ${configPath}: ${cause.message}`,
+      userMessage: `Cannot read source inspection run file ${configPath}: ${cause.message}`,
     })),
   );
   const options = yield* decodeConfig(text).pipe(
     Effect.mapError((cause) => new CliError.UserError({
       cause,
-      userMessage: `Invalid source inspection config ${configPath}: ${cause.message}`,
+      userMessage: `Invalid source inspection run file ${configPath}: ${cause.message}`,
     })),
   );
   const executable = options.ffprobePath;
@@ -53,5 +53,5 @@ export const inspectCommand = Command.make("inspect", {
   );
 })).pipe(
   Command.withShortDescription("Inspect source audio and print evidence as JSON."),
-  Command.withDescription("Inspect source audio and print evidence as JSON on stdout. Metadata does not approve stories. Help and errors go to stderr. In config, ffprobePath is a PATH command, an absolute path, or a path relative to the config file directory."),
+  Command.withDescription("Inspect source audio and print evidence as JSON on stdout. Metadata does not approve stories. Help and errors go to stderr. In the run file, ffprobePath is a PATH command, an absolute path, or a path relative to the run file directory."),
 );

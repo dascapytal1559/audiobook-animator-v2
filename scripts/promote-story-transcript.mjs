@@ -1,4 +1,4 @@
-/** Promote prepared GPT text to the working story identity. Restart the editor after promotion. */
+/** Promote prepared GPT text to the working story identity. Restart the editor after promotion. `--story` is the story id under data/stories/. */
 import { parseArgs } from 'node:util';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir, readdir, rename, stat } from 'node:fs/promises';
@@ -8,8 +8,9 @@ import { StoryTranscript, validateStoryTranscript } from '../dist/modules/story-
 import { StoryManifest } from '../dist/modules/story/contracts.js';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const { values } = parseArgs({ options: { story: { type: 'string' }, input: { type: 'string' } } });
-if (!values.story || !values.input) throw new Error('Required: --story DIRECTORY --input PREPARED_JSON');
-const directory = resolve(values.story);
+if (!values.story || !values.input) throw new Error('Required: --story STORY_ID --input PREPARED_JSON');
+if (!/^[a-z0-9][a-z0-9-]{0,100}$/.test(values.story)) throw new Error(`--story is a story id under data/stories/, not ${JSON.stringify(values.story)}.`);
+const directory = resolve(dirname(new URL(import.meta.url).pathname), '..', 'data', 'stories', values.story);
 const manifestPath = join(directory, 'story.json');
 const originalManifest = await readFile(manifestPath);
 const manifest = Schema.decodeUnknownSync(StoryManifest, { onExcessProperty: 'error' })(JSON.parse(originalManifest));

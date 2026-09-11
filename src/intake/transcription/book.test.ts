@@ -254,11 +254,11 @@ test("raw byte limit, malformed JSON, empty speech, and a contradictory embedded
 test("whole-book CLI prints only JSON on success and sends argument errors and help to stderr", posixOnly, async (t) => {
   const f = await fixture(t);
   const cli = resolve("dist/book-transcription.js");
-  const prepared = spawnSync(process.execPath, [cli, "prepare", "--config", f.configPath], { encoding: "utf8" });
+  const prepared = spawnSync(process.execPath, [cli, "prepare", "--run", f.configPath], { encoding: "utf8" });
   assert.equal(prepared.status, 0, prepared.stderr);
   assert.equal(prepared.stderr, "");
   assert.equal(JSON.parse(prepared.stdout).source.durationSeconds, duration);
-  const bad = spawnSync(process.execPath, [cli, "import", "--config", f.configPath], { encoding: "utf8" });
+  const bad = spawnSync(process.execPath, [cli, "import", "--run", f.configPath], { encoding: "utf8" });
   assert.equal(bad.status, 1);
   assert.equal(bad.stdout, "");
   assert.match(bad.stderr, /requires both --transcript and --job-id/);

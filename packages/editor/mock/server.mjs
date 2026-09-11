@@ -13,7 +13,6 @@ const sha = (c) => c.repeat(64);
 const clip = { bookId: "exhalation", storyId: "the-great-silence", audioSha256: sha("a"), transcriptSha256: sha("b"), sampleRateHz: RATE, sampleCount: COUNT };
 const summary = (id, title, bookId, bookTitle) => ({ id, title, bookId, bookTitle, wordCount: 7, sampleRateHz: RATE, sampleCount: COUNT, durationSeconds: 2, durationDisplay: "00:00:02.000" });
 const STORIES = [summary("the-great-silence", "The Great Silence (mock)", "exhalation", "Exhalation"), summary("tower-of-babylon", "Tower of Babylon (mock)", "stories-of-your-life-and-others", "Stories of Your Life and Others")];
-const DEFAULT_STORY = "the-great-silence";
 const ms = (n) => Math.round((n / 1000) * RATE);
 
 // Words with a 400 ms pause between "we" and "would" (850 ms → 1250 ms), so a pause-midpoint snap target exists at 1050 ms.
@@ -168,7 +167,7 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
   try {
     if (req.method === "GET" && url.pathname === "/mock/puts") return json(res, 200, { puts, posts });
-    if (req.method === "GET" && url.pathname === "/api/stories") return json(res, 200, { defaultStoryId: DEFAULT_STORY, stories: STORIES });
+    if (req.method === "GET" && url.pathname === "/api/stories") return json(res, 200, { stories: STORIES });
     // Story-scoped routes: strip the prefix, then dispatch on the remainder as before.
     const scoped = /^\/api\/stories\/([a-z0-9-]+)(\/.+)$/.exec(url.pathname);
     if (!scoped || !STORIES.some(s => s.id === scoped[1])) return fail(res, 404, "NotFound", `No route for ${req.method} ${url.pathname}.`);
