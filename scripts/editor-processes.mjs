@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const root = realpathSync(fileURLToPath(new URL("../", import.meta.url)));
 const editor = resolve(root, "packages/editor");
-const apiArgs = ["--port", "63620", "--static", "packages/editor/dist"];
+const apiArgs = ["server", "serve", "--port", "63620", "--static", "packages/editor/dist"];
 const viteArgs = ["--host", "127.0.0.1", "--port", "5173", "--strictPort"];
 const apiFlags = ` ${apiArgs.join(" ")}`;
 const viteFlags = ` ${viteArgs.join(" ")}`;
@@ -23,7 +23,7 @@ function command(program, args) {
 function roleFor(line) {
   const args = line.match(/^(?:\/.*?)?node (.+)$/)?.[1];
   if (!args) return undefined;
-  if (args.endsWith(apiFlags) && resolve(root, args.slice(0, -apiFlags.length)) === resolve(root, "dist/editor-server.js")) {
+  if (args.endsWith(apiFlags) && resolve(root, args.slice(0, -apiFlags.length)) === resolve(root, "dist/cli.js")) {
     return { name: "api", cwd: root };
   }
   if (args.endsWith(viteFlags) && resolve(editor, args.slice(0, -viteFlags.length)) === resolve(editor, "node_modules/vite/bin/vite.js")) {
@@ -113,7 +113,7 @@ command("lsof", ["-v"]);
 const targets = ownedProcesses();
 if (action === "launch") {
   if (targets.length) throw new Error("Editor processes are already running; use scripts/editor-dev.sh restart.");
-  await launch("api", process.execPath, ["dist/editor-server.js", ...apiArgs]);
+  await launch("api", process.execPath, ["dist/cli.js", ...apiArgs]);
   await launch("vite", "pnpm", ["--filter", "editor", "exec", "vite", ...viteArgs]);
 } else if (action === "status") {
   for (const name of ["api", "vite"]) {

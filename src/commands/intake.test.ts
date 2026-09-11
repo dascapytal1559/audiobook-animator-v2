@@ -28,7 +28,7 @@ test("inspect CLI emits only machine JSON and keeps failed invocations on stderr
   const checkedInConfig: Record<string, unknown> = { ffprobePath: "ffprobe", probeTimeoutMs: 30000, maxProbeOutputBytes: 8388608, maxProbeErrorBytes: 65536, hashChunkBytes: 1048576, cueChapterToleranceSeconds: 0.02 };
   await writeFile(join(configDirectory, "source.json"), JSON.stringify({ ...checkedInConfig, ffprobePath: "./probe tool" }));
   const cli = fileURLToPath(new URL("../cli.js", import.meta.url));
-  const run = (...args: string[]) => spawnSync(process.execPath, [cli, "inspect", ...args], {
+  const run = (...args: string[]) => spawnSync(process.execPath, [cli, "intake", "inspect", ...args], {
     cwd: directory,
     encoding: "utf8",
     timeout: 10_000,

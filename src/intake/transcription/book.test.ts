@@ -253,16 +253,16 @@ test("raw byte limit, malformed JSON, empty speech, and a contradictory embedded
 
 test("whole-book CLI prints only JSON on success and sends argument errors and help to stderr", posixOnly, async (t) => {
   const f = await fixture(t);
-  const cli = resolve("dist/book-transcription.js");
-  const prepared = spawnSync(process.execPath, [cli, "prepare", "--run", f.configPath], { encoding: "utf8" });
+  const cli = resolve("dist/cli.js");
+  const prepared = spawnSync(process.execPath, [cli, "intake", "prepare", "--run", f.configPath], { encoding: "utf8" });
   assert.equal(prepared.status, 0, prepared.stderr);
   assert.equal(prepared.stderr, "");
   assert.equal(JSON.parse(prepared.stdout).source.durationSeconds, duration);
-  const bad = spawnSync(process.execPath, [cli, "import", "--run", f.configPath], { encoding: "utf8" });
+  const bad = spawnSync(process.execPath, [cli, "intake", "import", "--run", f.configPath], { encoding: "utf8" });
   assert.equal(bad.status, 1);
   assert.equal(bad.stdout, "");
   assert.match(bad.stderr, /requires both --transcript and --job-id/);
-  const help = spawnSync(process.execPath, [cli, "--help"], { encoding: "utf8" });
+  const help = spawnSync(process.execPath, [cli, "intake", "import", "--help"], { encoding: "utf8" });
   assert.equal(help.status, 0);
   assert.equal(help.stdout, "");
   assert.match(help.stderr, /makes no network request/);

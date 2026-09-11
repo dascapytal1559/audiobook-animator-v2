@@ -16,7 +16,7 @@ pnpm run cli --help
 pnpm run cli --version
 ```
 
-`pnpm test` builds the source and runs the colocated tests with Node's built-in test runner. The CLI runs compiled JavaScript from `dist/`.
+`pnpm check` builds the domain package, typechecks, and runs every suite in dependency order. The whole command surface is one tree, `pnpm run cli --help` (`node dist/cli.js`), compiled from `src/cli.ts` and `src/commands/`: `intake`, `story`, `inventory`, `timeline`, `timing`, `transcription`, `server`, and `run`.
 
 ## Source inspection
 
@@ -25,7 +25,7 @@ The source-media module reads a local file, computes its SHA-256 identity, probe
 The module is independently callable from `src/intake/source-media/index.ts`. It accepts an explicit request and uses Effect's filesystem and child-process services. The CLI is the application entry point; operational configuration belongs at that boundary.
 
 ```sh
-pnpm run cli inspect --source data/books/exhalation/input/book.mp3 --run data/books/exhalation/artifacts/source-inspection.request.json
+pnpm run cli intake inspect --source data/books/exhalation/input/book.mp3 --run data/books/exhalation/artifacts/source-inspection.request.json
 ```
 
 Both flags are required. Source and config paths resolve from the current directory. A bare `ffprobe` command uses PATH; a relative executable path containing a separator resolves from the configuration directory. The checked-in config spells out process timeout, output limits, hash buffer size, and a 20 ms diagnostic comparison tolerance. That tolerance is not approval of story boundaries.
@@ -34,7 +34,7 @@ Successful inspection emits JSON on stdout. Errors, help, and version text use s
 
 ```sh
 mkdir -p data/inspections
-pnpm --silent run cli inspect --source data/books/exhalation/input/book.mp3 --run <run.json> > data/inspections/exhalation.json
+pnpm --silent run cli intake inspect --source data/books/exhalation/input/book.mp3 --run <run.json> > data/inspections/exhalation.json
 ```
 
 The original MP3s and raw transcript exports live under each book's `input/` directory. They contain 21 hours 45 minutes of audio in total and are excluded from Git. The `animator` symlink points to the legacy project, whose assets and implementation serve as reference.
@@ -64,9 +64,9 @@ All `data/` files remain local. Source code, explicit configuration, project doc
 The full-book path submits the original MP3 through the Rev AI dashboard and imports its JSON export locally. Both collections have completed this step. The prepare/import commands make no provider requests and need no API key:
 
 ```sh
-node dist/book-transcription.js prepare --run <run.json>
-node dist/book-transcription.js import --run <run.json> --transcript data/books/exhalation/input/rev-export.json --job-id eekQ2vQNJp3XjfF6
-node dist/book-transcription.js import --run <run.json> --transcript data/books/stories-of-your-life-and-others/input/rev-export.json --job-id gbuckIu5tGOf8MiK
+pnpm --silent run cli intake prepare --run <run.json>
+pnpm --silent run cli intake import --run <run.json> --transcript data/books/exhalation/input/rev-export.json --job-id eekQ2vQNJp3XjfF6
+pnpm --silent run cli intake import --run <run.json> --transcript data/books/stories-of-your-life-and-others/input/rev-export.json --job-id gbuckIu5tGOf8MiK
 ```
 
 The run file for Exhalation, recorded verbatim in `artifacts/preparation.json`, pins the source hash and byte length. It explicitly supplies the audio stream, inspection settings, 17-hour/2-GB source limits, 64-MiB raw transcript limit, normalized-output limit, and timestamp tolerance. Run-file paths resolve from the run file's directory; command paths resolve from the working directory.
@@ -80,8 +80,8 @@ Exhalation job `eekQ2vQNJp3XjfF6` returned 100,593 timed words; Stories of Your 
 The story-split module consumes a reviewed plan, slices the timed transcript, calls the verified audio extractor for every story and extra, and publishes a duration inventory after all pairs succeed. The existing stories were moved into `data/stories/<story>/` by a one-time relocation on 2026-09-09 that hash-checked every file before and after the move and wrote each story's `story.json`; `data/story-relocation.json` records those moves, and the script was removed afterwards. Extras stay with the book. A future split run still writes into `split/segments/`, so its stories need the same relocation and manifest step. Discovery is separate: the first Exhalation plan was produced by agents using transcript content and measured audio gaps. A reusable autonomous discovery service is still to be implemented.
 
 ```sh
-node dist/split-stories.js --plan data/books/exhalation/split-plan.json --source data/books/exhalation/input/book.mp3 --run <run.json> --validate-only
-node dist/split-stories.js --plan data/books/exhalation/split-plan.json --source data/books/exhalation/input/book.mp3 --run <run.json> --output data/books/exhalation/split
+pnpm --silent run cli intake split --plan data/books/exhalation/split-plan.json --source data/books/exhalation/input/book.mp3 --run <run.json> --validate-only
+pnpm --silent run cli intake split --plan data/books/exhalation/split-plan.json --source data/books/exhalation/input/book.mp3 --run <run.json> --output data/books/exhalation/split
 ```
 
 The plan pins source, normalized transcript, provider job, raw export, and supporting evidence identities. It partitions every transcript element exactly once and supplies ordered, nonoverlapping integer audio sample intervals. The intervals use FFmpeg's decoded-audio clock, with an inclusive start and exclusive end. Source chapter metadata does not choose or override cuts. Validation checks the supplied plan and identities; it does not independently establish the semantic quality of a cut.
@@ -104,7 +104,7 @@ Each story's `story.json` is its manifest: id and title, the book it came from, 
 
 ```sh
 pnpm run build
-node dist/story-inventory.js
+pnpm --silent run cli inventory publish
 ```
 
 The independently callable module is `src/modules/story-inventory/index.ts`. Its explicit configuration supplies the stories directory, each book's extras inventory and reading-view output, the combined outputs, and file-size limits; paths resolve from the config file. Every directory under the stories directory must hold a valid manifest for a configured book. It checks transcript hashes, audio manifests, file links, and sample-based durations through the shared story loader before publishing, without decoding audio or making provider requests.
@@ -129,7 +129,7 @@ The `story` module loads a verified story for downstream analysis. It supplies t
 
 ```sh
 pnpm run build
-node dist/story.js --story the-great-silence
+pnpm --silent run cli story show --story the-great-silence
 ```
 
 The checked-in configuration selects the story directory for Tower of Babylon and supplies explicit read/element limits. Config paths resolve from the config file. The CLI prints JSON to stdout; help and errors use stderr. Code can call `loadStoryContext` from `src/modules/story/index.ts` directly through Effect.
@@ -146,8 +146,8 @@ The merge applies decision overrides over record fields, then groups shots with 
 
 ```sh
 pnpm run build
-node dist/visual-timeline.js show --story the-great-silence
-node dist/visual-timeline.js add --story the-great-silence --at-seconds 12.5 --mode graphic-illustration --label "Opening" --image path/to/image.png
+pnpm --silent run cli timeline show --story the-great-silence
+pnpm --silent run cli timeline add --story the-great-silence --at-seconds 12.5 --mode graphic-illustration --label "Opening" --image path/to/image.png
 ```
 
 `show` prints the records, decisions, candidate groups, and stitched timeline as JSON. `add` mints a ULID, copies the image (within the configured size limit) beside a new `record.json` written through a temporary file and rename, and prints the record; it never overwrites an existing shot. The configuration points at the story config and the story directory and sets explicit byte and count limits; paths resolve from the config file. Code can call `loadVisualTimeline`, `addShot`, and `writeDecisions` from `src/modules/visual-timeline/index.ts`.
@@ -158,8 +158,8 @@ The Great Silence starts populated (PIPELINE A33). A one-time import turns the 1
 
 ```sh
 pnpm run build
-node dist/visual-timeline-seed.js --story the-great-silence --treatment data/stories/the-great-silence/visual-treatment.md --prototype data/stories/the-great-silence/visual-prototype --dry-run
-node dist/visual-timeline-seed.js --story the-great-silence --treatment data/stories/the-great-silence/visual-treatment.md --prototype data/stories/the-great-silence/visual-prototype
+pnpm --silent run cli timeline seed --story the-great-silence --treatment data/stories/the-great-silence/visual-treatment.md --prototype data/stories/the-great-silence/visual-prototype --dry-run
+pnpm --silent run cli timeline seed --story the-great-silence --treatment data/stories/the-great-silence/visual-treatment.md --prototype data/stories/the-great-silence/visual-prototype
 ```
 
 Treatment rows are parsed from the fixed six-column table under "Proposed sequences" and must be exactly 14 adjacent spans from 0 to the clip end; they become image-less records (`seed-treatment`). Each prototype board is checked against the hash in `assets.json`, cropped into thirds with ffmpeg (the wide board splits 341/342/341 px), verified with ffprobe, and imported as three image records carrying the board prompt (`seed-prototype`). Boards outside the two selected looks say so in their notes. Record ids are deterministic (sha256 of producer and a stable key, ULID-encoded with the fixed `createdAt`), so a re-run reports every record as unchanged; a record that differs from what would be written fails the run with the differing fields, and an existing `decisions.json` is never overwritten. `--dry-run` performs every check, including the crops, without writing. Pure helpers live in `src/modules/visual-timeline/seed.ts`.
@@ -188,8 +188,8 @@ The editor server is a thin Effect HTTP layer over the story, visual-timeline, a
 
 ```sh
 pnpm run build
-node dist/editor-server.js --port 63620
-node dist/editor-server.js --port 63620 --static packages/editor/dist
+pnpm --silent run cli server serve --port 63620
+pnpm --silent run cli server serve --port 63620 --static packages/editor/dist
 ```
 
 The listening URL, help, and errors go to stderr. Ctrl-C stops the server. With `--static`, files under the directory are served at `/` and `index.html` answers unknown paths without an extension for HTML navigations, so a single-page client can deep-link; without it, `/` is a short text pointer to the API.
@@ -229,11 +229,11 @@ Speech regions come from the same ffmpeg decode as the waveform peaks: RMS per 1
 The align pass (`alignRange`) is pure and takes the original transcript timing as input, never the overlays: the words whose original start lies in the range are shifted later by `alignment.leadMs`, each is assigned to the speech region it overlaps most (the nearest region when it overlaps none), and each region's words are mapped linearly so the earliest start lands on the region start and the latest end on the region end; a lone word fills its region. Regions are clipped to the range first, so no result leaves it, and a range with no region inside yields no entries. The report (`measureRange`) is computed before and after for the range: at phrase boundaries (the first word and every word following a pause of at least `alignment.boundaryPauseMs`), the median, p10, and p90 of the signed distance in ms from the word start to the nearest speech onset, plus the count and fraction of words lying wholly inside a speech region.
 
 ```sh
-node dist/word-timing.js measure --story the-great-silence --from 0 --to 30
-node dist/word-timing.js align   --story the-great-silence --from 0 --to 30 --dry-run
-node dist/word-timing.js align   --story the-great-silence --from 0 --to 30
-node dist/word-timing.js align   --story the-great-silence --all
-node dist/word-timing.js align   --story exhalation --from 0 --to 30 --run my-run.json
+pnpm --silent run cli timing measure --story the-great-silence --from 0 --to 30
+pnpm --silent run cli timing align   --story the-great-silence --from 0 --to 30 --dry-run
+pnpm --silent run cli timing align   --story the-great-silence --from 0 --to 30
+pnpm --silent run cli timing align   --story the-great-silence --all
+pnpm --silent run cli timing align   --story exhalation --from 0 --to 30 --run my-run.json
 ```
 
 `measure` prints the statistics for the original and the effective timing of the range without writing. `align` writes the range's entries into `word-timing.auto.json` and prints the run report; `--dry-run` prints without writing, and `--all` is the explicit whole-clip flag. `--story` names a directory under the editor config's `storiesDirectory`; without it the story config's default story is used. Ranges are in seconds and resolve to `[from, to)` on the clip clock. The editor reaches the same operations through `PUT /api/word-timing` and `POST /api/word-timing/align`, and reads the regions from `GET /api/speech`. Help and errors go to stderr.
@@ -276,10 +276,10 @@ python3 scripts/prepare-story-transcript.py \
   --run data/stories/tower-of-babylon/transcription \
   --output data/stories/tower-of-babylon/transcription/prepared.json
 sh scripts/editor-dev.sh stop
-node scripts/promote-story-transcript.mjs \
+pnpm --silent run cli transcription promote \
   --story tower-of-babylon \
   --input data/stories/tower-of-babylon/transcription/prepared.json
-node dist/word-timing.js align --story tower-of-babylon --all
+pnpm --silent run cli timing align --story tower-of-babylon --all
 sh scripts/editor-dev.sh start
 ```
 
