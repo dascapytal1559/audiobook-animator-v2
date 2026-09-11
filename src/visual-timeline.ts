@@ -10,7 +10,7 @@ const usage = `Usage:
                                     [--label TEXT] [--prompt TEXT] [--image PATH] [--notes TEXT] [--producer-name NAME] [--producer-version VERSION]
 
 show  loads every generation record under <story>/shots/ and the decisions overlay, verifies them against the story selected by the
-      story-planning config, and prints the merged candidates and stitched timeline as JSON on stdout.
+      story config, and prints the merged candidates and stitched timeline as JSON on stdout.
 add   mints a ULID, copies --image (resolved from the working directory) beside a new record.json, and prints the record.
 Config paths resolve from the config file. Help and errors go to stderr. Default producer is ${packageJson.name}/visual-timeline-cli ${packageJson.version}.`;
 const invalid = (message: string) => new VisualTimelineError({ code: "InvalidRequest", message });

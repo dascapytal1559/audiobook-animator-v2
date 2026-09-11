@@ -3,11 +3,11 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Layer } from "effect";
 import packageJson from "../package.json" with { type: "json" };
 import { EditorServerError, makeEditorServer } from "./modules/editor-server/index.js";
-import { StoryPlanningError } from "./modules/story-planning/index.js";
+import { StoryError } from "./modules/story/index.js";
 
 const usage = `Usage: node dist/editor-server.js --config config/editor-server.json --port 63620 [--static <dir>]
 
-Serve every story under the config's storiesDirectory on 127.0.0.1 with no authentication. The story-planning config names the default:
+Serve every story under the config's storiesDirectory on 127.0.0.1 with no authentication. The story config names the default:
   /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /audio /peaks /speech /events
 With --static, files under <dir> are served at / with index.html as the fallback for unknown non-API paths.
 Config paths resolve from the config file. The listening URL, help, and errors go to stderr. Ctrl-C stops the server.`;
@@ -26,7 +26,7 @@ const main = Effect.gen(function* () {
 });
 
 main.pipe(
-  Effect.catch(error => Console.error(error instanceof EditorServerError || error instanceof StoryPlanningError ? `${error.code}: ${error.message}` : `Cannot start the editor server: ${String(error)}`).pipe(
+  Effect.catch(error => Console.error(error instanceof EditorServerError || error instanceof StoryError ? `${error.code}: ${error.message}` : `Cannot start the editor server: ${String(error)}`).pipe(
     Effect.andThen(Effect.sync(() => { process.exitCode = 1; })),
   )),
   Effect.provide(NodeServices.layer),

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "storyPlanningConfigPath": "story-planning.json",
+  "storyConfigPath": "story.json",
   "limits": {
     "maxRecordBytes": 65536,
     "maxDecisionsBytes": 1048576,

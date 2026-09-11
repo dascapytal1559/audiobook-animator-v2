@@ -10,7 +10,7 @@ export type ShotMode = typeof ShotMode.Type;
 export const ImagePath = Schema.String.check(Schema.isPattern(/^(?!\.\.?$)[^\0/\\]+$/));
 
 export const VisualTimelineConfig = Schema.Struct({
-  schemaVersion: Schema.Literal(1), storyPlanningConfigPath: Path,
+  schemaVersion: Schema.Literal(1), storyConfigPath: Path,
   limits: Schema.Struct({ maxRecordBytes: Positive, maxDecisionsBytes: Positive, maxRecords: Positive, maxImageBytes: Positive }),
 });
 export type VisualTimelineConfig = typeof VisualTimelineConfig.Type;

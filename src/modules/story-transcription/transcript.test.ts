@@ -5,8 +5,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { NodeServices } from "@effect/platform-node";
 import { Effect } from "effect";
-import { fixture } from "../story-planning/context.fixture.js";
-import { loadStoryContext } from "../story-planning/index.js";
+import { fixture } from "../story/context.fixture.js";
+import { loadStoryContext } from "../story/index.js";
 import { loadEditorLibrary } from "../editor-server/routes.js";
 import { storyPayload, writeManualTiming } from "../editor-server/timing.js";
 import { StoryTranscript } from "./contracts.js";
@@ -30,7 +30,7 @@ test("GPT is the working planning/editor transcript; edits use GPT IDs and rejec
   };
   await save(transcript);
   assert.equal((await run(loadStoryContext({ configPath: f.configPath }))).transcript.kind, "story-transcript");
-  await writeFile(join(f.root, "visual.json"), encode({ schemaVersion: 1, storyPlanningConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } }));
+  await writeFile(join(f.root, "visual.json"), encode({ schemaVersion: 1, storyConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } }));
   const editorConfig = join(f.root, "editor.json");
   await writeFile(editorConfig, encode({ schemaVersion: 1, storiesDirectory: ".", visualTimelineConfigPath: "visual.json", ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 },
     speech: { frameMs: 100, thresholdDbfs: -50, minSilenceMs: 150, minSpeechMs: 50 }, alignment: { leadMs: 150, boundaryPauseMs: 300 },

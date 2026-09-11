@@ -2,7 +2,7 @@ import { basename, dirname, extname, join, resolve } from "node:path";
 import { Duration, Effect, FileSystem, Layer, Schema, Semaphore, Stream } from "effect";
 import { Sse } from "effect/unstable/encoding";
 import { HttpIncomingMessage, HttpRouter, type HttpServerRequest, HttpServerResponse, HttpStaticServer, Multipart } from "effect/unstable/http";
-import { loadStoryContext, StoryManifest, StoryPlanningConfig, StoryPlanningError, type StoryContext } from "../story-planning/index.js";
+import { loadStoryContext, StoryManifest, StoryConfig, StoryError, type StoryContext } from "../story/index.js";
 import { decodeJson, readBounded } from "../../core/io.js";
 import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotRecord, VisualTimelineConfig, VisualTimelineError, writeDecisions, type DecisionsBody } from "../visual-timeline/index.js";
 import { type TimingEntries, WordTimingError } from "../word-timing/index.js";
@@ -19,11 +19,11 @@ const MAX_MULTIPART_PARTS = 16;
 
 /** A transcript word with its ORIGINAL provider timing on the clip clock. Effective timing is merged per request by `loadTiming`. */
 export type EditorWord = { readonly id: string; readonly value: string; readonly startSample: number; readonly endSample: number };
-/** Both configs, the stories directory, and the default story (A18) named by the planning config. Loaded once at start; shared by every story. */
+/** Both configs, the stories directory, and the default story (A18) named by the story config. Loaded once at start; shared by every story. */
 export type EditorConfigContext = {
   readonly configPath: string; readonly config: EditorServerConfig;
   readonly timelineConfigPath: string; readonly timelineConfig: VisualTimelineConfig;
-  readonly planningConfigPath: string; readonly planningConfig: StoryPlanningConfig;
+  readonly storyConfigPath: string; readonly storyConfig: StoryConfig;
   /** Every direct subdirectory is a story the server can open. */
   readonly storiesDirectory: string;
   readonly defaultStoryId: string;
@@ -48,7 +48,7 @@ export type OpenStory = { readonly ctx: EditorContext; readonly caches: Caches }
 export type EditorLibrary = EditorConfigContext & {
   readonly stories: ReadonlyArray<StorySummary>;
   /** The listed story, verified on first open and kept for the process lifetime; a failed verification is retried on the next open. Unknown ids are `NotFound`. */
-  readonly open: (storyId: string | undefined) => Effect.Effect<OpenStory, EditorServerError | StoryPlanningError, FileSystem.FileSystem>;
+  readonly open: (storyId: string | undefined) => Effect.Effect<OpenStory, EditorServerError | StoryError, FileSystem.FileSystem>;
 };
 export type EditorRouteOptions = { readonly producer: { readonly name: string; readonly version: string }; readonly staticDirectory?: string };
 
@@ -63,12 +63,12 @@ export function loadEditorConfig(options: { readonly configPath: string }): Effe
     const config = yield* decode(EditorServerConfig, yield* read(configPath, 65_536), "InvalidConfig", configPath);
     const timelineConfigPath = resolve(dirname(configPath), config.visualTimelineConfigPath);
     const timelineConfig = yield* decode(VisualTimelineConfig, yield* read(timelineConfigPath, 65_536), "InvalidConfig", timelineConfigPath);
-    const planningConfigPath = resolve(dirname(timelineConfigPath), timelineConfig.storyPlanningConfigPath);
-    const planningConfig = yield* decode(StoryPlanningConfig, yield* read(planningConfigPath, 65_536), "InvalidConfig", planningConfigPath);
+    const storyConfigPath = resolve(dirname(timelineConfigPath), timelineConfig.storyConfigPath);
+    const storyConfig = yield* decode(StoryConfig, yield* read(storyConfigPath, 65_536), "InvalidConfig", storyConfigPath);
     const storiesDirectory = resolve(dirname(configPath), config.storiesDirectory);
-    const defaultStoryDirectory = resolve(dirname(planningConfigPath), planningConfig.storyDirectory);
-    if (dirname(defaultStoryDirectory) !== storiesDirectory) return yield* fail("InvalidConfig", `The default story ${defaultStoryDirectory} (from ${planningConfigPath}) must live directly under storiesDirectory ${storiesDirectory} (from ${configPath}).`);
-    return { configPath, config, timelineConfigPath, timelineConfig, planningConfigPath, planningConfig, storiesDirectory, defaultStoryId: basename(defaultStoryDirectory) };
+    const defaultStoryDirectory = resolve(dirname(storyConfigPath), storyConfig.storyDirectory);
+    if (dirname(defaultStoryDirectory) !== storiesDirectory) return yield* fail("InvalidConfig", `The default story ${defaultStoryDirectory} (from ${storyConfigPath}) must live directly under storiesDirectory ${storiesDirectory} (from ${configPath}).`);
+    return { configPath, config, timelineConfigPath, timelineConfig, storyConfigPath, storyConfig, storiesDirectory, defaultStoryId: basename(defaultStoryDirectory) };
   });
 }
 
@@ -83,7 +83,7 @@ export function listStories(shared: EditorConfigContext): Effect.Effect<Readonly
       const storyDirectory = join(shared.storiesDirectory, name);
       if ((yield* fs.stat(storyDirectory).pipe(Effect.mapError(io(`Cannot inspect ${storyDirectory}.`)))).type !== "Directory") continue;
       const manifestPath = join(storyDirectory, "story.json");
-      const manifest = yield* decode(StoryManifest, yield* read(manifestPath, shared.planningConfig.limits.maxManifestBytes), "InvalidConfig", manifestPath);
+      const manifest = yield* decode(StoryManifest, yield* read(manifestPath, shared.storyConfig.limits.maxManifestBytes), "InvalidConfig", manifestPath);
       if (manifest.id !== name) return yield* fail("InvalidConfig", `Manifest id ${manifest.id} does not match its directory name: ${storyDirectory}.`);
       stories.push({ id: manifest.id, title: manifest.title, bookId: manifest.book.id, bookTitle: manifest.book.title, wordCount: manifest.wordCount,
         sampleRateHz: manifest.sampleRateHz, sampleCount: manifest.sampleCount, durationSeconds: manifest.durationSeconds, durationDisplay: manifest.durationDisplay });
@@ -93,10 +93,10 @@ export function listStories(shared: EditorConfigContext): Effect.Effect<Readonly
   });
 }
 
-/** One story verified through story-planning, its words converted to clip samples, and its cache identities. The story directory is what `/events` watches. */
-export function openStory(shared: EditorConfigContext, storyId: string): Effect.Effect<EditorContext, EditorServerError | StoryPlanningError, FileSystem.FileSystem> {
+/** One story verified through story, its words converted to clip samples, and its cache identities. The story directory is what `/events` watches. */
+export function openStory(shared: EditorConfigContext, storyId: string): Effect.Effect<EditorContext, EditorServerError | StoryError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
-    const story = yield* loadStoryContext({ configPath: shared.planningConfigPath, storyDirectory: join(shared.storiesDirectory, storyId) });
+    const story = yield* loadStoryContext({ configPath: shared.storyConfigPath, storyDirectory: join(shared.storiesDirectory, storyId) });
     const clip: ClipIdentity = { bookId: story.bookId, storyId: story.story.id, audioSha256: story.story.audioSha256, transcriptSha256: story.story.transcriptSha256, sampleRateHz: story.story.sampleRateHz, sampleCount: story.story.sampleCount };
     const { storyDirectory } = story;
     const toSample = (seconds: number) => Math.min(clip.sampleCount, Math.max(0, Math.round(seconds * clip.sampleRateHz)));
@@ -112,8 +112,8 @@ export function openStory(shared: EditorConfigContext, storyId: string): Effect.
   });
 }
 
-/** The configs and one verified story: `storyId` when given, else the planning config's default (A18). The CLIs' entry point. */
-export function loadEditorContext(options: { readonly configPath: string; readonly storyId?: string }): Effect.Effect<EditorContext, EditorServerError | StoryPlanningError, FileSystem.FileSystem> {
+/** The configs and one verified story: `storyId` when given, else the story config's default (A18). The CLIs' entry point. */
+export function loadEditorContext(options: { readonly configPath: string; readonly storyId?: string }): Effect.Effect<EditorContext, EditorServerError | StoryError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     const shared = yield* loadEditorConfig(options);
     if (options.storyId !== undefined && !(yield* listStories(shared)).some(s => s.id === options.storyId)) return yield* fail("NotFound", `No story directory ${options.storyId} under ${shared.storiesDirectory}.`);
@@ -160,7 +160,7 @@ function errorResponse(error: unknown, options: { readonly decisionsFromClient?:
     const status: Record<VisualTimelineError["code"], number> = { InvalidConfig: 500, InvalidRequest: 400, InvalidRecord: 500, InvalidDecisions: options.decisionsFromClient ? 400 : 500, IdentityMismatch: 409, RecordExists: 409, IoFailed: 500 };
     return errorJson(status[error.code], error.code, error.message);
   }
-  if (error instanceof StoryPlanningError) return errorJson(500, error.code, error.message);
+  if (error instanceof StoryError) return errorJson(500, error.code, error.message);
   if (error instanceof Multipart.MultipartError) {
     const tag = error.reason._tag;
     if (tag === "FileTooLarge" || tag === "BodyTooLarge" || tag === "FieldTooLarge" || tag === "TooManyParts") return errorJson(413, "PayloadTooLarge", `Upload rejected: ${tag}.`);

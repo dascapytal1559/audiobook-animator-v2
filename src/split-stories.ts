@@ -1,8 +1,8 @@
 import { parseArgs } from "node:util";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Stdio, Stream } from "effect";
-import { splitStories, StorySplitError, validateStorySplit } from "./modules/story-split/index.js";
-import { formatSplitFailure } from "./split-stories-diagnostics.js";
+import { splitStories, StorySplitError, validateStorySplit } from "./intake/story-split/index.js";
+import { formatSplitFailure } from "./intake/story-split/diagnostics.js";
 
 const diagnosticLimits = { summaryBytes: 2048, detailBytes: 8192 };
 

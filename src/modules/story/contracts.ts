@@ -1,16 +1,16 @@
 import { Data, Schema } from "effect";
 import { Id, NonNegative, Path, Positive, PositiveSeconds, Sha256, Text } from "../../core/schema.js";
-import { StorySplitSegment } from "../story-split/contracts.js";
-import { ProviderTimedWord } from "../transcription/normalize.js";
-import { Punctuation } from "../transcription/contracts.js";
+import { StorySplitSegment } from "../../intake/story-split/contracts.js";
+import { ProviderTimedWord } from "../../intake/transcription/normalize.js";
+import { Punctuation } from "../../intake/transcription/contracts.js";
 
-/** `config/story-planning.json`: the one story directory this configuration selects. Paths resolve from the config file. */
-export const StoryPlanningConfig = Schema.Struct({
+/** `config/story.json`: the one story directory this configuration selects. Paths resolve from the config file. */
+export const StoryConfig = Schema.Struct({
   schemaVersion: Schema.Literal(1), storyDirectory: Path,
   limits: Schema.Struct({ maxManifestBytes: Positive, maxTranscriptBytes: Positive, maxAudioManifestBytes: Positive, maxElements: Positive }),
 });
-export type StoryPlanningConfig = typeof StoryPlanningConfig.Type;
-export type ManifestLimits = Pick<StoryPlanningConfig["limits"], "maxManifestBytes" | "maxTranscriptBytes" | "maxAudioManifestBytes">;
+export type StoryConfig = typeof StoryConfig.Type;
+export type ManifestLimits = Pick<StoryConfig["limits"], "maxManifestBytes" | "maxTranscriptBytes" | "maxAudioManifestBytes">;
 
 /** Where a story came from: the book split that produced it. Historical locators and the split's pinned hashes; the split inventory is not reopened. */
 export const StoryOrigin = Schema.Struct({
@@ -66,7 +66,7 @@ export const PlanningTranscript = Schema.Struct({ ...PairedTranscript.fields,
   text: Schema.String,
 });
 export type PlanningTranscript = typeof PlanningTranscript.Type;
-export class StoryPlanningError extends Data.TaggedError("StoryPlanningError")<{
+export class StoryError extends Data.TaggedError("StoryError")<{
   readonly code: "InvalidConfig" | "InvalidManifest" | "TranscriptMismatch" | "ArtifactMismatch" | "IoFailed";
   readonly message: string;
 }> {}

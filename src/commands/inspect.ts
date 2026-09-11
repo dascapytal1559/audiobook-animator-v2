@@ -1,7 +1,7 @@
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { Effect, FileSystem, Schema, Stdio, Stream, Struct } from "effect";
 import { CliError, Command, Flag } from "effect/unstable/cli";
-import { inspectSourceMedia, SourceMediaRequest } from "../modules/source-media/index.js";
+import { inspectSourceMedia, SourceMediaRequest } from "../intake/source-media/index.js";
 
 const InspectionConfig = SourceMediaRequest.mapFields(Struct.omit(["sourcePath"]));
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(InspectionConfig), {

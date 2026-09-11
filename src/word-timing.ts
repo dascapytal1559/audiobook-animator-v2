@@ -3,7 +3,7 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Stdio, Stream } from "effect";
 import packageJson from "../package.json" with { type: "json" };
 import { alignTiming, EditorServerError, loadEditorContext, loadTiming, makeCaches } from "./modules/editor-server/index.js";
-import { StoryPlanningError } from "./modules/story-planning/index.js";
+import { StoryError } from "./modules/story/index.js";
 import { measureRange, WordTimingError } from "./modules/word-timing/index.js";
 
 const usage = `Usage:
@@ -15,7 +15,7 @@ align    runs the energy-only pass (lead shift, phrase snap, interior scale) ove
          whole-clip flag; --dry-run prints the report and writes nothing. word-timing.json (the editor's manual overlay) is never touched.
 measure  prints the same statistics for the range without aligning: once for the original transcript timing and once for the effective timing.
 Both need the speech regions, computed once with ffmpeg beside the waveform peaks and cached as <story>/cache/speech.json.
---story names a directory under the config's storiesDirectory; without it the story-planning config's default story is used.
+--story names a directory under the config's storiesDirectory; without it the story config's default story is used.
 Config paths resolve from the config file. Help and errors go to stderr.`;
 const invalid = (message: string) => new EditorServerError({ code: "InvalidRequest", message });
 const seconds = (name: string, value: string | undefined) => {
@@ -60,7 +60,7 @@ const main = Effect.gen(function* () {
 });
 
 main.pipe(
-  Effect.catch(error => Console.error(error instanceof EditorServerError || error instanceof StoryPlanningError || error instanceof WordTimingError ? `${error.code}: ${error.message}` : `Cannot run word timing: ${String(error)}`).pipe(
+  Effect.catch(error => Console.error(error instanceof EditorServerError || error instanceof StoryError || error instanceof WordTimingError ? `${error.code}: ${error.message}` : `Cannot run word timing: ${String(error)}`).pipe(
     Effect.andThen(Effect.sync(() => { process.exitCode = 1; })),
   )),
   Effect.provide(NodeServices.layer),

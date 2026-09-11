@@ -10,7 +10,7 @@ const h = "a".repeat(64);
 export type FixtureWord = { readonly value: string; readonly startSeconds: number; readonly endSeconds: number; readonly punctuation: string };
 /**
  * A complete synthetic verified story (10 Hz, 100 samples) that passes loadStoryContext. The story directory is `<root>/pilot`, holding
- * `story.json` and its linked files; the planning config lives in `<root>` beside it. Test-only; not matched by the test glob.
+ * `story.json` and its linked files; the story config lives in `<root>` beside it. Test-only; not matched by the test glob.
  */
 export async function fixture(t: TestContext, options: { readonly words?: ReadonlyArray<FixtureWord> } = {}) {
   const root = await mkdtemp(join(tmpdir(), "planning-input-"));

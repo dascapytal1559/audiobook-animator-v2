@@ -3,13 +3,13 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { Effect, FileSystem, Schema } from "effect";
 import { decodeJson, readBounded as readBoundedBytes } from "../../core/io.js";
 import { StoryTranscript, validateStoryTranscript } from "../story-transcription/contracts.js";
-import { StoryAudioManifest } from "../story-audio/contracts.js";
-import { type ManifestLimits, PairedAudioManifest, PairedTranscript, PlanningTranscript, StoryManifest, StoryPlanningConfig, StoryPlanningError } from "./contracts.js";
-export { type ManifestLimits, PairedAudioManifest, PairedTranscript, PlanningTranscript, StoryManifest, StoryOrigin, StoryPlanningConfig, StoryPlanningError } from "./contracts.js";
+import { StoryAudioManifest } from "../../intake/story-audio/contracts.js";
+import { type ManifestLimits, PairedAudioManifest, PairedTranscript, PlanningTranscript, StoryManifest, StoryConfig, StoryError } from "./contracts.js";
+export { type ManifestLimits, PairedAudioManifest, PairedTranscript, PlanningTranscript, StoryManifest, StoryOrigin, StoryConfig, StoryError } from "./contracts.js";
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-const fail = (code: StoryPlanningError["code"], message: string) => Effect.fail(new StoryPlanningError({ code, message }));
-const readBounded = (path: string, limit: number) => readBoundedBytes(path, limit).pipe(Effect.mapError(e => new StoryPlanningError({ code: "IoFailed", message: e.message })));
-const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: StoryPlanningError["code"], path: string, strict: boolean) => decodeJson(schema, bytes, path, strict).pipe(Effect.mapError(e => new StoryPlanningError({ code, message: e.message })));
+const fail = (code: StoryError["code"], message: string) => Effect.fail(new StoryError({ code, message }));
+const readBounded = (path: string, limit: number) => readBoundedBytes(path, limit).pipe(Effect.mapError(e => new StoryError({ code: "IoFailed", message: e.message })));
+const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: StoryError["code"], path: string, strict: boolean) => decodeJson(schema, bytes, path, strict).pipe(Effect.mapError(e => new StoryError({ code, message: e.message })));
 
 /** `HH:MM:SS.mmm` from a verified sample count, or `H:MM:SS` rounded to the second for reading views. */
 export function durationDisplay(samples: number, rate: number, milliseconds: boolean): string {
@@ -76,7 +76,7 @@ export function loadStoryManifest(options: { readonly storyDirectory: string; re
       return yield* fail("ArtifactMismatch", `Audio manifest or file length does not match ${manifest.id}.`);
     }
     return { storyDirectory, manifest, manifestSha256: hash(manifestBytes), paths: resolved, transcript, transcriptBytes, textBytes, audioManifestBytes, audioByteLength: Number(info.size) };
-  }).pipe(Effect.mapError(error => error instanceof StoryPlanningError ? error : new StoryPlanningError({ code: "IoFailed", message: "Cannot read a linked story artifact." })));
+  }).pipe(Effect.mapError(error => error instanceof StoryError ? error : new StoryError({ code: "IoFailed", message: "Cannot read a linked story artifact." })));
 }
 export type LoadedStoryManifest = Effect.Success<ReturnType<typeof loadStoryManifest>>;
 
@@ -89,12 +89,12 @@ export function loadStoryContext(options: { readonly configPath: string; readonl
     if (!options.configPath || options.configPath.includes("\0")) return yield* fail("InvalidConfig", "Supply an explicit configuration path.");
     if (options.storyDirectory !== undefined && (options.storyDirectory === "" || options.storyDirectory.includes("\0"))) return yield* fail("InvalidConfig", "An explicit story directory must be a non-empty path.");
     const configPath = resolve(options.configPath);
-    const config = yield* decode(StoryPlanningConfig, yield* readBounded(configPath, 65_536), "InvalidConfig", configPath, true);
+    const config = yield* decode(StoryConfig, yield* readBounded(configPath, 65_536), "InvalidConfig", configPath, true);
     const loaded = yield* loadStoryManifest({ storyDirectory: options.storyDirectory ?? resolve(dirname(configPath), config.storyDirectory), limits: config.limits });
     const { manifest: story, paths, storyDirectory } = loaded;
     if (loaded.transcript.kind === "story-transcript") {
       const transcript = yield* decode(StoryTranscript, loaded.transcriptBytes, "TranscriptMismatch", paths.transcriptPath, true);
-      yield* Effect.try({ try: () => validateStoryTranscript(transcript, config.limits.maxElements), catch: e => new StoryPlanningError({ code: "TranscriptMismatch", message: String(e) }) });
+      yield* Effect.try({ try: () => validateStoryTranscript(transcript, config.limits.maxElements), catch: e => new StoryError({ code: "TranscriptMismatch", message: String(e) }) });
       if (!loaded.textBytes.equals(Buffer.from(transcript.text))) return yield* fail("TranscriptMismatch", "Plain text differs from GPT transcript.");
       const audio = yield* decode(StoryAudioManifest, loaded.audioManifestBytes, "ArtifactMismatch", paths.audioManifestPath, true);
       if (audio.identity.source.sha256 !== transcript.provenance.bookSourceSha256 || audio.identity.request.interval.startSample !== transcript.audio.sourceStartSample
@@ -147,6 +147,6 @@ export function loadStoryContext(options: { readonly configPath: string; readonl
       || manifest.identity.request.interval.endSample !== segment.endSample) return yield* fail("ArtifactMismatch", "Audio manifest channels or source interval do not match the selected story.");
     return { bookId: story.book.id, bookTitle: story.book.title, storyDirectory, manifestSha256: loaded.manifestSha256, story, paths, transcript,
       sourceStartSample: segment.startSample, audioVerification: "existing-manifest-association-and-file-size; audio-content-not-rehashed" as const };
-  }).pipe(Effect.mapError(error => error instanceof StoryPlanningError ? error : new StoryPlanningError({ code: "IoFailed", message: "Cannot read a linked story artifact." })));
+  }).pipe(Effect.mapError(error => error instanceof StoryError ? error : new StoryError({ code: "IoFailed", message: "Cannot read a linked story artifact." })));
 }
 export type StoryContext = Effect.Success<ReturnType<typeof loadStoryContext>>;

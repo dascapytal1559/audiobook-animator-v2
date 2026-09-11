@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import type { SourceMediaInspection } from "../modules/source-media/index.js";
+import type { SourceMediaInspection } from "../intake/source-media/index.js";
 
 test("inspect CLI emits only machine JSON and keeps failed invocations on stderr", async (t) => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), "animator-inspect-cli-")));

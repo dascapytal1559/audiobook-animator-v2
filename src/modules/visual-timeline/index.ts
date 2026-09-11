@@ -2,7 +2,7 @@ import { dirname, extname, join, resolve } from "node:path";
 import { Effect, FileSystem, type Schema } from "effect";
 import { sameClip } from "../../core/identity.js";
 import { decodeJson, encodeJson as encode, readBounded, writeAtomic as writeAtomicBytes } from "../../core/io.js";
-import { loadStoryContext, StoryPlanningError } from "../story-planning/index.js";
+import { loadStoryContext, StoryError } from "../story/index.js";
 import { ClipIdentity, DEFAULT_SETTINGS, Decisions, type DecisionsBody, type ShotMode, ShotRecord, VisualTimelineConfig, VisualTimelineError } from "./contracts.js";
 import { mergeTimeline } from "./merge.js";
 import { isUlid, mintUlid } from "./ulid.js";
@@ -17,13 +17,13 @@ const io = <A>(effect: Effect.Effect<A, unknown>, message: string) => effect.pip
 const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) => decodeJson(schema, bytes, path, true).pipe(Effect.mapError(e => new VisualTimelineError({ code, message: e.message })));
 const writeAtomic = (path: string, bytes: Uint8Array) => writeAtomicBytes(path, bytes).pipe(Effect.mapError(() => new VisualTimelineError({ code: "IoFailed", message: `Cannot write ${path}.` })));
 
-/** Config, verified clip identity from story-planning, and the story directory every timeline file lives in. `storyDirectory` overrides the planning config's default story. */
+/** Config, verified clip identity from story, and the story directory every timeline file lives in. `storyDirectory` overrides the story config's default story. */
 function loadContext(configPath: string, explicitStoryDirectory?: string) {
   return Effect.gen(function* () {
     if (!configPath || configPath.includes("\0")) return yield* fail("InvalidConfig", "Supply an explicit configuration path.");
     const path = resolve(configPath);
     const config = yield* decode(VisualTimelineConfig, yield* read(path, 65_536), "InvalidConfig", path);
-    const context = yield* loadStoryContext({ configPath: resolve(dirname(path), config.storyPlanningConfigPath), ...(explicitStoryDirectory !== undefined ? { storyDirectory: explicitStoryDirectory } : {}) });
+    const context = yield* loadStoryContext({ configPath: resolve(dirname(path), config.storyConfigPath), ...(explicitStoryDirectory !== undefined ? { storyDirectory: explicitStoryDirectory } : {}) });
     const clip: ClipIdentity = { bookId: context.bookId, storyId: context.story.id, audioSha256: context.story.audioSha256,
       transcriptSha256: context.story.transcriptSha256, sampleRateHz: context.story.sampleRateHz, sampleCount: context.story.sampleCount };
     const storyDirectory = context.storyDirectory;
@@ -70,12 +70,12 @@ function loadDecisions(ctx: Context) {
     return decisions;
   });
 }
-const wrap = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.mapError(e => e instanceof VisualTimelineError || e instanceof StoryPlanningError ? e : new VisualTimelineError({ code: "IoFailed", message: "Cannot read the visual timeline." })));
+const wrap = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.mapError(e => e instanceof VisualTimelineError || e instanceof StoryError ? e : new VisualTimelineError({ code: "IoFailed", message: "Cannot read the visual timeline." })));
 
 const NO_WORDS: ReadonlyMap<string, number> = new Map();
 /**
  * Records plus decisions, merged into candidate groups and a stitched timeline covering the whole clip. Read-only.
- * `storyDirectory` opens that story instead of the planning config's default (A18).
+ * `storyDirectory` opens that story instead of the story config's default (A18).
  * `wordStarts` (word id to effective start sample) resolves shot anchors; without it every anchor is unresolved and falls back to its override or record.
  */
 export function loadVisualTimeline(options: { readonly configPath: string; readonly storyDirectory?: string; readonly wordStarts?: ReadonlyMap<string, number> }) {
@@ -91,7 +91,7 @@ export type VisualTimeline = Effect.Success<ReturnType<typeof loadVisualTimeline
 
 export type AddShotRequest = {
   readonly configPath: string;
-  /** The story to write into; the planning config's default story when absent (A18). */
+  /** The story to write into; the story config's default story when absent (A18). */
   readonly storyDirectory?: string;
   readonly startSample?: number; readonly startSeconds?: number; readonly mode: ShotMode;
   /** Explicit ULID for reproducible imports; a fresh one is minted when absent. */

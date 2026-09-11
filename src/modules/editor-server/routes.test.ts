@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 import { NodeHttpServer, NodeServices } from "@effect/platform-node";
 import { Effect, Layer, Stream } from "effect";
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http";
-import { fixture, type FixtureWord } from "../story-planning/context.fixture.js";
+import { fixture, type FixtureWord } from "../story/context.fixture.js";
 import { loadEditorLibrary, makeEditorRoutes } from "./index.js";
 const encode = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
 /** A 1x1 transparent PNG. */
@@ -23,7 +23,7 @@ async function serve(t: TestContext, options: { readonly staticDirectory?: strin
   }
   await mkdir(join(planningDirectory, "shots"), { recursive: true });
   await mkdir(join(planningDirectory, "cache"), { recursive: true });
-  await writeFile(join(story.root, "visual-timeline.json"), encode({ schemaVersion: 1, storyPlanningConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } }));
+  await writeFile(join(story.root, "visual-timeline.json"), encode({ schemaVersion: 1, storyConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } }));
   const configPath = join(story.root, "editor-server.json");
   // At 10 Hz a 100 ms frame is one sample; the lead is 2 samples.
   await writeFile(configPath, encode({ schemaVersion: 1, storiesDirectory: ".", visualTimelineConfigPath: "visual-timeline.json", ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 },
@@ -333,7 +333,7 @@ test("audio: single byte ranges, suffix ranges, 416 with the size, HEAD metadata
   }));
 });
 
-test("/api/events sends ready on connect and pushes timeline-changed after a file lands in the planning directory", async t => {
+test("/api/events sends ready on connect and pushes timeline-changed after a file lands in the story directory", async t => {
   const s = await serve(t);
   const seen = await s.run(get("/api/stories/pilot/events").pipe(Effect.flatMap(response => {
     assert.equal(response.status, 200);

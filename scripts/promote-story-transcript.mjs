@@ -5,7 +5,7 @@ import { readFile, writeFile, mkdir, readdir, rename, stat } from 'node:fs/promi
 import { join, resolve, dirname } from 'node:path';
 import { Schema } from 'effect';
 import { StoryTranscript, validateStoryTranscript } from '../dist/modules/story-transcription/contracts.js';
-import { StoryManifest } from '../dist/modules/story-planning/contracts.js';
+import { StoryManifest } from '../dist/modules/story/contracts.js';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const { values } = parseArgs({ options: { story: { type: 'string' }, input: { type: 'string' } } });
 if (!values.story || !values.input) throw new Error('Required: --story DIRECTORY --input PREPARED_JSON');

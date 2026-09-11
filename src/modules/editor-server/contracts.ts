@@ -4,7 +4,7 @@ const Int16 = Schema.Int.check(Schema.isBetween({ minimum: -32768, maximum: 3276
 
 /**
  * `config/editor-server.json`. Paths resolve from the config file; the port and static directory are command-line arguments.
- * Every directory under `storiesDirectory` is a story the server can open (A55); the story-planning config reached through the visual-timeline config names the default one (A18) and must live directly under it.
+ * Every directory under `storiesDirectory` is a story the server can open (A55); the story config reached through the visual-timeline config names the default one (A18) and must live directly under it.
  */
 export const EditorServerConfig = Schema.Struct({
   schemaVersion: Schema.Literal(1),

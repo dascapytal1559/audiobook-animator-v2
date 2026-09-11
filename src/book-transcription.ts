@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Stdio, Stream } from "effect";
-import { BookTranscriptionError, importRevBookTranscript, prepareRevBook } from "./modules/transcription/book.js";
+import { BookTranscriptionError, importRevBookTranscript, prepareRevBook } from "./intake/transcription/book.js";
 
 const main = Effect.gen(function* () {
   const { values, positionals } = yield* Effect.try({

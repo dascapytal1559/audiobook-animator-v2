@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 import { NodeServices } from "@effect/platform-node";
 import { Effect } from "effect";
-import { fixture } from "../story-planning/context.fixture.js";
-import { StoryPlanningError } from "../story-planning/index.js";
+import { fixture } from "../story/context.fixture.js";
+import { StoryError } from "../story/index.js";
 import { addShot, type DecisionsBody, loadVisualTimeline, mintUlid, ULID_PATTERN, VisualTimelineError, writeDecisions } from "./index.js";
 const provide = <A, E>(effect: Effect.Effect<A, E, NodeServices.NodeServices>) => Effect.runPromise(effect.pipe(Effect.provide(NodeServices.layer)));
 const encode = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
@@ -20,7 +20,7 @@ async function planning(t: TestContext) {
   const planningDirectory = story.dir;
   await mkdir(join(planningDirectory, "shots"), { recursive: true });
   const configPath = join(story.root, "visual-timeline.json");
-  const config = { schemaVersion: 1, storyPlanningConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } };
+  const config = { schemaVersion: 1, storyConfigPath: "config.json", limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } };
   await writeFile(configPath, encode(config));
   const clip = { bookId: "book", storyId: "pilot", audioSha256: story.story.audioSha256, transcriptSha256: story.story.transcriptSha256, sampleRateHz: 10, sampleCount: 100 };
   const producer = { name: "test", version: "0" };
@@ -48,7 +48,7 @@ test("ULIDs are 26 Crockford characters, timestamp-prefixed, and unique", () => 
   assert.throws(() => mintUlid(2 ** 48));
 });
 
-test("an empty planning directory yields no records, default settings, and one gap over the whole clip", async t => {
+test("an empty story directory yields no records, default settings, and one gap over the whole clip", async t => {
   const p = await planning(t);
   const result = await p.load();
   assert.deepEqual(result.records, []);
@@ -226,18 +226,18 @@ test("writeDecisions round-trips through load, sets updatedAt, and rejects inval
   assert.deepEqual(JSON.parse(await readFile(join(p.planningDirectory, "decisions.json"), "utf8")), written);
 });
 
-test("a broken story identity surfaces as the story-planning error, not a timeline error", async t => {
+test("a broken story identity surfaces as the story error, not a timeline error", async t => {
   const p = await planning(t);
   await writeFile(join(p.story.dir, "transcript.json"), "{}");
-  await assert.rejects(p.load(), (e: unknown) => e instanceof StoryPlanningError && e.code === "TranscriptMismatch");
+  await assert.rejects(p.load(), (e: unknown) => e instanceof StoryError && e.code === "TranscriptMismatch");
 });
 
 test("show on The Great Silence loads the real verified clip", async t => {
   const configPath = fileURLToPath(new URL("../../../config/visual-timeline.json", import.meta.url));
-  const storyPlanningPath = fileURLToPath(new URL("../../../config/story-planning.json", import.meta.url));
+  const storyConfigPath = fileURLToPath(new URL("../../../config/story.json", import.meta.url));
   const manifest = fileURLToPath(new URL("../../../data/stories/the-great-silence/story.json", import.meta.url));
   if (!(await access(manifest).then(() => true, () => false))) return t.skip("local story data is not present");
-  assert.ok(await access(storyPlanningPath).then(() => true, () => false));
+  assert.ok(await access(storyConfigPath).then(() => true, () => false));
   const result = await provide(loadVisualTimeline({ configPath, storyDirectory: fileURLToPath(new URL("../../../data/stories/the-great-silence", import.meta.url)) }));
   assert.deepEqual([result.clip.bookId, result.clip.storyId, result.clip.sampleRateHz, result.clip.sampleCount], ["exhalation", "the-great-silence", 44100, 21608368]);
   assert.match(result.storyDirectory, /data\/stories\/the-great-silence$/);

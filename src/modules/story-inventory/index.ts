@@ -1,14 +1,14 @@
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { Effect, FileSystem } from "effect";
-import { durationDisplay, type LoadedStoryManifest, loadStoryManifest, StoryPlanningError } from "../story-planning/index.js";
+import { durationDisplay, type LoadedStoryManifest, loadStoryManifest, StoryError } from "../story/index.js";
 import { decodeJson, readBounded } from "../../core/io.js";
 import { StoryInventoryConfig, StoryInventoryError } from "./contracts.js";
 
 export { StoryInventoryConfig, StoryInventoryError } from "./contracts.js";
 
 const fail = (code: StoryInventoryError["code"], message: string) => Effect.fail(new StoryInventoryError({ code, message }));
-/** story-planning's reader and manifest loader use the same code names; only the error type changes. */
-const own = <A, R>(effect: Effect.Effect<A, StoryPlanningError, R>) => effect.pipe(Effect.mapError(e => new StoryInventoryError({ code: e.code, message: e.message })));
+/** story's reader and manifest loader use the same code names; only the error type changes. */
+const own = <A, R>(effect: Effect.Effect<A, StoryError, R>) => effect.pipe(Effect.mapError(e => new StoryInventoryError({ code: e.code, message: e.message })));
 const jsonBytes = (value: unknown): Buffer => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 
 const markdown = (value: string): string => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")

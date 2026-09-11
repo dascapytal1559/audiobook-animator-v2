@@ -22,7 +22,7 @@ pnpm run cli --version
 
 The source-media module reads a local file, computes its SHA-256 identity, probes audio streams and chapter metadata, and reports optional CUE evidence. It retains original timing information and reports malformed or conflicting evidence. Its result does not approve story boundaries.
 
-The module is independently callable from `src/modules/source-media/index.ts`. It accepts an explicit request and uses Effect's filesystem and child-process services. The CLI is the application entry point; operational configuration belongs at that boundary.
+The module is independently callable from `src/intake/source-media/index.ts`. It accepts an explicit request and uses Effect's filesystem and child-process services. The CLI is the application entry point; operational configuration belongs at that boundary.
 
 ```sh
 pnpm run cli inspect --source data/books/exhalation/input/book.mp3 --config config/source-media.json
@@ -125,14 +125,14 @@ The old comparison player and two-minute timestamp demo commands were retired on
 
 ## Story planning input
 
-The `story-planning` module loads a verified story for downstream analysis. It supplies the manifest-selected working transcript and verified media references in a read-only context; automated semantic planning and visual generation remain to be implemented.
+The `story` module loads a verified story for downstream analysis. It supplies the manifest-selected working transcript and verified media references in a read-only context; automated semantic planning and visual generation remain to be implemented.
 
 ```sh
 pnpm run build
-node dist/story-planning.js --config config/story-planning.json
+node dist/story.js --config config/story.json
 ```
 
-The checked-in configuration selects the story directory for Tower of Babylon and supplies explicit read/element limits. Config paths resolve from the config file. The CLI prints JSON to stdout; help and errors use stderr. Code can call `loadStoryContext` from `src/modules/story-planning/index.ts` directly through Effect.
+The checked-in configuration selects the story directory for Tower of Babylon and supplies explicit read/element limits. Config paths resolve from the config file. The CLI prints JSON to stdout; help and errors use stderr. Code can call `loadStoryContext` from `src/modules/story/index.ts` directly through Effect.
 
 The manifest's explicit `transcriptProvider` selects the format. OpenAI stories use `kind: "story-transcript"`, `gpt:wN` word IDs, exact GPT text/punctuation and initial sample positions. Their source book offset comes from audio verification, not Rev word IDs. Rev-only stories retain the paired format and are labelled as split text awaiting GPT. Both paths validate transcript identity, text and word counts, timing, audio identity and the original book interval. Downstream GPT loading does not reopen Rev files; the one-time timing seed records its Rev hash. Audio checks use the recorded verification manifest and actual file size; loading does not decode or rehash audio.
 
@@ -140,7 +140,7 @@ The pilot's narrative analysis is a separate, agent-authored document. Its timin
 
 ## Visual timeline
 
-The `visual-timeline` module owns the storyboard for one verified clip, stored in the story directory `data/stories/<story>/` in two kinds of file. Generation records are immutable: any script writes `shots/<ulid>/record.json` with its image beside it, holding the clip identity (book, story, audio and transcript hashes, sample rate and count), an integer `startSample` on the clip's own clock, the mode, optional label/prompt/image/notes, `createdAt`, and the producer. The decisions overlay `decisions.json` is written only by the editor or CLI and holds per-shot overrides (`startSample`, `mode`, `selected`, `hidden`, `notes`) keyed by shot id, plus story settings such as the 16:9 frame aspect. Both files pin the clip identity, and every load verifies them against the story selected by `config/story-planning.json`; a mismatch, an id that differs from its directory name, an image path outside its directory, or a decision for an unknown shot is an error that names the file.
+The `visual-timeline` module owns the storyboard for one verified clip, stored in the story directory `data/stories/<story>/` in two kinds of file. Generation records are immutable: any script writes `shots/<ulid>/record.json` with its image beside it, holding the clip identity (book, story, audio and transcript hashes, sample rate and count), an integer `startSample` on the clip's own clock, the mode, optional label/prompt/image/notes, `createdAt`, and the producer. The decisions overlay `decisions.json` is written only by the editor or CLI and holds per-shot overrides (`startSample`, `mode`, `selected`, `hidden`, `notes`) keyed by shot id, plus story settings such as the 16:9 frame aspect. Both files pin the clip identity, and every load verifies them against the story selected by `config/story.json`; a mismatch, an id that differs from its directory name, an image path outside its directory, or a decision for an unknown shot is an error that names the file.
 
 The merge applies decision overrides over record fields, then groups shots with the same effective start as candidates. One candidate is selected per start: the explicitly selected one, otherwise the newest by `createdAt`. Hidden shots are never selected. The stitched timeline is the selected shots in start order, each holding until the next start and the last until the end of the clip; when nothing starts at sample 0 it opens with an explicit gap, so coverage is always total and visible.
 
@@ -150,7 +150,7 @@ node dist/visual-timeline.js show --config config/visual-timeline.json
 node dist/visual-timeline.js add --config config/visual-timeline.json --at-seconds 12.5 --mode graphic-illustration --label "Opening" --image path/to/image.png
 ```
 
-`show` prints the records, decisions, candidate groups, and stitched timeline as JSON. `add` mints a ULID, copies the image (within the configured size limit) beside a new `record.json` written through a temporary file and rename, and prints the record; it never overwrites an existing shot. The configuration points at the story-planning config and the planning directory and sets explicit byte and count limits; paths resolve from the config file. Code can call `loadVisualTimeline`, `addShot`, and `writeDecisions` from `src/modules/visual-timeline/index.ts`.
+`show` prints the records, decisions, candidate groups, and stitched timeline as JSON. `add` mints a ULID, copies the image (within the configured size limit) beside a new `record.json` written through a temporary file and rename, and prints the record; it never overwrites an existing shot. The configuration points at the story config and the story directory and sets explicit byte and count limits; paths resolve from the config file. Code can call `loadVisualTimeline`, `addShot`, and `writeDecisions` from `src/modules/visual-timeline/index.ts`.
 
 ### Seed import
 
@@ -184,7 +184,7 @@ Word timing in the Edited row: click selects a word (or a whole sentence in Sent
 
 ## Editor server
 
-The editor server is a thin Effect HTTP layer over the story-planning, visual-timeline, and word-timing modules. It serves every story directory under the `storiesDirectory` named in `config/editor-server.json` on 127.0.0.1 with no authentication; the story selected through `config/visual-timeline.json` and `config/story-planning.json` is the default and must live directly under that directory. The listing is taken once at start-up from each story's `story.json` (stories added later need a restart), the default story is verified before the server listens, and every other story is verified on its first open and kept for the process lifetime; a story that fails verification answers 500 and is retried on the next request. Records, decisions, and timing overlays are reread on every request because scripts write them independently, and a recursive watch on the open story's directory pushes change notices to the browser over server-sent events. Nothing in the server touches FFmpeg except the one-time waveform peaks and speech-region computation.
+The editor server is a thin Effect HTTP layer over the story, visual-timeline, and word-timing modules. It serves every story directory under the `storiesDirectory` named in `config/editor-server.json` on 127.0.0.1 with no authentication; the story selected through `config/visual-timeline.json` and `config/story.json` is the default and must live directly under that directory. The listing is taken once at start-up from each story's `story.json` (stories added later need a restart), the default story is verified before the server listens, and every other story is verified on its first open and kept for the process lifetime; a story that fails verification answers 500 and is retried on the next request. Records, decisions, and timing overlays are reread on every request because scripts write them independently, and a recursive watch on the open story's directory pushes change notices to the browser over server-sent events. Nothing in the server touches FFmpeg except the one-time waveform peaks and speech-region computation.
 
 ```sh
 pnpm run build
@@ -215,7 +215,7 @@ Errors are JSON `{ code, message }`: 400 for a bad request or invalid client-sup
 
 ## Word timing
 
-The transcriber's word times lead the audio by roughly 150 ms on the pilot, so the `word-timing` module (`src/modules/word-timing/`) lets the editor and a script correct them without ever writing the paired transcript. Two overlay files in the planning directory, both keyed by word id, holding `{ startSample, endSample }` on the clip clock, and pinned to the clip identity like `decisions.json`:
+The transcriber's word times lead the audio by roughly 150 ms on the pilot, so the `word-timing` module (`src/modules/word-timing/`) lets the editor and a script correct them without ever writing the paired transcript. Two overlay files in the story directory, both keyed by word id, holding `{ startSample, endSample }` on the clip clock, and pinned to the clip identity like `decisions.json`:
 
 | File | Writer | Contents |
 | --- | --- | --- |
@@ -236,7 +236,7 @@ node dist/word-timing.js align   --config config/editor-server.json --all
 node dist/word-timing.js align   --config config/editor-server.json --story exhalation --from 0 --to 30
 ```
 
-`measure` prints the statistics for the original and the effective timing of the range without writing. `align` writes the range's entries into `word-timing.auto.json` and prints the run report; `--dry-run` prints without writing, and `--all` is the explicit whole-clip flag. `--story` names a directory under the editor config's `storiesDirectory`; without it the story-planning config's default story is used. Ranges are in seconds and resolve to `[from, to)` on the clip clock. The editor reaches the same operations through `PUT /api/word-timing` and `POST /api/word-timing/align`, and reads the regions from `GET /api/speech`. Help and errors go to stderr.
+`measure` prints the statistics for the original and the effective timing of the range without writing. `align` writes the range's entries into `word-timing.auto.json` and prints the run report; `--dry-run` prints without writing, and `--all` is the explicit whole-clip flag. `--story` names a directory under the editor config's `storiesDirectory`; without it the story config's default story is used. Ranges are in seconds and resolve to `[from, to)` on the clip clock. The editor reaches the same operations through `PUT /api/word-timing` and `POST /api/word-timing/align`, and reads the regions from `GET /api/speech`. Help and errors go to stderr.
 
 ## Known dependency details
 
