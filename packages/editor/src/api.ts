@@ -20,7 +20,7 @@ export type AutoRun = { startSample: number; endSample: number; ranAt: string; r
 export type TimingSummary = { inversions: unknown; autoRuns: AutoRun[]; manualCount: number; autoCount: number };
 /** Explicit server grouping settings and sentence marks merged because the effective gap was too short. */
 export type StoryChunking = { pauseBreakMs: number; minSentenceBreakMs: number; mergedSentenceBreaks: Array<{ afterWordId: string; nextWordId: string; gapSamples: number; gapMs: number; text: string }> };
-export type StoryResponse = { clip: ClipIdentity; story: { title: string; bookTitle: string }; sourceStartSample: number; words: Word[]; chunks: Chunk[]; chunking: StoryChunking; timing?: TimingSummary };
+export type StoryResponse = { clip: ClipIdentity; story: { title: string; bookTitle: string; transcriptProvider?: "openai" | "rev-ai" }; sourceStartSample: number; words: Word[]; chunks: Chunk[]; chunking: StoryChunking; timing?: TimingSummary };
 /** Detected speech regions on the clip clock (A45, A46). */
 export type SpeechResponse = { schemaVersion: number; audioSha256: string; sampleRateHz: number; sampleCount: number; frameSamples: number; thresholdDbfs: number; minSilenceMs: number; minSpeechMs: number; regions: Span[] };
 /** The complete manual overlay, keyed by word id (A36). A PUT replaces the file wholesale, like decisions. */

@@ -41,7 +41,7 @@ export async function fixture(t: TestContext, options: { readonly words?: Readon
   const story = { schemaVersion: 1, kind: "story-manifest", id: "pilot", title: "Pilot", book: { id: "book", title: "Book" }, spoilerPolicy: "premise-only", synopsis: "A synthetic pilot story.",
     wordCount: transcript.wordCount, sampleCount: 100, sampleRateHz: 10, durationSeconds: 10, durationDisplay: "00:00:10.000",
     audioPath: "audio.flac", audioSha256: hash(audioBytes), audioManifestPath: "manifest.json", audioManifestSha256: hash(encode(manifest)),
-    transcriptPath: "transcript.json", transcriptSha256: hash(encode(transcript)), textPath: "transcript.txt", textSha256: hash(Buffer.from(transcript.text + "\n")),
+    transcriptProvider: "rev-ai", transcriptPath: "transcript.json", transcriptSha256: hash(encode(transcript)), textPath: "transcript.txt", textSha256: hash(Buffer.from(transcript.text + "\n")),
     origin: { splitInventoryPath: "../inventory.json", splitInventorySha256: h, segmentPath: "../segments/pilot", planSha256: h, transcriptSha256: h, sourceSha256: h, providerJobId: "job" } };
   const config = { schemaVersion: 1, storyDirectory: "pilot",
     limits: { maxManifestBytes: 65536, maxTranscriptBytes: 65536, maxAudioManifestBytes: 65536, maxElements: Math.max(10, transcript.elements.length) } };

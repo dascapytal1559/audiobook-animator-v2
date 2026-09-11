@@ -63,11 +63,14 @@ export function loadTiming(ctx: EditorContext) {
 }
 /** `GET /api/story`: identity, titles, effective words with their layers, chunks on effective times, and the timing summary. */
 export function storyPayload(ctx: EditorContext) {
-  return Effect.map(loadTiming(ctx), t => ({
-    clip: ctx.clip, story: { title: ctx.story.story.title, bookTitle: ctx.story.bookTitle }, sourceStartSample: ctx.story.transcript.segment.startSample,
-    words: t.effective.words, chunks: t.chunks, chunking: t.chunking,
-    timing: { inversions: t.effective.inversions, autoRuns: t.auto?.runs ?? [], manualCount: t.effective.manualCount, autoCount: t.effective.autoCount },
-  }));
+  return Effect.gen(function* () {
+    const t = yield* loadTiming(ctx);
+    return {
+      clip: ctx.clip, story: { title: ctx.story.story.title, bookTitle: ctx.story.bookTitle, transcriptProvider: ctx.story.story.transcriptProvider }, sourceStartSample: ctx.story.sourceStartSample,
+      words: t.effective.words, chunks: t.chunks, chunking: t.chunking,
+      timing: { inversions: t.effective.inversions, autoRuns: t.auto?.runs ?? [], manualCount: t.effective.manualCount, autoCount: t.effective.autoCount },
+    };
+  });
 }
 export type StoryPayload = Effect.Success<ReturnType<typeof storyPayload>>;
 

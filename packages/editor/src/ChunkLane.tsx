@@ -10,7 +10,7 @@ export type TextLaneMode = "sentences" | "words";
 export type RowVariant = "original" | "auto" | "edited";
 
 type Props = {
-  variant: RowVariant; mode: TextLaneMode; chunks: ReadonlyArray<Chunk>; words: ReadonlyArray<Word>; viewStartSample: number; viewEndSample: number; pxPerSample: number;
+  variant: RowVariant; label?: string; mode: TextLaneMode; chunks: ReadonlyArray<Chunk>; words: ReadonlyArray<Word>; viewStartSample: number; viewEndSample: number; pxPerSample: number;
   /** The clip's sample count: the last box may grow into the trailing silence only this far, so no box extends the scroll area past the clip. */
   clipEndSample: number;
   currentWordId: string | null;
@@ -31,21 +31,21 @@ type Props = {
  * to the next chunk's start (the clip end for the last one); only when even that is narrower than the text is it clipped with an
  * ellipsis (the title carries the full text). In the Edited row, selected boxes are highlighted and a word carries marks for its manual and auto layers (CSS only).
  */
-export function ChunkLane({ variant, mode, chunks, words, viewStartSample, viewEndSample, pxPerSample, clipEndSample, currentWordId, selectedIds, onWordClick, onChunkClick, onItemPointerDown }: Props) {
+export function ChunkLane({ variant, label, mode, chunks, words, viewStartSample, viewEndSample, pxPerSample, clipEndSample, currentWordId, selectedIds, onWordClick, onChunkClick, onItemPointerDown }: Props) {
   const wordsById = useMemo(() => new Map(words.map(w => [w.id, w])), [words]);
   const chunkIdByWordId = useMemo(() => new Map(chunks.flatMap(c => c.wordIds.map(id => [id, c.id] as const))), [chunks]);
   const currentChunkId = currentWordId === null ? null : chunkIdByWordId.get(currentWordId) ?? null;
   const interactive = onItemPointerDown !== undefined;
   // All hooks run above this line so the hook order is identical in both modes.
   if (mode === "words") {
-    return <WordBoxes variant={variant} words={words} viewStartSample={viewStartSample} viewEndSample={viewEndSample} pxPerSample={pxPerSample} clipEndSample={clipEndSample} currentWordId={currentWordId} selectedIds={selectedIds} onWordClick={onWordClick} {...(onItemPointerDown !== undefined ? { onItemPointerDown } : {})} />;
+    return <WordBoxes variant={variant} label={label ?? variant} words={words} viewStartSample={viewStartSample} viewEndSample={viewEndSample} pxPerSample={pxPerSample} clipEndSample={clipEndSample} currentWordId={currentWordId} selectedIds={selectedIds} onWordClick={onWordClick} {...(onItemPointerDown !== undefined ? { onItemPointerDown } : {})} />;
   }
   const margin = (viewEndSample - viewStartSample) / 2;
   const visible = chunks.map((chunk, index) => ({ chunk, next: chunks[index + 1] }))
     .filter(({ chunk }) => chunk.endSample >= viewStartSample - margin && chunk.startSample <= viewEndSample + margin);
   return (
     <div className={`lane lane-chunks row-${variant}`} data-row={variant}>
-      <span className="row-label">{variant}</span>
+      <span className="row-label">{label ?? variant}</span>
       {visible.map(({ chunk, next }) => {
         const left = chunk.startSample * pxPerSample;
         const minWidth = Math.max(2, (chunk.endSample - chunk.startSample) * pxPerSample);
@@ -82,14 +82,14 @@ export function ChunkLane({ variant, mode, chunks, words, viewStartSample, viewE
 type WordProps = Omit<Props, "mode" | "chunks" | "onChunkClick">;
 
 /** Word mode: one box per word, sized like a chunk box (at least its duration, growing into the pause before the next word). */
-function WordBoxes({ variant, words, viewStartSample, viewEndSample, pxPerSample, clipEndSample, currentWordId, selectedIds, onWordClick, onItemPointerDown }: WordProps) {
+function WordBoxes({ variant, label, words, viewStartSample, viewEndSample, pxPerSample, clipEndSample, currentWordId, selectedIds, onWordClick, onItemPointerDown }: WordProps) {
   const interactive = onItemPointerDown !== undefined;
   const margin = (viewEndSample - viewStartSample) / 2;
   const visible = words.map((word, index) => ({ word, next: words[index + 1] }))
     .filter(({ word }) => word.endSample >= viewStartSample - margin && word.startSample <= viewEndSample + margin);
   return (
     <div className={`lane lane-chunks lane-words row-${variant}`} data-row={variant}>
-      <span className="row-label">{variant}</span>
+      <span className="row-label">{label ?? variant}</span>
       {visible.map(({ word, next }) => {
         const left = word.startSample * pxPerSample;
         const minWidth = Math.max(2, (word.endSample - word.startSample) * pxPerSample);

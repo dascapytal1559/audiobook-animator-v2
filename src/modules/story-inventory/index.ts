@@ -36,7 +36,7 @@ function renderMarkdown(output: string, books: ReadonlyArray<LoadedBook>, combin
   const columns = combined ? "Story | Collection | Duration | Synopsis | Files" : "Story | Duration | Synopsis | Files";
   const separator = combined ? "--- | --- | ---: | --- | ---" : "--- | ---: | --- | ---";
   const rows = stories.map(({ manifest, paths }) => {
-    const files = `${link("Audio", output, paths.audioPath)} · ${link("Text", output, paths.textPath)} · ${link("Timed JSON", output, paths.transcriptPath)}`;
+    const files = `${link("Audio", output, paths.audioPath)} · ${link(manifest.transcriptProvider === "openai" ? "GPT text" : "Rev split text", output, paths.textPath)} · ${link("Timed JSON", output, paths.transcriptPath)}`;
     return `| ${markdown(manifest.title)} | ${combined ? `${markdown(manifest.book.title)} | ` : ""}${durationDisplay(manifest.sampleCount, manifest.sampleRateHz, false)} | ${markdown(manifest.synopsis)} | ${files} |`;
   });
   const collectionLinks = combined ? `\n\nCollections: ${books.map((book) => link(book.bookTitle, output, book.outputMarkdownPath)).join(" · ")}.` : "";
@@ -141,7 +141,7 @@ export function renderStoryInventory(options: { readonly configPath: string }) {
         wordCount: manifest.wordCount, sampleCount: manifest.sampleCount, sampleRateHz: manifest.sampleRateHz, durationSeconds: manifest.durationSeconds, durationDisplay: manifest.durationDisplay,
         storyDirectory: pathFrom(outputJsonPath, storyDirectory), manifestPath: pathFrom(outputJsonPath, paths.manifestPath), manifestSha256,
         audioPath: pathFrom(outputJsonPath, paths.audioPath), audioSha256: manifest.audioSha256, audioManifestPath: pathFrom(outputJsonPath, paths.audioManifestPath), audioManifestSha256: manifest.audioManifestSha256,
-        transcriptPath: pathFrom(outputJsonPath, paths.transcriptPath), transcriptSha256: manifest.transcriptSha256, textPath: pathFrom(outputJsonPath, paths.textPath), textSha256: manifest.textSha256 })),
+        transcriptProvider: manifest.transcriptProvider, transcriptPath: pathFrom(outputJsonPath, paths.transcriptPath), transcriptSha256: manifest.transcriptSha256, textPath: pathFrom(outputJsonPath, paths.textPath), textSha256: manifest.textSha256 })),
     };
     const outputs = [
       ...books.map((book) => ({ path: book.outputMarkdownPath, bytes: Buffer.from(renderMarkdown(book.outputMarkdownPath, [book], false)) })),

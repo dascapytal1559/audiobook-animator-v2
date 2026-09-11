@@ -105,7 +105,7 @@ export function openStory(shared: EditorConfigContext, storyId: string): Effect.
     const clip: ClipIdentity = { bookId: story.bookId, storyId: story.story.id, audioSha256: story.story.audioSha256, transcriptSha256: story.story.transcriptSha256, sampleRateHz: story.story.sampleRateHz, sampleCount: story.story.sampleCount };
     const { storyDirectory } = story;
     const toSample = (seconds: number) => Math.min(clip.sampleCount, Math.max(0, Math.round(seconds * clip.sampleRateHz)));
-    const elements: ReadonlyArray<ChunkElement> = story.transcript.elements.map(e => e.kind === "word"
+    const elements: ReadonlyArray<ChunkElement> = story.transcript.kind === "story-transcript" ? story.transcript.elements : story.transcript.elements.map(e => e.kind === "word"
       ? { kind: "word", id: e.id, value: e.value, startSample: toSample(e.approximateSegmentStartSeconds), endSample: toSample(e.approximateSegmentEndSeconds) }
       : { kind: "punctuation", value: e.value });
     const words = elements.flatMap(e => e.kind === "word" ? [{ id: e.id, value: e.value, startSample: e.startSample, endSample: e.endSample }] : []);

@@ -238,7 +238,7 @@ test("show on The Great Silence loads the real verified clip", async t => {
   const manifest = fileURLToPath(new URL("../../../data/stories/the-great-silence/story.json", import.meta.url));
   if (!(await access(manifest).then(() => true, () => false))) return t.skip("local story data is not present");
   assert.ok(await access(storyPlanningPath).then(() => true, () => false));
-  const result = await provide(loadVisualTimeline({ configPath }));
+  const result = await provide(loadVisualTimeline({ configPath, storyDirectory: fileURLToPath(new URL("../../../data/stories/the-great-silence", import.meta.url)) }));
   assert.deepEqual([result.clip.bookId, result.clip.storyId, result.clip.sampleRateHz, result.clip.sampleCount], ["exhalation", "the-great-silence", 44100, 21608368]);
   assert.match(result.storyDirectory, /data\/stories\/the-great-silence$/);
   const last = result.stitched.at(-1)!;

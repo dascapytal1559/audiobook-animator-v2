@@ -46,7 +46,7 @@ async function fixture(t: TestContext) {
       };
       const transcriptBytes = encode(transcript);
       const manifest = {
-        schemaVersion: 1, kind: "story-manifest", id, title, book: { id: bookId, title: `Collection ${index + 1}` }, spoilerPolicy: "premise-only",
+        schemaVersion: 1, kind: "story-manifest", transcriptProvider: "rev-ai", id, title, book: { id: bookId, title: `Collection ${index + 1}` }, spoilerPolicy: "premise-only",
         synopsis: "Someone explores [memory] | identity & <time>. A machine raises questions.",
         wordCount: 3, sampleCount: duration * 10, sampleRateHz: 10, durationSeconds: duration,
         durationDisplay: duration === 90 ? "00:01:30.000" : duration === 20 ? "00:00:20.000" : "00:01:01.500",

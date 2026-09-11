@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Schema } from "effect";
+import { StoryTranscript, validateStoryTranscript } from "../story-transcription/contracts.js";
 import { StoryAudioManifest } from "../story-audio/contracts.js";
 import { type ManifestLimits, PairedAudioManifest, PairedTranscript, PlanningTranscript, StoryManifest, StoryPlanningConfig, StoryPlanningError } from "./contracts.js";
 import { decode, readBounded } from "./io.js";
@@ -42,17 +43,24 @@ export function loadStoryManifest(options: { readonly storyDirectory: string; re
     const resolved = { manifestPath, transcriptPath: paths.transcriptPath, textPath: paths.textPath, audioPath: paths.audioPath, audioManifestPath: paths.audioManifestPath };
     const transcriptBytes = yield* readBounded(resolved.transcriptPath, options.limits.maxTranscriptBytes);
     if (hash(transcriptBytes) !== manifest.transcriptSha256) return yield* fail("TranscriptMismatch", `Paired transcript changed for ${manifest.id}.`);
-    const transcript = yield* decode(PairedTranscript, transcriptBytes, "TranscriptMismatch", resolved.transcriptPath, false);
-    const { segment, audio, provenance } = transcript;
-    if (segment.id !== manifest.id || segment.title !== manifest.title || transcript.wordCount !== manifest.wordCount
-      || segment.endSample - segment.startSample !== manifest.sampleCount || audio.sampleCount !== manifest.sampleCount || audio.sampleRateHz !== manifest.sampleRateHz
-      || audio.durationSeconds !== manifest.durationSeconds || audio.sha256 !== manifest.audioSha256 || audio.manifestSha256 !== manifest.audioManifestSha256
-      || resolve(dirname(resolved.transcriptPath), audio.path) !== resolved.audioPath || resolve(dirname(resolved.transcriptPath), audio.manifestPath) !== resolved.audioManifestPath) {
-      return yield* fail("TranscriptMismatch", `Paired transcript identity, audio links, or sample counts do not match ${manifestPath}.`);
-    }
-    if (provenance.planSha256 !== manifest.origin.planSha256 || provenance.transcriptSha256 !== manifest.origin.transcriptSha256
-      || provenance.sourceSha256 !== manifest.origin.sourceSha256 || provenance.providerJobId !== manifest.origin.providerJobId) {
-      return yield* fail("TranscriptMismatch", `Paired transcript provenance does not match the manifest origin in ${manifestPath}.`);
+    const transcript = yield* decode(Schema.Union([PairedTranscript, StoryTranscript]), transcriptBytes, "TranscriptMismatch", resolved.transcriptPath, false);
+    if (transcript.kind === "story-transcript") {
+      if (manifest.transcriptProvider !== "openai" || transcript.storyId !== manifest.id || transcript.wordCount !== manifest.wordCount
+        || transcript.audio.sha256 !== manifest.audioSha256 || transcript.audio.sampleCount !== manifest.sampleCount || transcript.audio.sampleRateHz !== manifest.sampleRateHz
+        || transcript.provenance.bookSourceSha256 !== manifest.origin.sourceSha256) return yield* fail("TranscriptMismatch", "GPT transcript identity differs from story manifest.");
+    } else {
+      if (manifest.transcriptProvider !== "rev-ai") return yield* fail("TranscriptMismatch", "Working transcript provider differs from manifest.");
+      const { segment, audio, provenance } = transcript;
+      if (segment.id !== manifest.id || segment.title !== manifest.title || transcript.wordCount !== manifest.wordCount
+        || segment.endSample - segment.startSample !== manifest.sampleCount || audio.sampleCount !== manifest.sampleCount || audio.sampleRateHz !== manifest.sampleRateHz
+        || audio.durationSeconds !== manifest.durationSeconds || audio.sha256 !== manifest.audioSha256 || audio.manifestSha256 !== manifest.audioManifestSha256
+        || resolve(dirname(resolved.transcriptPath), audio.path) !== resolved.audioPath || resolve(dirname(resolved.transcriptPath), audio.manifestPath) !== resolved.audioManifestPath) {
+        return yield* fail("TranscriptMismatch", `Paired transcript identity, audio links, or sample counts do not match ${manifestPath}.`);
+      }
+      if (provenance.planSha256 !== manifest.origin.planSha256 || provenance.transcriptSha256 !== manifest.origin.transcriptSha256
+        || provenance.sourceSha256 !== manifest.origin.sourceSha256 || provenance.providerJobId !== manifest.origin.providerJobId) {
+        return yield* fail("TranscriptMismatch", `Paired transcript provenance does not match the manifest origin in ${manifestPath}.`);
+      }
     }
     const textBytes = yield* readBounded(resolved.textPath, options.limits.maxTranscriptBytes);
     if (hash(textBytes) !== manifest.textSha256) return yield* fail("ArtifactMismatch", `Plain transcript changed for ${manifest.id}.`);
@@ -82,6 +90,16 @@ export function loadStoryContext(options: { readonly configPath: string; readonl
     const config = yield* decode(StoryPlanningConfig, yield* readBounded(configPath, 65_536), "InvalidConfig", configPath, true);
     const loaded = yield* loadStoryManifest({ storyDirectory: options.storyDirectory ?? resolve(dirname(configPath), config.storyDirectory), limits: config.limits });
     const { manifest: story, paths, storyDirectory } = loaded;
+    if (loaded.transcript.kind === "story-transcript") {
+      const transcript = yield* decode(StoryTranscript, loaded.transcriptBytes, "TranscriptMismatch", paths.transcriptPath, true);
+      yield* Effect.try({ try: () => validateStoryTranscript(transcript, config.limits.maxElements), catch: e => new StoryPlanningError({ code: "TranscriptMismatch", message: String(e) }) });
+      if (!loaded.textBytes.equals(Buffer.from(transcript.text))) return yield* fail("TranscriptMismatch", "Plain text differs from GPT transcript.");
+      const audio = yield* decode(StoryAudioManifest, loaded.audioManifestBytes, "ArtifactMismatch", paths.audioManifestPath, true);
+      if (audio.identity.source.sha256 !== transcript.provenance.bookSourceSha256 || audio.identity.request.interval.startSample !== transcript.audio.sourceStartSample
+        || audio.identity.request.interval.endSample - transcript.audio.sourceStartSample !== story.sampleCount) return yield* fail("ArtifactMismatch", "GPT transcript's book interval differs from audio verification.");
+      return { bookId: story.book.id, bookTitle: story.book.title, storyDirectory, manifestSha256: loaded.manifestSha256, story, paths, transcript,
+        sourceStartSample: transcript.audio.sourceStartSample, audioVerification: "existing-manifest-association-and-file-size; audio-content-not-rehashed" as const };
+    }
     const transcript = yield* decode(PlanningTranscript, loaded.transcriptBytes, "TranscriptMismatch", paths.transcriptPath, true);
     const { segment, audio, provenance, timing } = transcript;
     if (segment.kind !== "story" || transcript.elements.length > config.limits.maxElements || transcript.elements.length !== segment.elementEndIndexExclusive - segment.elementStartIndex) {
@@ -126,7 +144,7 @@ export function loadStoryContext(options: { readonly configPath: string; readonl
       || manifest.identity.source.sha256 !== provenance.sourceSha256 || manifest.identity.request.interval.startSample !== segment.startSample
       || manifest.identity.request.interval.endSample !== segment.endSample) return yield* fail("ArtifactMismatch", "Audio manifest channels or source interval do not match the selected story.");
     return { bookId: story.book.id, bookTitle: story.book.title, storyDirectory, manifestSha256: loaded.manifestSha256, story, paths, transcript,
-      audioVerification: "existing-manifest-association-and-file-size; audio-content-not-rehashed" as const };
+      sourceStartSample: segment.startSample, audioVerification: "existing-manifest-association-and-file-size; audio-content-not-rehashed" as const };
   }).pipe(Effect.mapError(error => error instanceof StoryPlanningError ? error : new StoryPlanningError({ code: "IoFailed", message: "Cannot read a linked story artifact." })));
 }
 export type StoryContext = Effect.Success<ReturnType<typeof loadStoryContext>>;

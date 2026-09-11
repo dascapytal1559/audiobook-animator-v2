@@ -59,7 +59,7 @@ test("/api/story carries the verified clip, titles, the book-clock start, words 
   const s = await serve(t);
   const { status, body } = await s.run(Effect.gen(function* () { const r = yield* get("/api/stories/pilot/story"); return { status: r.status, body: yield* bodyJson(r) }; }));
   assert.equal(status, 200);
-  assert.deepEqual(body, { clip: s.clip, story: { title: "Pilot", bookTitle: "Book" }, sourceStartSample: 100,
+  assert.deepEqual(body, { clip: s.clip, story: { title: "Pilot", bookTitle: "Book", transcriptProvider: "rev-ai" }, sourceStartSample: 100,
     words: [{ id: "m2:e0", value: "Uncorrected", startSample: 13, endSample: 23, original: { startSample: 13, endSample: 23 } }],
     chunks: [{ id: "c0", startSample: 13, endSample: 23, text: "Uncorrected.", wordIds: ["m2:e0"], breakReason: "end" }],
     chunking: { minSentenceBreakMs: 0, pauseBreakMs: 600, mergedSentenceBreaks: [] }, timing: { inversions: 0, autoRuns: [], manualCount: 0, autoCount: 0 } });

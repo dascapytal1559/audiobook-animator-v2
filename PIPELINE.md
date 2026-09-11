@@ -28,10 +28,11 @@ The autonomy percentage is a target, not a demonstrated result. A successful run
 1. **Audiobook input and inspection:** identify the source, audio stream, chapter metadata, and other boundary evidence.
 2. **Book-level timed transcription:** produce a transcript on the original audio timeline. A provider may use technical chunks internally without defining the stories.
 3. **Story discovery, paired splitting, and inventory:** identify narrative boundaries from the spoken content and word timestamps, verify them against the audio, split the transcript and corresponding audio for every story, then list the stories with verified durations and short synopses. The user selects from that inventory. Metadata may be retained for comparison but cannot set or override a cut.
-4. **Story planning:** understand the narrative, identify meaningful beats, and describe the people, places, objects, and continuity needed to visualize it. Link factual claims to the transcript and distinguish interpretation from visual invention.
-5. **Visual timeline:** plan visuals against the narration timeline.
-6. **Moodboard movie, then animation:** first overlay moodboards on narration; later animate the visuals while preserving story continuity.
-7. **Polish:** ambience and music, with narration remaining the primary soundtrack.
+4. **Story transcription and alignment:** transcribe selected story audio with GPT, promote it as the working text, and align its words to the waveform. Rev.ai remains book-splitting evidence. Tower of Babylon is migrated; other stories await their GPT pass. Initial timing currently uses a recorded one-time Rev seed.
+5. **Story planning:** understand the narrative, identify meaningful beats, and describe the people, places, objects, and continuity needed to visualize it. Link factual claims to the transcript and distinguish interpretation from visual invention.
+6. **Visual timeline:** plan visuals against the narration timeline.
+7. **Moodboard movie, then animation:** first overlay moodboards on narration; later animate the visuals while preserving story continuity.
+8. **Polish:** ambience and music, with narration remaining the primary soundtrack.
 
 The foundation, source inspection, timestamp demo, whole-book transcript import, and verified audio extraction are implemented. Both collections have completed transcripts, reviewed split plans, and all 38 paired outputs. The combined inventory contains 17 stories with durations and premise-only synopses; notes and credits are available separately. Independent whole-book reconstruction checks passed for each book's audio and transcript. Later movie stages still need delivery contracts and acceptance criteria.
 

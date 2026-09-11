@@ -33,6 +33,7 @@ export const StoryManifest = Schema.Struct({
   book: Schema.Struct({ id: Id, title: Text }), spoilerPolicy: Schema.Literal("premise-only"), synopsis: Text.check(Schema.isPattern(/\S/)),
   wordCount: Positive, sampleCount: Positive, sampleRateHz: Positive, durationSeconds: PositiveSeconds, durationDisplay: Text,
   audioPath: Path, audioSha256: Sha256, audioManifestPath: Path, audioManifestSha256: Sha256,
+  transcriptProvider: Schema.Literals(["rev-ai", "openai"]),
   transcriptPath: Path, transcriptSha256: Sha256, textPath: Path, textSha256: Sha256,
   origin: StoryOrigin,
   /** Per-story editor settings that override the server config; absent means the config default. */

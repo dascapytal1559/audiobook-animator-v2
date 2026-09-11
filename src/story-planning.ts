@@ -9,7 +9,7 @@ const main = Effect.gen(function* () {
     catch: () => new StoryPlanningError({ code: "InvalidConfig", message: "Invalid arguments. Run with --help for usage." }),
   });
   if (values.help) {
-    yield* Console.error("Usage: node dist/story-planning.js --config config/story-planning.json\n\nLoad the story directory selected by the config, verify its manifest against the linked files, and print the complete paired transcript for planning. All configured paths resolve from the config file. No audio is decoded and no network request is made. JSON results go to stdout; help and errors go to stderr.");
+    yield* Console.error("Usage: node dist/story-planning.js --config config/story-planning.json\n\nLoad the story directory selected by the config, verify its manifest against the linked files, and print the working story transcript for planning (GPT when promoted; explicitly labelled Rev split text otherwise). All configured paths resolve from the config file. No audio is decoded and no network request is made. JSON results go to stdout; help and errors go to stderr.");
     return;
   }
   if (!values.config) return yield* Effect.fail(new StoryPlanningError({ code: "InvalidConfig", message: "Supply an explicit --config path. Run with --help for usage." }));

@@ -2,7 +2,7 @@
 
 Animator turns audiobooks into movies while keeping their original narration. The first visual milestone is moodboards over a selected story; the final direction is animation. The target is for at least 95% of story runs to complete without intervention after setup.
 
-The working product decisions, evidence, and backlog are in [PIPELINE.md](PIPELINE.md). The TypeScript/Effect foundation, source inspection, whole-book transcript import, paired splitting, story inventory, visual timeline, and browser editor with timing overlays are implemented. Both collections have 17 exported stories, ready to browse by duration and synopsis in the local [story inventory](data/stories/inventory.md). Each story lives in its own directory under `data/stories/`. Movie production is still to be implemented.
+The working product decisions, evidence, and backlog are in [PIPELINE.md](PIPELINE.md). The TypeScript/Effect foundation, source inspection, whole-book transcript import, paired splitting, story inventory, visual timeline, and browser editor with timing overlays are implemented. Both collections have 17 exported stories, ready to browse by duration and synopsis in the local [story inventory](data/stories/inventory.md). Each story lives in its own directory under `data/stories/`. GPT is the working story transcript; Rev.ai is retained as book-splitting evidence. Tower of Babylon is promoted to GPT and is the editor default; the other 16 stories are explicitly marked as awaiting GPT. Movie production is still to be implemented.
 
 ## Local setup
 
@@ -51,7 +51,7 @@ Save new downloads in `data/inbox/`. Once identified, each book's originals and 
 | `data/books/<book>/artifacts/` | Imported transcript, source inspection, and preparation evidence. |
 | `data/books/<book>/split/` | The split run's plan, run manifest, and acceptance inventory, plus the extras (author notes and credits) as verified audio/transcript pairs. |
 | `data/books/<book>/inventory.md` | Readable per-book inventory of its stories with durations, synopses, and file links. |
-| `data/stories/<story>/` | One directory per story: `story.json` (identity, locators, origin, editable synopsis), `audio/`, `transcript.json`, `transcript.txt`, planning documents, `shots/`, `decisions.json`, timing overlays, and caches. |
+| `data/stories/<story>/` | One directory per story: `story.json` (identity, locators, origin, editable synopsis), `audio/`, working GPT `transcript.json` / `transcript.txt`, split evidence (archived under `archive/rev/` for Tower of Babylon), raw GPT output in `transcription/`, planning documents, `shots/`, `decisions.json`, timing overlays, and caches. |
 | `data/stories/inventory.md` and `inventory.json` | Combined story selection inventory, sorted by duration. |
 | `data/story-relocation.json` | Hash-verified record of the move from `books/<book>/split/segments/` into `stories/`. |
 | `data/cleanup-2026-09-09.json`, `data/cleanup-2026-09-09b.json` | Records of the two approved cleanups: what was removed, sizes, and the retained-hash check. |
@@ -125,16 +125,16 @@ The old comparison player and two-minute timestamp demo commands were retired on
 
 ## Story planning input
 
-The `story-planning` module loads a verified story for downstream analysis. Its current deliverable is the original paired transcript and verified media references in a read-only context; automated semantic planning and visual generation remain to be implemented.
+The `story-planning` module loads a verified story for downstream analysis. It supplies the manifest-selected working transcript and verified media references in a read-only context; automated semantic planning and visual generation remain to be implemented.
 
 ```sh
 pnpm run build
 node dist/story-planning.js --config config/story-planning.json
 ```
 
-The checked-in configuration selects the story directory for The Great Silence and supplies explicit read/element limits. Config paths resolve from the config file. The CLI prints JSON to stdout; help and errors use stderr. Code can call `loadStoryContext` from `src/modules/story-planning/index.ts` directly through Effect.
+The checked-in configuration selects the story directory for Tower of Babylon and supplies explicit read/element limits. Config paths resolve from the config file. The CLI prints JSON to stdout; help and errors use stderr. Code can call `loadStoryContext` from `src/modules/story-planning/index.ts` directly through Effect.
 
-The context retains the complete existing paired transcript, including raw words, punctuation, stable element IDs, original book indexes, provider timestamps, and approximate story-relative word times. It also supplies the exact sample-based duration and resolved audio/transcript paths. Loading checks the manifest against its directory name, the transcript identity and provenance, source pairing, element references, timing, and text consistency. Audio checks use the recorded verification manifest and actual file size; loading does not decode or rehash the audio.
+The manifest's explicit `transcriptProvider` selects the format. OpenAI stories use `kind: "story-transcript"`, `gpt:wN` word IDs, exact GPT text/punctuation and initial sample positions. Their source book offset comes from audio verification, not Rev word IDs. Rev-only stories retain the paired format and are labelled as split text awaiting GPT. Both paths validate transcript identity, text and word counts, timing, audio identity and the original book interval. Downstream GPT loading does not reopen Rev files; the one-time timing seed records its Rev hash. Audio checks use the recorded verification manifest and actual file size; loading does not decode or rehash audio.
 
 The pilot's narrative analysis is a separate, agent-authored document. Its timing windows are evidence for meaning, and the eventual visual timeline must also cover pauses and the audio before/after speech. The [source-check note](docs/research/great-silence-source-check.md) records published spellings for misrecognized names while preserving the raw transcript. Descriptions of story events, uncertain readings, and proposed visual details remain separate.
 
@@ -166,7 +166,7 @@ Treatment rows are parsed from the fixed six-column table under "Proposed sequen
 
 ## Editor client
 
-The browser editor is the workspace package `packages/editor`: a Vite + React client that opens one verified story clip at a time and edits its visual timeline and word timing. The header has a story selector listing every story the server serves, grouped by book and shortest first; the open story rides in the URL as `?story=<story-id>` (a bare URL opens the server's default), so stories are bookmarkable and back/forward switch between them. Switching remounts the editor from scratch, and a story with unsaved changes asks before switching. It shows the letterboxed preview at the playhead, a transport with clip and book clocks, the waveform with detected speech regions shaded beneath it, up to three timing rows, the shot lane, and a panel for the shot under the playhead. The timeline toolbar has a Sentences / Words toggle and one toggle per row (Speech, Original, Auto, Edited), all remembered in the browser only. Sentences draws one box per chunk (a sentence, or a shorter run cut by a pause of at least the server's `chunking.pauseBreakMs`) with the words inside as clickable spans and the current word highlighted; Words draws one box per word. Either box is at least as wide as its spoken duration and grows into the following silence up to the next box, so text is only ellipsized when there is genuinely no room. The Original row (faint) shows the transcriber's times, the Auto row shows only words the align script has placed, and the Edited row shows the effective times (manual, else auto, else original), with a yellow bar on words that have a manual value and a blue underline on words that have an auto value; the reference rows regroup their own chunks client-side using the pause and sentence-gap settings returned by the server. Clicking a word in any row seeks to that row's time for it. Decisions and word-timing edits save automatically 300 ms after each change under one Saved / Saving indicator; the working region is client-only and never saved.
+The browser editor is the workspace package `packages/editor`: a Vite + React client that opens one verified story clip at a time and edits its visual timeline and word timing. The header has a story selector listing every story the server serves, grouped by book and shortest first; the open story rides in the URL as `?story=<story-id>` (a bare URL opens the server's default), so stories are bookmarkable and back/forward switch between them. Switching remounts the editor from scratch, and a story with unsaved changes asks before switching. It shows the letterboxed preview at the playhead, a transport with clip and book clocks, the waveform with detected speech regions shaded beneath it, up to three timing rows, the shot lane, and a panel for the shot under the playhead. The timeline toolbar has a Sentences / Words toggle and one toggle per row (Speech, Original, Auto, Edited), all remembered in the browser only. Sentences draws one box per chunk (a sentence, or a shorter run cut by a pause of at least the server's `chunking.pauseBreakMs`) with the words inside as clickable spans and the current word highlighted; Words draws one box per word. Either box is at least as wide as its spoken duration and grows into the following silence up to the next box, so text is only ellipsized when there is genuinely no room. The initial row (faint) shows the working transcript's initial positions, labelled GPT initial or Rev split, the Auto row shows only words the align script has placed, and the Edited row shows the effective times (manual, else auto, else original), with a yellow bar on words that have a manual value and a blue underline on words that have an auto value; the reference rows regroup their own chunks client-side using the pause and sentence-gap settings returned by the server. Clicking a word in any row seeks to that row's time for it. Decisions and word-timing edits save automatically 300 ms after each change under one Saved / Saving indicator; the working region is client-only and never saved.
 
 ```sh
 pnpm --filter editor dev        # Vite dev server on http://127.0.0.1:5173, proxying /api to the editor server
@@ -243,3 +243,50 @@ node dist/word-timing.js align   --config config/editor-server.json --story exha
 Effect v4 is a release candidate. Its CLI declaration files currently contain a broken reference to an internal declaration, so `skipLibCheck` is explicitly enabled while application code remains strictly checked. No dependency patch is applied.
 
 The pinned Redis client satisfies a required peer dependency of `@effect/platform-node`; this project does not configure a Redis server. Dependency versions, peer checks, and permitted installation hooks are explicit in the project configuration and lockfile.
+
+
+## Working story transcription
+
+Book-level Rev.ai transcription is used to identify and split stories. After selection, the story audio is transcribed by GPT and promoted to the working transcript. Planning, the editor, word timing and shot anchors then share the same GPT identity; GPT is no longer a read-only comparison row.
+
+| File | Role |
+| --- | --- |
+| `transcript.json` / `transcript.txt` | Working GPT words and exact text. |
+| `archive/rev/transcript.rev.json` / `transcript.rev.txt` | Tower of Babylon’s preserved Rev split evidence. Other stories still keep these files in their story root until archived. |
+| `transcription/run.json`, `transcription/transcription-*.json` | Exact run configuration/audio hash and raw GPT responses. |
+| `transcription/transcript.txt`, `joins.json`, `prepared.json` | Stitched output, overlap evidence and prepared working transcript. |
+| `word-timing.auto.json` / `word-timing.json` | Automatic waveform timing and manual edits keyed by GPT IDs and the working transcript hash. |
+| `archive/` | Earlier identities, overlays, Rev evidence and retired review material; see its README and relocation manifest. |
+
+`config/story-transcription.json` explicitly selects `gpt-transcribe`, chunk size, overlap, encoding, concurrency, language and spelling hints. Its current hints are for Tower of Babylon; use story-appropriate explicit configuration for other stories. `OPENAI_API_KEY` comes from the environment or this repository's `.env`.
+
+```sh
+pnpm run build
+python3 scripts/transcribe-story.py \
+  --story data/stories/tower-of-babylon \
+  --config config/story-transcription.json \
+  --output data/stories/tower-of-babylon/transcription
+python3 scripts/stitch-story-transcript.py \
+  --story data/stories/tower-of-babylon \
+  --directory data/stories/tower-of-babylon/transcription
+python3 scripts/prepare-story-transcript.py \
+  --story data/stories/tower-of-babylon \
+  --seed data/stories/tower-of-babylon/archive/rev/transcript.rev.json \
+  --text data/stories/tower-of-babylon/transcription/transcript.txt \
+  --run data/stories/tower-of-babylon/transcription \
+  --output data/stories/tower-of-babylon/transcription/prepared.json
+sh scripts/editor-dev.sh stop
+node scripts/promote-story-transcript.mjs \
+  --story data/stories/tower-of-babylon \
+  --input data/stories/tower-of-babylon/transcription/prepared.json
+node dist/word-timing.js align --config config/editor-server.json --story tower-of-babylon --all
+sh scripts/editor-dev.sh start
+```
+
+Transcription resumes only when the saved audio hash and configuration match. Joining refuses unreliable overlaps. Preparation preserves GPT wording and punctuation exactly. It currently bootstraps initial timing from the Rev split words supplied explicitly through `--seed`; this one-time dependency is recorded as `timing.method: "rev-seeded"`, and is not presented as GPT-generated timestamps. The standard waveform pass then adjusts those positions. A future audio-only forced aligner can replace the bootstrap without changing the working transcript contract.
+
+Promotion validates the prepared transcript and run evidence, archives the prior identity and timing, and commits `story.json` to the new transcript hash. Identical promotion is a no-op. Stories with visual shots, shot decisions or nonempty manual word timing require an explicit mapping before changing transcript identity; the script refuses to discard that work. Stop the editor during promotion and restart it afterward, since story contexts are cached. A changed GPT text needs a new output run directory; existing run evidence is retained.
+
+In the editor, **GPT initial**, **Auto**, and **Edited** are timing views of the same GPT words. Selection, manual timing, alignment and shot anchors operate on GPT IDs. Rev-only stories remain available as clearly labelled split evidence, with existing work preserved. Tower of Babylon's 9,808 GPT words and waveform adjustment are migrated; no new transcription request was made during this refactor.
+
+Validation: `pnpm test`, `pnpm --filter editor test`, and `python3 scripts/test-story-transcription.py`.

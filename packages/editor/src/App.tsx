@@ -318,7 +318,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
       <header className="header">
         <h1>Story editor</h1>
         <StoryPicker stories={stories} value={storyId} onChange={onPickStory} />
-        {state.story && <span className="muted">{state.story.story.bookTitle} · {state.story.clip.storyId} · {state.story.clip.sampleRateHz} Hz</span>}
+        {state.story && <span className="muted">{state.story.story.bookTitle} · {state.story.clip.storyId} · {state.story.clip.sampleRateHz} Hz · {state.story.story.transcriptProvider === "openai" ? "GPT transcript" : "Rev split text — awaiting GPT"}</span>}
         {state.error && <button type="button" className="error" onClick={() => dispatch({ type: "error-clear" })} title="Dismiss" data-testid="error">{state.error}</button>}
       </header>
       <main className="main">
@@ -333,7 +333,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
           />
           {state.story && (
             <Timeline
-              words={words} chunks={chunks} original={originalRow} auto={autoRow} selectionLeadStart={selectionLeadStart}
+              words={words} chunks={chunks} original={originalRow} auto={autoRow} transcriptProvider={state.story?.story.transcriptProvider ?? "rev-ai"} selectionLeadStart={selectionLeadStart}
               sampleRateHz={sampleRateHz} sampleCount={sampleCount} peaks={peaks} speech={speech?.regions ?? null} stitched={merged.stitched} candidates={merged.candidates}
               playhead={state.playhead} playing={state.playing} follow={state.follow} currentWordId={currentWordId} currentShotId={currentShot?.id ?? null}
               working={workingBounds(state, sampleCount)} drag={state.drag}

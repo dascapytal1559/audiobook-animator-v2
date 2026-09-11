@@ -26,6 +26,7 @@ type Props = {
   words: ReadonlyArray<Word>; chunks: ReadonlyArray<Chunk>;
   /** The read-only rows. `auto` holds only words that have an auto value. */
   original: TimingRowData; auto: TimingRowData;
+  transcriptProvider: "openai" | "rev-ai";
   /** Effective start of the first selected word before the drag delta, the leading edge that snaps to speech onsets (A39). */
   selectionLeadStart: number | null;
   sampleRateHz: number; sampleCount: number; peaks: PeaksResponse | null; speech: ReadonlyArray<Span> | null;
@@ -72,6 +73,7 @@ export function Timeline(p: Props) {
   const [textMode, setTextMode] = useState<TextLaneMode>(readTextLaneMode);
   const chooseTextMode = (mode: TextLaneMode) => { setTextMode(mode); try { window.localStorage.setItem(TEXT_LANE_MODE_KEY, mode); } catch { /* view preference only */ } };
   const [rows, setRows] = useState<RowToggles>(readRows);
+
   const toggleRow = (key: keyof RowToggles) => {
     const next = { ...rows, [key]: !rows[key] };
     setRows(next);
@@ -240,7 +242,7 @@ export function Timeline(p: Props) {
         </span>
         <span className="toolbar-group" role="group" aria-label="Rows" title={detail ? undefined : `Rows are hidden below ${DETAIL_MIN_PX_PER_SECOND} px/s; zoom in to show them`}>
           <button type="button" className={rows.speech ? "toggle on" : "toggle"} aria-pressed={rows.speech} onClick={() => toggleRow("speech")} disabled={!detail} title={p.speech === null ? "Speech regions have not loaded" : `${p.speech.length} speech regions`} data-testid="toggle-speech">Speech</button>
-          <button type="button" className={rows.original ? "toggle on" : "toggle"} aria-pressed={rows.original} onClick={() => toggleRow("original")} disabled={!detail} title="Transcriber timing, read-only" data-testid="toggle-original">Original</button>
+          <button type="button" className={rows.original ? "toggle on" : "toggle"} aria-pressed={rows.original} onClick={() => toggleRow("original")} disabled={!detail} title="Initial timing of the working transcript, before waveform alignment" data-testid="toggle-original">{p.transcriptProvider === "openai" ? "GPT initial" : "Rev split"}</button>
           <button type="button" className={rows.auto ? "toggle on" : "toggle"} aria-pressed={rows.auto} onClick={() => toggleRow("auto")} disabled={!detail} title="Scripted align result, read-only" data-testid="toggle-auto">Auto</button>
           <button type="button" className={rows.edited ? "toggle on" : "toggle"} aria-pressed={rows.edited} onClick={() => toggleRow("edited")} disabled={!detail} title="Effective timing: select and drag here" data-testid="toggle-edited">Edited</button>
         </span>
@@ -268,7 +270,7 @@ export function Timeline(p: Props) {
             return (
               <div key={variant} style={{ height: LANE_HEIGHTS.row, position: "relative" }}>
                 <MemoChunkLane
-                  variant={variant} mode={textMode} chunks={data.chunks} words={data.words} viewStartSample={viewStartSample} viewEndSample={viewEndSample} pxPerSample={pxPerSample} clipEndSample={p.sampleCount}
+                  variant={variant} label={variant === "original" ? (p.transcriptProvider === "openai" ? "GPT initial" : "Rev split") : variant} mode={textMode} chunks={data.chunks} words={data.words} viewStartSample={viewStartSample} viewEndSample={viewEndSample} pxPerSample={pxPerSample} clipEndSample={p.sampleCount}
                   currentWordId={edited ? p.currentWordId : null} selectedIds={edited ? selectedIds : EMPTY_IDS}
                   onWordClick={edited ? noop : w => p.onSeek(w.startSample, true)} onChunkClick={edited ? noop : c => p.onSeek(c.startSample, false)}
                   {...(edited ? { onItemPointerDown } : {})}

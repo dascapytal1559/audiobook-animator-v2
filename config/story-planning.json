@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "storyDirectory": "../data/stories/the-great-silence",
+  "storyDirectory": "../data/stories/tower-of-babylon",
   "limits": {
     "maxManifestBytes": 65536,
     "maxTranscriptBytes": 16777216,
