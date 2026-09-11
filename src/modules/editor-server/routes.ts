@@ -3,7 +3,7 @@ import { Duration, Effect, FileSystem, Layer, Schema, Semaphore, Stream } from "
 import { Sse } from "effect/unstable/encoding";
 import { HttpIncomingMessage, HttpRouter, type HttpServerRequest, HttpServerResponse, HttpStaticServer, Multipart } from "effect/unstable/http";
 import { loadStoryContext, StoryManifest, StoryPlanningConfig, StoryPlanningError, type StoryContext } from "../story-planning/index.js";
-import { readBounded } from "../story-planning/io.js";
+import { decodeJson, readBounded } from "../../core/io.js";
 import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotRecord, VisualTimelineConfig, VisualTimelineError, writeDecisions, type DecisionsBody } from "../visual-timeline/index.js";
 import { type TimingEntries, WordTimingError } from "../word-timing/index.js";
 import type { ChunkElement } from "./chunks.js";
@@ -53,12 +53,7 @@ export type EditorLibrary = EditorConfigContext & {
 export type EditorRouteOptions = { readonly producer: { readonly name: string; readonly version: string }; readonly staticDirectory?: string };
 
 const read = (path: string, limit: number) => readBounded(path, limit).pipe(Effect.mapError(e => new EditorServerError({ code: "IoFailed", message: e.message })));
-function decode<S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) {
-  return Effect.gen(function* () {
-    const raw = yield* Effect.try({ try: () => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown, catch: () => new EditorServerError({ code, message: `Input is not valid UTF-8 JSON: ${path}.` }) });
-    return yield* Schema.decodeUnknownEffect(schema, { onExcessProperty: "error" })(raw).pipe(Effect.mapError(e => new EditorServerError({ code, message: `Input does not match the required schema: ${path}. ${e.message.replace(/\s+/g, " ")}` })));
-  });
-}
+const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) => decodeJson(schema, bytes, path, true).pipe(Effect.mapError(e => new EditorServerError({ code, message: e.message })));
 
 /** The three configs, resolved from one another, with the default story checked to live directly under the stories directory. */
 export function loadEditorConfig(options: { readonly configPath: string }): Effect.Effect<EditorConfigContext, EditorServerError, FileSystem.FileSystem> {

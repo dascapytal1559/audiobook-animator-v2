@@ -1,7 +1,7 @@
 import { join } from "node:path";
-import { Effect, FileSystem, Schema } from "effect";
-import { readBounded, writeAtomic } from "../story-planning/io.js";
-import { ClipIdentity } from "../visual-timeline/contracts.js";
+import { Effect, FileSystem, type Schema } from "effect";
+import { type ClipIdentity, sameClip } from "../../core/identity.js";
+import { decodeJson, encodeJson as encode, readBounded, writeAtomic } from "../../core/io.js";
 import { type AlignParameters, type AlignReport, type TimingEntries, WordTimingAuto, WordTimingError, WordTimingManual } from "./contracts.js";
 import { validateEntries } from "./effective.js";
 export { alignRange, type AlignInput, measureRange, type MeasureInput, type SampleRange, type TimedWord } from "./align.js";
@@ -10,8 +10,6 @@ export { type EffectiveTiming, type EffectiveWord, effectiveTiming, type SourceW
 export { detectRegions, type DetectOptions, SpeechAccumulator, type SpeechRegion } from "./speech.js";
 type Code = WordTimingError["code"];
 const fail = (code: Code, message: string) => Effect.fail(new WordTimingError({ code, message }));
-const encode = (value: unknown) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
-const sameClip = (a: ClipIdentity, b: ClipIdentity) => (Object.keys(ClipIdentity.fields) as Array<keyof ClipIdentity>).every(k => a[k] === b[k]);
 const read = (path: string, limit: number) => readBounded(path, limit).pipe(Effect.mapError(e => new WordTimingError({ code: "IoFailed", message: e.message })));
 const write = (path: string, bytes: Uint8Array) => writeAtomic(path, bytes).pipe(Effect.mapError(e => new WordTimingError({ code: "IoFailed", message: e.message })));
 
@@ -24,13 +22,7 @@ export type OverlayContext = {
 export const autoPath = (ctx: OverlayContext) => join(ctx.storyDirectory, "word-timing.auto.json");
 export const manualPath = (ctx: OverlayContext) => join(ctx.storyDirectory, "word-timing.json");
 
-function decode<S extends Schema.Top>(schema: S, bytes: Uint8Array, path: string) {
-  return Effect.gen(function* () {
-    const raw = yield* Effect.try({ try: () => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown, catch: () => new WordTimingError({ code: "InvalidTiming", message: `Input is not valid UTF-8 JSON: ${path}.` }) });
-    return yield* Schema.decodeUnknownEffect(schema, { onExcessProperty: "error" })(raw).pipe(
-      Effect.mapError(e => new WordTimingError({ code: "InvalidTiming", message: `Input does not match the required schema: ${path}. ${e.message.replace(/\s+/g, " ")}` })));
-  });
-}
+const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, path: string) => decodeJson(schema, bytes, path, true).pipe(Effect.mapError(e => new WordTimingError({ code: "InvalidTiming", message: e.message })));
 /** Decode one overlay if it exists, then pin it to the clip and validate its entries against the transcript. */
 function loadOverlay<S extends Schema.Top & { readonly Type: { readonly clip: ClipIdentity; readonly words: TimingEntries } }>(ctx: OverlayContext, schema: S, path: string) {
   return Effect.gen(function* () {

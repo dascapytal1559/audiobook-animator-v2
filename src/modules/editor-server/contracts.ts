@@ -1,8 +1,5 @@
 import { Data, Schema } from "effect";
-import { Sha256 } from "../transcription/contracts.js";
-const Path = Schema.String.check(Schema.isMinLength(1), Schema.isPattern(/^[^\0]+$/));
-const NonNegative = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }));
-const Positive = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
+import { NonNegative, Path, Positive, Sha256 } from "../../core/schema.js";
 const Int16 = Schema.Int.check(Schema.isBetween({ minimum: -32768, maximum: 32767 }));
 
 /**
@@ -33,12 +30,11 @@ export const PeaksFile = Schema.Struct({
 });
 export type PeaksFile = typeof PeaksFile.Type;
 
-const Index = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }));
 /** `<story>/cache/speech.json`: detected speech regions on the clip clock, pinned to the audio hash and the detection parameters. Computed in the same decode as peaks (A46). */
 export const SpeechFile = Schema.Struct({
   schemaVersion: Schema.Literal(1), kind: Schema.Literal("speech-regions"), audioSha256: Sha256, sampleRateHz: Positive, sampleCount: Positive,
   frameSamples: Positive, thresholdDbfs: Schema.Number, minSilenceMs: Positive, minSpeechMs: Positive,
-  regions: Schema.Array(Schema.Struct({ startSample: Index, endSample: Index })),
+  regions: Schema.Array(Schema.Struct({ startSample: NonNegative, endSample: NonNegative })),
 });
 export type SpeechFile = typeof SpeechFile.Type;
 

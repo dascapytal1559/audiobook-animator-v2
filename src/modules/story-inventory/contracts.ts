@@ -1,9 +1,6 @@
 import { Data, Schema } from "effect";
+import { Id, Path, Positive } from "../../core/schema.js";
 
-const Text = Schema.String.check(Schema.isMinLength(1), Schema.isPattern(/\S/));
-const Path = Text.check(Schema.isPattern(/^[^\0]+$/));
-const Id = Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9-]{0,100}$/));
-const PositiveInteger = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
 
 /**
  * `config/story-inventory.json`. Every directory under `storiesDirectory` is a story with a `story.json`; each story's book must be listed
@@ -17,12 +14,12 @@ export const StoryInventoryConfig = Schema.Struct({
   outputMarkdownPath: Path,
   outputJsonPath: Path,
   limits: Schema.Struct({
-    maxBooks: PositiveInteger,
-    maxStories: PositiveInteger,
-    maxManifestBytes: PositiveInteger,
-    maxTranscriptBytes: PositiveInteger,
-    maxAudioManifestBytes: PositiveInteger,
-    maxOutputBytes: PositiveInteger,
+    maxBooks: Positive,
+    maxStories: Positive,
+    maxManifestBytes: Positive,
+    maxTranscriptBytes: Positive,
+    maxAudioManifestBytes: Positive,
+    maxOutputBytes: Positive,
   }),
 });
 export type StoryInventoryConfig = typeof StoryInventoryConfig.Type;

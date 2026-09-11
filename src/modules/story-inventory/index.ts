@@ -1,7 +1,7 @@
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { Effect, FileSystem } from "effect";
 import { durationDisplay, type LoadedStoryManifest, loadStoryManifest, StoryPlanningError } from "../story-planning/index.js";
-import { decode, readBounded } from "../story-planning/io.js";
+import { decodeJson, readBounded } from "../../core/io.js";
 import { StoryInventoryConfig, StoryInventoryError } from "./contracts.js";
 
 export { StoryInventoryConfig, StoryInventoryError } from "./contracts.js";
@@ -107,8 +107,8 @@ export function renderStoryInventory(options: { readonly configPath: string }) {
     if (!options.configPath || options.configPath.includes("\0")) return yield* fail("InvalidConfig", "Supply an explicit inventory configuration path.");
     const fs = yield* FileSystem.FileSystem;
     const configPath = resolve(options.configPath);
-    const configBytes = yield* own(readBounded(configPath, 65_536));
-    const config = yield* own(decode(StoryInventoryConfig, configBytes, "InvalidConfig", configPath, true));
+    const configBytes = yield* readBounded(configPath, 65_536).pipe(Effect.mapError(e => new StoryInventoryError({ code: "IoFailed", message: e.message })));
+    const config = yield* decodeJson(StoryInventoryConfig, configBytes, configPath, true).pipe(Effect.mapError(e => new StoryInventoryError({ code: "InvalidConfig", message: e.message })));
     const configDirectory = dirname(configPath);
     if (config.books.length === 0 || config.books.length > config.limits.maxBooks || new Set(config.books.map((book) => book.bookId)).size !== config.books.length) {
       return yield* fail("InvalidConfig", "Supply unique books within the configured book limit.");

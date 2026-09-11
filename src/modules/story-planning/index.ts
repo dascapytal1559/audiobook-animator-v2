@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { Effect, FileSystem, Schema } from "effect";
+import { decodeJson, readBounded as readBoundedBytes } from "../../core/io.js";
 import { StoryTranscript, validateStoryTranscript } from "../story-transcription/contracts.js";
 import { StoryAudioManifest } from "../story-audio/contracts.js";
 import { type ManifestLimits, PairedAudioManifest, PairedTranscript, PlanningTranscript, StoryManifest, StoryPlanningConfig, StoryPlanningError } from "./contracts.js";
-import { decode, readBounded } from "./io.js";
 export { type ManifestLimits, PairedAudioManifest, PairedTranscript, PlanningTranscript, StoryManifest, StoryOrigin, StoryPlanningConfig, StoryPlanningError } from "./contracts.js";
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const fail = (code: StoryPlanningError["code"], message: string) => Effect.fail(new StoryPlanningError({ code, message }));
+const readBounded = (path: string, limit: number) => readBoundedBytes(path, limit).pipe(Effect.mapError(e => new StoryPlanningError({ code: "IoFailed", message: e.message })));
+const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: StoryPlanningError["code"], path: string, strict: boolean) => decodeJson(schema, bytes, path, strict).pipe(Effect.mapError(e => new StoryPlanningError({ code, message: e.message })));
 
 /** `HH:MM:SS.mmm` from a verified sample count, or `H:MM:SS` rounded to the second for reading views. */
 export function durationDisplay(samples: number, rate: number, milliseconds: boolean): string {

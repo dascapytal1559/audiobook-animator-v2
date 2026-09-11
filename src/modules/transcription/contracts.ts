@@ -1,6 +1,7 @@
 import { Data, Schema } from "effect";
+import { Sha256 } from "../../core/schema.js";
+export { Sha256 };
 
-export const Sha256 = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
 export const JobId = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/));
 
 export type TranscriptionErrorCode = "InvalidConfig" | "InvalidResponse" | "InvalidTimestamps";

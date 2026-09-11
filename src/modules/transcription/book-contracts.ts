@@ -1,32 +1,29 @@
 import { Data, Schema, Struct } from "effect";
+import { Path, Positive, PositiveSeconds, Sha256 } from "../../core/schema.js";
 import { SourceMediaRequest } from "../source-media/contracts.js";
-import { Sha256 } from "./contracts.js";
 
-const Path = Schema.String.check(Schema.isMinLength(1), Schema.isPattern(/^[^\0]+$/));
-const PositiveInteger = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
-const PositiveSeconds = Schema.Finite.check(Schema.isGreaterThan(0));
 
 export const RevBookConfig = Schema.Struct({
   schemaVersion: Schema.Literal(1),
   sourcePath: Path,
   artifactDirectory: Path,
-  expectedSource: Schema.Struct({ sha256: Sha256, byteLength: PositiveInteger }),
-  maxInputBytes: PositiveInteger.check(Schema.isLessThanOrEqualTo(2_000_000_000)),
+  expectedSource: Schema.Struct({ sha256: Sha256, byteLength: Positive }),
+  maxInputBytes: Positive.check(Schema.isLessThanOrEqualTo(2_000_000_000)),
   maxDurationSeconds: PositiveSeconds.check(Schema.isLessThanOrEqualTo(17 * 60 * 60)),
-  maxTranscriptBytes: PositiveInteger.check(Schema.isLessThanOrEqualTo(64 * 1024 * 1024)),
-  maxNormalizedTranscriptBytes: PositiveInteger.check(Schema.isLessThanOrEqualTo(512 * 1024 * 1024)),
+  maxTranscriptBytes: Positive.check(Schema.isLessThanOrEqualTo(64 * 1024 * 1024)),
+  maxNormalizedTranscriptBytes: Positive.check(Schema.isLessThanOrEqualTo(512 * 1024 * 1024)),
   timestampToleranceSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
   inspection: SourceMediaRequest.mapFields(Struct.omit(["sourcePath"])),
 });
 export type RevBookConfig = typeof RevBookConfig.Type;
 
 export const BookSource = Schema.Struct({
-  path: Path, realPath: Path, sha256: Sha256, byteLength: PositiveInteger,
+  path: Path, realPath: Path, sha256: Sha256, byteLength: Positive,
   durationSeconds: PositiveSeconds, durationEvidence: Schema.Literals(["audio-stream", "format"]),
   audio: Schema.Struct({
     streamIndex: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
     codec: Schema.NullOr(Schema.String),
-    sampleRateHz: Schema.NullOr(PositiveInteger), channels: Schema.NullOr(PositiveInteger),
+    sampleRateHz: Schema.NullOr(Positive), channels: Schema.NullOr(Positive),
     startTimeSeconds: Schema.NullOr(Schema.Finite),
   }),
 });

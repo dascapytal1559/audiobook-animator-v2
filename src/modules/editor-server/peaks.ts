@@ -1,7 +1,7 @@
 import { dirname } from "node:path";
 import { Effect, FileSystem, Fiber, Option, Schema, Stream } from "effect";
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process";
-import { readBounded, writeAtomic } from "../story-planning/io.js";
+import { readBounded, writeAtomic } from "../../core/io.js";
 import { detectRegions, SpeechAccumulator } from "../word-timing/speech.js";
 import { EditorServerError, PeaksFile, SpeechFile } from "./contracts.js";
 const fail = (code: EditorServerError["code"], message: string) => Effect.fail(new EditorServerError({ code, message }));

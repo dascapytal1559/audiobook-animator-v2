@@ -1,13 +1,8 @@
 import { Data, Schema } from "effect";
-import { Sha256 } from "../transcription/contracts.js";
+import { ClipIdentity, Producer } from "../../core/identity.js";
+import { IsoUtc, NonNegative, Path, Positive, Text } from "../../core/schema.js";
 import { ULID_PATTERN } from "./ulid.js";
-const Text = Schema.String.check(Schema.isMinLength(1), Schema.isPattern(/\S/));
-const Path = Text.check(Schema.isPattern(/^[^\0]+$/));
-const Positive = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
-const Index = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }));
-const Id = Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9-]{0,100}$/));
-/** ISO-8601 UTC instant with a Z suffix, as produced by Date#toISOString. */
-export const IsoUtc = Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/));
+export { ClipIdentity, IsoUtc, Producer };
 export const ShotId = Schema.String.check(Schema.isPattern(ULID_PATTERN));
 export const ShotMode = Schema.Literals(["graphic-illustration", "poetic-abstraction"]);
 export type ShotMode = typeof ShotMode.Type;
@@ -20,15 +15,10 @@ export const VisualTimelineConfig = Schema.Struct({
 });
 export type VisualTimelineConfig = typeof VisualTimelineConfig.Type;
 
-/** The verified clip a record or decisions file is pinned to. Every field must equal the loaded story context. */
-export const ClipIdentity = Schema.Struct({ bookId: Id, storyId: Id, audioSha256: Sha256, transcriptSha256: Sha256, sampleRateHz: Positive, sampleCount: Positive });
-export type ClipIdentity = typeof ClipIdentity.Type;
-
-export const Producer = Schema.Struct({ name: Text, version: Text });
 /** Immutable generation record at `<story>/shots/<id>/record.json`. `startSample` is on the clip's own clock; its upper bound is checked against the clip. */
 export const ShotRecord = Schema.Struct({
   schemaVersion: Schema.Literal(1), kind: Schema.Literal("visual-shot-generation"), id: ShotId, clip: ClipIdentity,
-  startSample: Index, mode: ShotMode,
+  startSample: NonNegative, mode: ShotMode,
   label: Schema.optionalKey(Text), prompt: Schema.optionalKey(Text), imagePath: Schema.optionalKey(ImagePath), notes: Schema.optionalKey(Text),
   createdAt: IsoUtc, producer: Producer,
 });
@@ -36,7 +26,7 @@ export type ShotRecord = typeof ShotRecord.Type;
 
 /** `anchorWordId` (A51) pins the shot to a transcript word: the effective start follows that word's effective start and beats `startSample`. Validated against the known words at merge time. */
 export const ShotDecision = Schema.Struct({
-  startSample: Schema.optionalKey(Index), anchorWordId: Schema.optionalKey(Text), mode: Schema.optionalKey(ShotMode),
+  startSample: Schema.optionalKey(NonNegative), anchorWordId: Schema.optionalKey(Text), mode: Schema.optionalKey(ShotMode),
   selected: Schema.optionalKey(Schema.Boolean), hidden: Schema.optionalKey(Schema.Boolean), notes: Schema.optionalKey(Text),
 });
 export type ShotDecision = typeof ShotDecision.Type;

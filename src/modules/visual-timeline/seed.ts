@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { Schema } from "effect";
+import { Positive, Sha256, Text } from "../../core/schema.js";
 import { type ShotMode } from "./contracts.js";
 import { encodeUlid } from "./ulid.js";
 
@@ -97,9 +98,7 @@ export function treatmentSeeds(rows: ReadonlyArray<TreatmentRow>, sampleRateHz: 
 // ---------------------------------------------------------------------------------------------------------------------
 // Prototype boards
 
-const Positive = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
-const Text = Schema.String.check(Schema.isMinLength(1));
-export const PrototypeAsset = Schema.Struct({ id: Text, path: Text, sha256: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)), byteLength: Positive, width: Positive, height: Positive, stackedPanels: Positive });
+export const PrototypeAsset = Schema.Struct({ id: Text, path: Text, sha256: Sha256, byteLength: Positive, width: Positive, height: Positive, stackedPanels: Positive });
 export type PrototypeAsset = typeof PrototypeAsset.Type;
 export const PrototypeAssets = Schema.Struct({ kind: Schema.Literal("visual-prototype-assets"), assets: Schema.Array(PrototypeAsset) });
 export const PrototypePrompts = Schema.Struct({ kind: Schema.Literal("great-silence-visual-prototype-prompts"), panelsPerAsset: Positive, prompts: Schema.Array(Schema.Struct({ id: Text, prompt: Text })) });

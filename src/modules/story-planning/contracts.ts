@@ -1,13 +1,8 @@
 import { Data, Schema } from "effect";
+import { Id, NonNegative, Path, Positive, PositiveSeconds, Sha256, Text } from "../../core/schema.js";
 import { StorySplitSegment } from "../story-split/contracts.js";
 import { ProviderTimedWord } from "../transcription/normalize.js";
-import { Punctuation, Sha256 } from "../transcription/contracts.js";
-const Text = Schema.String.check(Schema.isMinLength(1));
-const Path = Text.check(Schema.isPattern(/^[^\0]+$/));
-const Positive = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
-const Index = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }));
-const Id = Schema.String.check(Schema.isPattern(/^[a-z0-9][a-z0-9-]{0,100}$/));
-const PositiveSeconds = Schema.Finite.check(Schema.isGreaterThan(0));
+import { Punctuation } from "../transcription/contracts.js";
 
 /** `config/story-planning.json`: the one story directory this configuration selects. Paths resolve from the config file. */
 export const StoryPlanningConfig = Schema.Struct({
@@ -37,14 +32,14 @@ export const StoryManifest = Schema.Struct({
   transcriptPath: Path, transcriptSha256: Sha256, textPath: Path, textSha256: Sha256,
   origin: StoryOrigin,
   /** Per-story editor settings that override the server config; absent means the config default. */
-  chunking: Schema.optionalKey(Schema.Struct({ minSentenceBreakMs: Index })),
+  chunking: Schema.optionalKey(Schema.Struct({ minSentenceBreakMs: NonNegative })),
 });
 export type StoryManifest = typeof StoryManifest.Type;
 
 /** The fields of the paired transcript every reader checks against the manifest. The element-level schema is `PlanningTranscript`. */
 export const PairedTranscript = Schema.Struct({
   schemaVersion: Schema.Literal(1), kind: Schema.Literal("paired-story-segment-transcript"),
-  segment: Schema.Struct({ id: Id, title: Text, kind: Schema.Literal("story"), startSample: Index, endSample: Positive }),
+  segment: Schema.Struct({ id: Id, title: Text, kind: Schema.Literal("story"), startSample: NonNegative, endSample: Positive }),
   provenance: Schema.Struct({ planSha256: Sha256, transcriptSha256: Sha256, sourceSha256: Sha256, providerJobId: Text }),
   audio: Schema.Struct({ path: Path, manifestPath: Path, manifestSha256: Sha256, sha256: Sha256, sampleCount: Positive, sampleRateHz: Positive, durationSeconds: PositiveSeconds }),
   wordCount: Positive,
@@ -65,8 +60,8 @@ export const PlanningTranscript = Schema.Struct({ ...PairedTranscript.fields,
     wordTimingToleranceSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)) }),
   audio: Schema.Struct({ ...PairedTranscript.fields.audio.fields, channels: Positive }),
   elements: Schema.Array(Schema.Union([
-    Schema.Struct({ ...ProviderTimedWord.fields, bookElementIndex: Index, approximateSegmentStartSeconds: Schema.Finite, approximateSegmentEndSeconds: Schema.Finite }),
-    Schema.Struct({ ...Punctuation.fields, bookElementIndex: Index }),
+    Schema.Struct({ ...ProviderTimedWord.fields, bookElementIndex: NonNegative, approximateSegmentStartSeconds: Schema.Finite, approximateSegmentEndSeconds: Schema.Finite }),
+    Schema.Struct({ ...Punctuation.fields, bookElementIndex: NonNegative }),
   ])),
   text: Schema.String,
 });

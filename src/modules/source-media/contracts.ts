@@ -1,19 +1,15 @@
 import { Data, Schema } from "effect";
+import { Path, Positive } from "../../core/schema.js";
 
-const PositiveInteger = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }));
-const LocalPath = Schema.String.check(
-  Schema.isMinLength(1),
-  Schema.isPattern(/^[^\0]+$/),
-);
 
 /** All operational limits are supplied at the application boundary. */
 export const SourceMediaRequest = Schema.Struct({
-  sourcePath: LocalPath,
-  ffprobePath: LocalPath,
-  probeTimeoutMs: PositiveInteger,
-  maxProbeOutputBytes: PositiveInteger,
-  maxProbeErrorBytes: PositiveInteger,
-  hashChunkBytes: PositiveInteger.check(Schema.isLessThanOrEqualTo(64 * 1024 * 1024)),
+  sourcePath: Path,
+  ffprobePath: Path,
+  probeTimeoutMs: Positive,
+  maxProbeOutputBytes: Positive,
+  maxProbeErrorBytes: Positive,
+  hashChunkBytes: Positive.check(Schema.isLessThanOrEqualTo(64 * 1024 * 1024)),
   cueChapterToleranceSeconds: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
   audioStreamIndex: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 });

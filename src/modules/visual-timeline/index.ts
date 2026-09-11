@@ -1,7 +1,8 @@
 import { dirname, extname, join, resolve } from "node:path";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, FileSystem, type Schema } from "effect";
+import { sameClip } from "../../core/identity.js";
+import { decodeJson, encodeJson as encode, readBounded, writeAtomic as writeAtomicBytes } from "../../core/io.js";
 import { loadStoryContext, StoryPlanningError } from "../story-planning/index.js";
-import { readBounded, writeAtomic as writeAtomicBytes } from "../story-planning/io.js";
 import { ClipIdentity, DEFAULT_SETTINGS, Decisions, type DecisionsBody, type ShotMode, ShotRecord, VisualTimelineConfig, VisualTimelineError } from "./contracts.js";
 import { mergeTimeline } from "./merge.js";
 import { isUlid, mintUlid } from "./ulid.js";
@@ -10,20 +11,11 @@ export { type CandidateGroup, type EffectiveShot, mergeTimeline, type StitchedEn
 export { isUlid, mintUlid, ULID_PATTERN } from "./ulid.js";
 type Code = VisualTimelineError["code"];
 const fail = (code: Code, message: string) => Effect.fail(new VisualTimelineError({ code, message }));
-const encode = (value: unknown) => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
-/** Reuse story-planning's bounded reader; keep its message, own the error type. */
+/** Core readers and decoders keep their messages; this module owns the error type and code. */
 const read = (path: string, limit: number) => readBounded(path, limit).pipe(Effect.mapError(e => new VisualTimelineError({ code: "IoFailed", message: e.message })));
 const io = <A>(effect: Effect.Effect<A, unknown>, message: string) => effect.pipe(Effect.mapError(e => e instanceof VisualTimelineError ? e : new VisualTimelineError({ code: "IoFailed", message })));
-function decode<S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) {
-  return Effect.gen(function* () {
-    const raw = yield* Effect.try({ try: () => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown,
-      catch: () => new VisualTimelineError({ code, message: `Input is not valid UTF-8 JSON: ${path}.` }) });
-    return yield* Schema.decodeUnknownEffect(schema, { onExcessProperty: "error" })(raw).pipe(
-      Effect.mapError(e => new VisualTimelineError({ code, message: `Input does not match the required schema: ${path}. ${e.message.replace(/\s+/g, " ")}` })));
-  });
-}
+const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) => decodeJson(schema, bytes, path, true).pipe(Effect.mapError(e => new VisualTimelineError({ code, message: e.message })));
 const writeAtomic = (path: string, bytes: Uint8Array) => writeAtomicBytes(path, bytes).pipe(Effect.mapError(() => new VisualTimelineError({ code: "IoFailed", message: `Cannot write ${path}.` })));
-const sameClip = (a: ClipIdentity, b: ClipIdentity) => (Object.keys(ClipIdentity.fields) as Array<keyof ClipIdentity>).every(k => a[k] === b[k]);
 
 /** Config, verified clip identity from story-planning, and the story directory every timeline file lives in. `storyDirectory` overrides the planning config's default story. */
 function loadContext(configPath: string, explicitStoryDirectory?: string) {
