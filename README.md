@@ -291,6 +291,10 @@ In the editor, **GPT initial**, **Auto**, and **Edited** are timing views of the
 
 Validation: `pnpm test`, `pnpm --filter editor test`, and `python3 scripts/test-story-transcription.py`.
 
+## Status
+
+`pnpm --silent run cli status` prints one JSON report over every story directory, or one with `--story <id>`: whether the manifest and linked files verify (a failure is reported with its code and message, never omitted), the transcript provider, the word-timing overlays with the auto overlay's coverage and whether its recorded parameters still match this run's settings, the timeline's records, images, selections, hidden shots, gaps, undecided candidate groups, and unresolved anchors, whether the peaks and speech caches are fresh, stale, or absent, the Markdown documents in the directory, and whether the editor server answers on its port. Facts only; nothing is written and no audio is decoded.
+
 ## Runs and settings
 
 There is no settings folder. Every module declares its defaults in code (`storyDefaults`, `visualTimelineDefaults`, `editorDefaults`, `storyInventoryDefaults`, `transcriptionDefaults`), and every story-level tool takes `--story <id>` plus an optional `--run <file>`: a JSON object with any subset of the sections `storiesDirectory`, `booksDirectory`, `story`, `timeline`, `editor`, `inventory`, and `transcription`, laid over the defaults and then checked strictly, so a misspelt key fails by name. Directory paths in a run file resolve from the file. The editor server prints its effective settings beside the listening URL; the caches and the auto timing overlay record the values they were produced with. The book intake tools take their run file as `--run`; the run they were last given is recorded beside their outputs (`artifacts/preparation.json`, `split/run-manifest.json`, and `artifacts/source-inspection.request.json`).
