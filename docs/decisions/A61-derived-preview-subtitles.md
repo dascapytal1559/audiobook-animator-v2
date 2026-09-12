@@ -1,0 +1,17 @@
+# A61: Preview subtitles derive sentences and phrases from the working transcript, independently of timeline chunks.
+
+**Status.** Standing (2026-09-12). Confirmed through the subtitle alignment interview.
+
+**Decision.** Show subtitles in the editor preview first; movie export comes later. Keep a whole sentence together when it fits in at most two lines, otherwise choose successive phrases automatically. Preserve wording and punctuation, normalizing whitespace for display. Sentence boundaries come from text, with handling for abbreviations, initials, quotations, ellipses, and dialogue continuations. Timing edits and shot changes do not change sentence membership. Phrase and line breaks prefer punctuation and balanced lengths, avoiding tiny trailing fragments.
+
+**Why.** The editor's existing chunks can split at a pause or merge across a sentence mark. Their punctuation rule also treats `Dr.` as a sentence end and can attach an opening quotation mark to the previous chunk. Using those groups for subtitles would couple reading behavior to timing edits. The subtitle rule is separate; this decision does not change timeline grouping or the waveform alignment algorithm. English sentence segmentation is a rule for the supplied text, not a claim that every transcription ambiguity has been resolved.
+
+**Playback.** Use effective word timing, including pending manual edits. A cue encloses its words, remains visible through internal gaps, and clears 250 ms after its final word, capped by the next cue's start and the clip end. If input word timings are inverted, use the earliest start and latest end among the cue's words. Overlapping cues hand over at the later start; equal starts resolve to the later cue in transcript order. Pausing preserves the current display; seeking recomputes it directly from the clip sample. Shots do not govern subtitle boundaries.
+
+**Presentation.** Center white text near the bottom inside the story's picture frame, over a translucent dark backing. The frame respects the story's aspect ratio even under the preview height cap. Measure text at a fixed reference size and scale the frame's subtitle layout together on resize, keeping phrase membership stable. An indivisible token too wide for a line scales down rather than being truncated or assigned invented sub-token times.
+
+**Controls.** Separate Subtitles and Highlight word toggle buttons. Subtitles default on; highlighting defaults off. Both choices are remembered in this browser and apply across stories. The highlight control is disabled while subtitles are hidden, retaining its choice. Highlight only the active timed token, using color without shifting text. A provider token containing multiple written words highlights as one; punctuation has no invented timing. Keyboard activation of a focused button retains its normal browser behavior.
+
+**Scope and ownership.** Derive the display from the existing story payload and timing overlays. Do not create subtitle files, edit source text, or add manual subtitle editing controls. Manual split/join editing and export are deferred until the user chooses to develop those workflows. The pure grouping, layout, and timing rules live in `packages/domain/src/subtitles/`; browser font measurement and presentation live in the editor. Code defaults live in the subtitle module's `contracts.ts`.
+
+Recorded in the decision index of [CONTEXT.md](../../CONTEXT.md).

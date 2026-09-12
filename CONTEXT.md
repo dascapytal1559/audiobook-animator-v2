@@ -2,7 +2,7 @@
 
 Shared working document for the user and the lead agent: the target, the pipeline, the words we use, the decisions with their reasons, and the backlog. Agent directives are in `AGENTS.md`; humans read `README.md`; the human roadmap is `HUMAN.md`.
 
-Updated: 2026-09-11, Australia/Melbourne. Alignment is ongoing; an open question is not an approved requirement. Implementation can proceed on settled modules while other branches are discussed.
+Updated: 2026-09-12, Australia/Melbourne. Alignment is ongoing; an open question is not an approved requirement. Implementation can proceed on settled modules while other branches are discussed.
 
 ## Target
 
@@ -58,6 +58,8 @@ Use these words in code, documents, and conversation; a schema comment defers to
 | candidate group | Every shot with the same effective start; one is selected, by decision or newest-wins. |
 | stitched timeline | The selected shots in order, each holding until the next start, with an explicit opening gap when nothing starts at sample 0. |
 | chunk | A run of words the editor draws as one box: ended by a sentence mark with an audible gap, a long pause, or the end. |
+| sentence | A unit of the working text delimited by sentence punctuation, with abbreviations and quoted continuations accounted for. Its membership does not depend on narration gaps or timing edits. |
+| subtitle cue | The text displayed together over the picture: a whole sentence when it fits, otherwise one successive phrase from that sentence. It follows its words' effective timing independently of shots. |
 | speech region | A span the energy detector calls speech; the snap targets and the align pass use them. |
 | run | One invocation of a tool: its effective settings are the code defaults with an optional run file laid over them, and its outputs record them. |
 | settings | The values a run uses, one section per module: `story`, `timeline`, `editor`, `inventory`, `transcription`. |
@@ -102,6 +104,7 @@ Audiobook -> movie
 │           ├── Schema is the contract, CLI is a convenience [Q19]
 │           ├── 16:9 letterboxed preview, per-story setting [Q20]
 │           ├── Old prototype player discarded [A17]; behaviours from demo viewer carried [A24]
+│           ├── Preview subtitles: whole sentences or automatic phrases, optional word highlighting; export and manual subtitle editing later [A61]
 │           └── Word timing alignment against the audio [Q21–Q25 confirmed 2026-09-09]
 │               ├── Overlay files, transcript untouched; script and editor own separate files [A36, A42]
 │               ├── Three visible tracks: Original, Auto, Edited [A52]
@@ -197,6 +200,7 @@ One file per decision under [docs/decisions](docs/decisions/), each with its sta
 | A57 | [Defaults live in code; a config is a record of one run, kept beside its output.](docs/decisions/A57-defaults-in-code-run-files.md) | standing |
 | A58 | [Shapes and pure rules shared by server and client live once, in `packages/domain`.](docs/decisions/A58-one-source-of-truth-for-shapes.md) | standing |
 | A59 | [Intake produces stories; everything else consumes them, and the story manifest is the boundary.](docs/decisions/A59-intake-produces-stories.md) | standing |
+| A61 | [Preview subtitles derive sentences and phrases from the working transcript, independently of timeline chunks.](docs/decisions/A61-derived-preview-subtitles.md) | standing |
 
 ## When a new book arrives
 
@@ -235,6 +239,7 @@ Round-by-round responses, source-file evidence, the stack survey from foundation
 | B21 | Excerpt runs on the pilot, then whole clip, then every story on the user's say-so | All 17 stories aligned 2026-09-09 | Run 0–30 s: 69 words, 8 speech regions; boundary onset error median −210 ms → 0 ms (p10 −770 → −306, p90 −106 → 0); words inside speech 87% → 100%; all shifts between +140 and +302 ms. The user judged the first 30 s "very good" and asked for the whole clip. Whole-clip run with `--all`: 1,189 words, 149 regions, 162 boundaries; onset error median −140 ms → 0 (p10/p90 −379/+480 → 0/0); words inside speech 86% → 100%. Shifts: p10 +40 ms, median +147 ms, p90 +300 ms, extremes −260 ms (around 187 s, "astronomers used a SIBO") and +540 ms (around 338 s and 454 s). Those three spots are the places to eyeball on the Auto row. No manual entries exist yet. After approving the pilot's Auto track the user asked for every story. Sanity checks on one story per collection showed the same constant lead (130–150 ms) and sane speech detection on the 22.05 kHz narrator. The whole-clip pass then ran on all 16 remaining stories: original boundary onset error medians of −64 to −144 ms, all zeroed; words fully inside speech 82–87% before and 100% after; 15 MB of auto overlays in total. The first attempt failed on the seven stories over about 1h20m because the auto overlay borrowed the 1 MiB decisions limit; it now has its own explicit `limits.maxWordTimingBytes` (16 MiB). Caveat carried from A54: the 150 ms sentence-break rule was measured across the corpus and does not transfer (5–6% of breaks sit under 150 ms with no clean gap), so it needs a per-story setting or a manual join layer before it is trusted beyond the pilot. |
 | B22 | Story selector: multi-story editor server and a header picker in the client | Done 2026-09-09 | A56. `GET /api/stories` plus story-scoped routes; `--story` on the word-timing CLI; the mock server lists two stories. Completion: route tests on the synthetic fixture (listing, 404s, every route under the prefix) and browser QA switching between stories on the running dev server. |
 | B23 | Agent ergonomics: `src/core/`, `src/intake/`, `packages/domain`, run files instead of `config/`, one command tree, `animator status` | Done 2026-09-11 | A57 to A59. Every step verified by `pnpm check`; the review that led here is `docs/reviews/2026-09-09-agent-ergonomics-review.md`. The story-level error types are folded into one `AnimatorError` carrying `module` and `code`; intake keeps its own, being frozen. |
+| B24 | Preview subtitles with automatic sentence/phrase grouping and optional word highlighting | Done 2026-09-12 | A61. Two-line display follows effective word timing; separate subtitle and highlight toggles are remembered in the browser. Domain tests cover text preservation, grouping, layout, and timing. Browser checks cover playback, toggles, resizing, story switching, and pending timing edits. Export and manual subtitle editing remain deferred. |
 | B13 | Local input organization and source relocation | Done | Five input files moved with exact hashes retained; current paths/configs/docs updated. Real imports and all 20 Exhalation pairs reuse 97 unchanged artifacts. No loose root audio/transcript files or compatibility symlinks for those inputs remain. |
 
 Current readiness assessment: all 17 stories have verified audio/transcript pairs and live under `data/stories/`, with notes and credits retained with their books. The Great Silence is selected. Its source analysis is drafted, its editable timeline and study imports work in the browser editor, and the whole clip has an automatic timing overlay. The next product delivery is a complete moodboard film: consistent visual references and story images, final pacing, and a separate render command. Image provider, budget, output settings, and quality criteria remain open. Reusable autonomous discovery and semantic generation remain backlog work. The 95% autonomy target is not demonstrated; no complete movie has been rendered.

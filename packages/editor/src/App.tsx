@@ -212,6 +212,8 @@ export function App({ storyId, stories, onSelectStory }: Props) {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      // Space activates a focused button, including the subtitle toggles, without also toggling playback (A61).
+      if (target?.tagName === "BUTTON" && e.key === " ") return;
       const s = stateRef.current;
       if (s.story === null) return;
       const rate = s.story.clip.sampleRateHz;
@@ -322,7 +324,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
       </header>
       <main className="main">
         <section className="stage">
-          <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} />
+          <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} />
           <Transport
             playing={state.playing} playhead={state.playhead} sampleRateHz={Math.max(1, sampleRateHz)} sourceStartSample={state.story?.sourceStartSample ?? 0}
             loop={state.loop} follow={state.follow} working={state.working} save={state.save} dirty={isDirty(state)} connected={connected}
