@@ -1,17 +1,25 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ApiError, storyApi, useServerEvents, type PeaksResponse, type ShotMode, type SpeechResponse, type StitchedEntry, type StorySummary, type Word } from "./api.js";
-import { clampSample, entryAt, mergeTimeline, millisecondsToSamples, retimeChunks, secondsToSamples } from "@animator/domain";
+import { clampSample, entryAt, mergeTimeline, millisecondsToSamples, retimeChunks, secondsToSamples, subtitleDefaults, timelineForTrack } from "@animator/domain";
 import { referenceChunks } from "./rows.js";
 import { planTick } from "./playback.js";
 import { selectItem, selectedRange, type SelectionItem } from "./selection.js";
 import type { SnapTarget } from "./snap.js";
+import { Explorer } from "./Explorer.js";
 import { Preview } from "./Preview.js";
 import { ShotPanel } from "./ShotPanel.js";
 import { StoryPicker } from "./StoryPicker.js";
 import { decisionsForView, initialState, isDecisionsDirty, isDirty, isTimingDirty, reduce, wordsForView, workingBounds } from "./state.js";
-import { Timeline, type TimingRowData } from "./Timeline.js";
+import { booleanFlags, useViewPreference } from "./preferences.js";
+import { Timeline, type SubtitleToggles, type TimingRowData } from "./Timeline.js";
 import { effectiveWords, wordStartMap } from "./timing.js";
 import { Transport } from "./Transport.js";
+import { type EditorView, viewFromSearch } from "./view.js";
+
+/** The preview's subtitle toggles (A61) are a browser view preference, kept here because the preview shows them and the timeline's text group toggles them. */
+const SUBTITLES_KEY = "editor.subtitles";
+const SUBTITLE_TOGGLE_DEFAULTS: SubtitleToggles = { visible: subtitleDefaults.visible, highlight: subtitleDefaults.highlight };
+const parseSubtitles = booleanFlags(SUBTITLE_TOGGLE_DEFAULTS);
 
 const SAVE_DEBOUNCE_MS = 300;
 const SEEK_TOLERANCE_MS = 1;
@@ -35,6 +43,9 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const [connected, setConnected] = useState(false);
   const [busy, setBusy] = useState(false);
   const [alignBusy, setAlignBusy] = useState(false);
+  const [openingView, setOpeningView] = useState(() => viewFromSearch(window.location.search));
+  const [requestedTrack, setRequestedTrack] = useState(openingView.trackId);
+  const [view, setView] = useState<EditorView>(openingView.view);
   const audioRef = useRef<HTMLAudioElement>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -61,24 +72,50 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const selectionLeadStart = selectionRange === null ? null : editedBase[selectionRange.first]?.startSample ?? null;
   const wordStarts = useMemo(() => wordStartMap(words), [words]);
   const merged = useMemo(() => mergeTimeline(state.records, decisionsForView(state), Math.max(1, sampleCount), wordStarts), [state.records, state.decisions, state.drag, sampleCount, wordStarts]);
+  const trackIds = useMemo(() => [...new Set(merged.stitched.map(entry => entry.trackId))], [merged.stitched]);
+  const activeTrackId = trackIds.includes(requestedTrack) ? requestedTrack : trackIds[0] ?? "main";
+  const activeTimeline = useMemo(() => timelineForTrack(merged, activeTrackId), [merged, activeTrackId]);
+  const [subtitles, setSubtitles] = useViewPreference(SUBTITLES_KEY, SUBTITLE_TOGGLE_DEFAULTS, parseSubtitles);
+  const selectTrack = useCallback((trackId: string) => {
+    setRequestedTrack(trackId);
+    loopAnchorRef.current = null;
+    const url = new URL(window.location.href);
+    url.searchParams.set("track", trackId);
+    const rate = stateRef.current.story?.clip.sampleRateHz ?? 0;
+    if (rate > 0) url.searchParams.set("at", String(stateRef.current.playhead / rate));
+    window.history.replaceState(null, "", url);
+  }, []);
+  /** Timeline or explorer (A62); the choice rides in the URL like the track, so a link opens the same view. */
+  const selectView = useCallback((next: EditorView) => {
+    setView(next);
+    const url = new URL(window.location.href);
+    if (next === "timeline") url.searchParams.delete("view"); else url.searchParams.set("view", next);
+    const rate = stateRef.current.story?.clip.sampleRateHz ?? 0;
+    if (rate > 0) url.searchParams.set("at", String(stateRef.current.playhead / rate));
+    window.history.replaceState(null, "", url);
+  }, []);
   const tolerance = sampleRateHz > 0 ? millisecondsToSamples(SEEK_TOLERANCE_MS, sampleRateHz) : 0;
-  const currentEntry = useMemo(() => entryAt(merged.stitched, state.playhead, tolerance), [merged.stitched, state.playhead, tolerance]);
+  const currentEntry = useMemo(() => entryAt(activeTimeline.stitched, state.playhead, tolerance), [activeTimeline.stitched, state.playhead, tolerance]);
   const currentShot = currentEntry?.kind === "shot" ? currentEntry : null;
-  const currentGroup = useMemo(() => (currentShot ? merged.candidates.find(g => g.startSample === currentShot.startSample) ?? null : null), [merged.candidates, currentShot]);
+  const currentGroup = useMemo(() => (currentShot ? activeTimeline.candidates.find(g => g.startSample === currentShot.startSample) ?? null : null), [activeTimeline.candidates, currentShot]);
+  const previousShot = useMemo(() => activeTimeline.stitched.slice(0, currentEntry === null ? 0 : activeTimeline.stitched.indexOf(currentEntry))
+    .findLast((entry): entry is Extract<StitchedEntry, { kind: "shot" }> => entry.kind === "shot") ?? null, [activeTimeline.stitched, currentEntry]);
   const nextShot = useMemo(() => {
     if (currentEntry === null) return null;
-    const index = merged.stitched.indexOf(currentEntry);
-    const next = merged.stitched.slice(index + 1).find((e): e is Extract<StitchedEntry, { kind: "shot" }> => e.kind === "shot");
+    const index = activeTimeline.stitched.indexOf(currentEntry);
+    const next = activeTimeline.stitched.slice(index + 1).find((e): e is Extract<StitchedEntry, { kind: "shot" }> => e.kind === "shot");
     return next ?? null;
-  }, [merged.stitched, currentEntry]);
+  }, [activeTimeline.stitched, currentEntry]);
   const currentWordId = useMemo(() => wordAt(sortedWords, state.playhead)?.id ?? null, [sortedWords, state.playhead]);
   const anchorWord = useMemo(() => {
     const id = currentShot?.anchorWordId;
     const word = id === undefined ? undefined : words.find(w => w.id === id);
     return word === undefined ? null : { id: word.id, value: word.value };
   }, [currentShot, words]);
-  const mergedRef = useRef(merged);
-  mergedRef.current = merged;
+  const mergedRef = useRef(activeTimeline);
+  mergedRef.current = activeTimeline;
+  const allMergedRef = useRef(merged);
+  allMergedRef.current = merged;
 
   // Initial load.
   const loadTimeline = useCallback(async () => {
@@ -89,22 +126,28 @@ export function App({ storyId, stories, onSelectStory }: Props) {
     try { dispatch({ type: "story-loaded", story: await api.getStory() }); return true; }
     catch (e) { dispatch({ type: "error", message: `Story load failed. ${describe(e)}` }); return false; }
   }, [api]);
+  // The story map is optional (A62): a 404 is the normal "not written yet"; anything else is shown in the explorer, not the header.
+  const loadMap = useCallback(async () => {
+    try { dispatch({ type: "map-loaded", map: await api.getMap() }); }
+    catch (e) { dispatch(e instanceof ApiError && e.status === 404 ? { type: "map-absent" } : { type: "map-failed", message: describe(e) }); }
+  }, [api]);
   useEffect(() => {
     void (async () => {
       if (!(await loadStory())) return;
       await loadTimeline();
+      await loadMap();
       try { setPeaks(await api.getPeaks()); }
       catch (e) { dispatch({ type: "error", message: `Peaks load failed. ${describe(e)}` }); }
       // A server without the speech route yet (404) just means no shading; anything else is reported.
       try { setSpeech(await api.getSpeech()); }
       catch (e) { if (!(e instanceof ApiError && e.status === 404)) dispatch({ type: "error", message: `Speech regions load failed. ${describe(e)}` }); }
     })();
-  }, [api, loadStory, loadTimeline]);
+  }, [api, loadStory, loadTimeline, loadMap]);
   useEffect(() => { document.title = state.story === null ? "Story editor" : `${state.story.story.title} · Story editor`; }, [state.story]);
 
   // Live updates: a refetch never touches the audio element or an in-progress drag (the reducer keeps the drag and local edits).
   // The planning directory holds the timing overlays too, so the story is refetched with the timeline.
-  const onTimelineChanged = useCallback(() => { void loadTimeline(); void loadStory(); }, [loadTimeline, loadStory]);
+  const onTimelineChanged = useCallback(() => { void loadTimeline(); void loadStory(); void loadMap(); }, [loadTimeline, loadStory, loadMap]);
   const onStatus = useCallback((ok: boolean) => setConnected(ok), []);
   useServerEvents(api.eventsUrl, { onTimelineChanged, onStatus });
 
@@ -153,7 +196,31 @@ export function App({ storyId, stories, onSelectStory }: Props) {
     dispatch({ type: "playhead-set", sample: target });
   }, []);
   /** A user seek re-anchors the loop at wherever playback resumes. */
-  const seek = useCallback((sample: number) => { loopAnchorRef.current = null; seekKeepingLoop(sample); }, [seekKeepingLoop]);
+  const seek = useCallback((sample: number) => {
+    loopAnchorRef.current = null;
+    seekKeepingLoop(sample);
+    const clip = stateRef.current.story?.clip;
+    if (clip === undefined) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("at", String(clampSample(sample, clip.sampleCount) / clip.sampleRateHz));
+    window.history.replaceState(null, "", url);
+  }, [seekKeepingLoop]);
+  useEffect(() => {
+    const onPopState = () => { const opening = viewFromSearch(window.location.search); setOpeningView(opening); setRequestedTrack(opening.trackId); setView(opening.view); };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+  useEffect(() => {
+    if (sampleRateHz === 0 || sampleCount === 0) return;
+    const target = clampSample(secondsToSamples(openingView.seconds, sampleRateHz), sampleCount);
+    dispatch({ type: "playhead-set", sample: target });
+    const audio = audioRef.current;
+    if (audio === null) return;
+    const apply = () => seek(target);
+    if (audio.readyState >= 1) { apply(); return; }
+    audio.addEventListener("loadedmetadata", apply, { once: true });
+    return () => audio.removeEventListener("loadedmetadata", apply);
+  }, [sampleRateHz, sampleCount, openingView, seek]);
   const play = useCallback(() => {
     const s = stateRef.current;
     const audio = audioRef.current;
@@ -248,7 +315,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
       const record = await api.postShot(request);
       dispatch({ type: "record-added", record });
       if (selectInGroup) {
-        const group = mergedRef.current.candidates.find(g => g.startSample === request.startSample);
+        const group = allMergedRef.current.candidates.find(g => g.trackId === (request.trackId ?? "main") && g.startSample === request.startSample);
         dispatch({ type: "shot-selected", id: record.id, groupIds: [...(group?.shots.map(s => s.id) ?? []), record.id] });
       }
     } catch (e) {
@@ -258,17 +325,17 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const onNewShot = useCallback(() => {
     const s = stateRef.current;
     const mode = currentShot?.mode ?? DEFAULT_MODE;
-    void createShot({ startSample: s.playhead, mode }, false);
-  }, [createShot, currentShot]);
+    void createShot({ startSample: s.playhead, mode, trackId: activeTrackId }, false);
+  }, [createShot, currentShot, activeTrackId]);
   const onAttachImage = useCallback((file: File) => {
     if (currentShot === null) return;
-    void createShot({ startSample: currentShot.startSample, mode: currentShot.mode, image: file, ...(currentShot.label !== undefined ? { label: currentShot.label } : {}) }, true);
+    void createShot({ startSample: currentShot.startSample, mode: currentShot.mode, trackId: currentShot.trackId, image: file, ...(currentShot.label !== undefined ? { label: currentShot.label } : {}) }, true);
   }, [createShot, currentShot]);
   const onMergeNext = useCallback(() => {
     if (nextShot === null) return;
-    const group = merged.candidates.find(g => g.startSample === nextShot.startSample);
+    const group = activeTimeline.candidates.find(g => g.startSample === nextShot.startSample);
     dispatch({ type: "shots-hidden", ids: group ? group.shots.filter(s => !s.hidden).map(s => s.id) : [nextShot.id] });
-  }, [merged.candidates, nextShot]);
+  }, [activeTimeline.candidates, nextShot]);
 
   const onDragStart = useCallback((id: string, startSample: number) => dispatch({ type: "drag-start", id, startSample }), []);
   const onDragMove = useCallback((startSample: number, snap: SnapTarget | null) => dispatch({ type: "drag-move", startSample, snap }), []);
@@ -319,12 +386,17 @@ export function App({ storyId, stories, onSelectStory }: Props) {
       <header className="header">
         <h1>Story editor</h1>
         <StoryPicker stories={stories} value={storyId} onChange={onPickStory} />
+        <div className="view-switch" role="group" aria-label="View">
+          <button type="button" className={`toggle${view === "timeline" ? " on" : ""}`} aria-pressed={view === "timeline"} onClick={() => selectView("timeline")} data-testid="view-timeline">Timeline</button>
+          <button type="button" className={`toggle${view === "explorer" ? " on" : ""}`} aria-pressed={view === "explorer"} onClick={() => selectView("explorer")} data-testid="view-explorer">Explorer</button>
+        </div>
         {state.story && <span className="muted">{state.story.story.bookTitle} · {state.story.clip.storyId} · {state.story.clip.sampleRateHz} Hz · {state.story.story.transcriptProvider === "openai" ? "GPT transcript" : "Rev split text — awaiting GPT"}</span>}
         {state.error && <button type="button" className="error" onClick={() => dispatch({ type: "error-clear" })} title="Dismiss" data-testid="error">{state.error}</button>}
       </header>
-      <main className="main">
+      <main className={`main${view === "explorer" ? " explorer-view" : ""}`}>
         <section className="stage">
-          <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} />
+          {view === "timeline" && <>
+          <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} subtitles={subtitles} />
           <Transport
             playing={state.playing} playhead={state.playhead} sampleRateHz={Math.max(1, sampleRateHz)} sourceStartSample={state.story?.sourceStartSample ?? 0}
             loop={state.loop} follow={state.follow} working={state.working} save={state.save} dirty={isDirty(state)} connected={connected}
@@ -332,10 +404,14 @@ export function App({ storyId, stories, onSelectStory }: Props) {
             onToggleWorking={() => dispatch({ type: "working-toggle" })} onSetIn={() => dispatch({ type: "working-set-in" })} onSetOut={() => dispatch({ type: "working-set-out" })}
             onClearWorking={() => dispatch({ type: "working-clear" })} onSave={() => dispatch({ type: "save-requested" })}
           />
-          {state.story && (
+          </>}
+          {state.story && view === "explorer" && <Explorer map={state.map} words={words} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} onSeek={onSeek} />}
+          {state.story && view === "timeline" && (
             <Timeline
               words={words} chunks={chunks} original={originalRow} auto={autoRow} transcriptProvider={state.story?.story.transcriptProvider ?? "rev-ai"} selectionLeadStart={selectionLeadStart}
               sampleRateHz={sampleRateHz} sampleCount={sampleCount} peaks={peaks} speech={speech?.regions ?? null} stitched={merged.stitched} candidates={merged.candidates}
+              activeTrackId={activeTrackId} onSelectTrack={selectTrack} previousImageSample={previousShot?.startSample ?? null} nextImageSample={nextShot?.startSample ?? null}
+              subtitles={subtitles} onToggleSubtitle={key => setSubtitles({ ...subtitles, [key]: !subtitles[key] })}
               playhead={state.playhead} playing={state.playing} follow={state.follow} currentWordId={currentWordId} currentShotId={currentShot?.id ?? null}
               working={workingBounds(state, sampleCount)} drag={state.drag}
               selection={state.selection} wordDrag={state.wordDrag} alignReport={state.alignReport} alignBusy={alignBusy}
@@ -345,7 +421,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
             />
           )}
         </section>
-        <ShotPanel
+        {view === "timeline" && <ShotPanel
           entry={currentEntry} group={currentGroup} next={nextShot} sampleRateHz={Math.max(1, sampleRateHz)} playhead={state.playhead}
           aspect={state.decisions.settings.frameAspect} busy={busy} anchorWord={anchorWord} onDetach={onDetach}
           onSelect={id => { if (currentGroup) dispatch({ type: "shot-selected", id, groupIds: currentGroup.shots.map(s => s.id) }); }}
@@ -354,7 +430,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
           onHide={id => dispatch({ type: "shots-hidden", ids: [id] })}
           onAttachImage={onAttachImage} onNewShot={onNewShot} onMergeNext={onMergeNext}
           onAspect={(width, height) => dispatch({ type: "aspect-set", width, height })}
-        />
+        />}
       </main>
     </div>
   );

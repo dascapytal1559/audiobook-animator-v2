@@ -1,7 +1,7 @@
 import { Data } from "effect";
 
 /** Which part of the system failed; the code within it names the rule and the message names the file. One class, so a caller can always read `module` and `code`. */
-export type Module = "core" | "run" | "story" | "inventory" | "timeline" | "timing" | "editor";
+export type Module = "core" | "run" | "story" | "inventory" | "timeline" | "timing" | "editor" | "map";
 export class AnimatorError extends Data.TaggedError("AnimatorError")<{
   readonly module: Module;
   readonly code: string;

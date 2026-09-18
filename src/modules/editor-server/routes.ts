@@ -1,13 +1,14 @@
-import { basename, extname, join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { Duration, Effect, FileSystem, Layer, Schema, Semaphore, Stream } from "effect";
 import { AnimatorError } from "../../core/error.js";
 import { Sse } from "effect/unstable/encoding";
 import { HttpIncomingMessage, HttpRouter, type HttpServerRequest, HttpServerResponse, HttpStaticServer, Multipart } from "effect/unstable/http";
 import { clipOf, listStories as listStoryManifests, loadStoryContext, type StoryContext, type StorySettings } from "../story/index.js";
-import { decodeJson, readBounded } from "../../core/io.js";
+import { decodeJson, imageContentType, readBounded } from "../../core/io.js";
 import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotRecord, type VisualTimelineSettings, writeDecisions, type DecisionsBody } from "../visual-timeline/index.js";
 import { type TimingEntries } from "../word-timing/index.js";
-import { type ChunkElement, type StoriesResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
+import { type LoadedStoryMap, loadStoryMap } from "../story-map/index.js";
+import { type ChunkElement, type StoriesResponse, type StoryMapResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
 export type { StorySummary };
 import { type EditorSettings, editorError, type EditorCode } from "./contracts.js";
 import type { PeaksIdentity, SpeechIdentity } from "./peaks.js";
@@ -15,7 +16,6 @@ import { parseRange } from "./range.js";
 import { alignTiming, type Caches, loadTiming, makeCaches, storyPayload, writeManualTiming } from "./timing.js";
 type Code = EditorCode;
 const fail = (code: Code, message: string) => Effect.fail(editorError({ code, message }));
-const IMAGE_TYPES: Readonly<Record<string, string>> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
 const HEARTBEAT = Duration.seconds(15);
 const MAX_MULTIPART_PARTS = 16;
 
@@ -113,6 +113,7 @@ function errorResponse(error: unknown, options: { readonly decisionsFromClient?:
       editor: { InvalidConfig: 500, InvalidRequest: 400, PayloadTooLarge: 413, NotFound: 404, PeaksFailed: 500, IoFailed: 500 },
       timing: { InvalidRequest: 400, InvalidTiming: 500, IdentityMismatch: 409, IoFailed: 500 },
       timeline: { InvalidConfig: 500, InvalidRequest: 400, InvalidRecord: 500, InvalidDecisions: options.decisionsFromClient ? 400 : 500, IdentityMismatch: 409, RecordExists: 409, IoFailed: 500 },
+      map: { NotFound: 404, InvalidMap: 500, IdentityMismatch: 409, IoFailed: 500 },
     };
     return errorJson(byModule[error.module]?.[error.code] ?? 500, error.code, error.message);
   }
@@ -172,6 +173,10 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
   const sse = (event: string) => Sse.encoder.write({ _tag: "Event", event, id: undefined, data: JSON.stringify({ at: new Date().toISOString() }) });
   const ignoredChange = (ctx: EditorContext, path: string) => basename(path).startsWith(".") || path === ctx.cacheDirectory || path.startsWith(ctx.cacheDirectory + "/");
   const at = <P extends `/${string}`>(path: P) => `/api/stories/:storyId${path}` as const;
+  const storyMap = (ctx: EditorContext) => loadStoryMap({ story: ctx.story, wordIds: ctx.words.map(w => w.id), maxBytes: ctx.settings.editor.limits.maxStoryMapBytes });
+  /** The map as written, with each image given the URL of the route below (A62). */
+  const servedMap = (storyId: string, loaded: LoadedStoryMap): StoryMapResponse => ({ ...loaded.map, subjects: loaded.map.subjects.map(({ images, ...subject }) => images === undefined ? subject
+    : { ...subject, images: images.map((image, index) => ({ ...image, url: `/api/stories/${storyId}/map/subjects/${subject.id}/images/${index}` })) }) });
 
   const stories = HttpRouter.add("GET", "/api/stories", json({ stories: library.stories } satisfies StoriesResponse));
   const story = HttpRouter.add("GET", at("/story"), handle(withStory(s => storyJson(s.ctx))));
@@ -211,13 +216,15 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     if (image !== undefined) {
       if (typeof image === "string" || image.length !== 1 || typeof image[0] === "string") return yield* fail("InvalidRequest", "Field image must be exactly one file.");
       const file = image[0]!;
-      if (IMAGE_TYPES[extname(file.name).toLowerCase()] === undefined) return yield* fail("InvalidRequest", `Image must be a .png, .jpg, .jpeg, or .webp file, not ${JSON.stringify(file.name)}.`);
+      if (imageContentType(file.name) === undefined) return yield* fail("InvalidRequest", `Image must be a .png, .jpg, .jpeg, or .webp file, not ${JSON.stringify(file.name)}.`);
       imageSourcePath = file.path;
     }
     const mode = yield* text("mode");
-    if (mode !== "graphic-illustration" && mode !== "poetic-abstraction") return yield* fail("InvalidRequest", `mode must be one of ${ShotMode.literals.join(", ")}.`);
+    if (!Schema.is(ShotMode)(mode)) return yield* fail("InvalidRequest", `mode must be one of ${ShotMode.literals.join(", ")}.`);
+    const trackId = yield* text("trackId");
     const [startSample, startSeconds, label, prompt, notes] = [yield* number("startSample", yield* text("startSample")), yield* number("startSeconds", yield* text("startSeconds")), yield* text("label"), yield* text("prompt"), yield* text("notes")];
     const record = yield* addShot({ story: ctx.story, settings: ctx.settings.timeline, mode, producer: options.producer,
+      ...(trackId !== undefined ? { trackId } : {}),
       ...(startSample !== undefined ? { startSample } : {}), ...(startSeconds !== undefined ? { startSeconds } : {}),
       ...(label !== undefined ? { label } : {}), ...(prompt !== undefined ? { prompt } : {}), ...(notes !== undefined ? { notes } : {}),
       ...(imageSourcePath !== undefined ? { imageSourcePath } : {}) });
@@ -231,7 +238,7 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     const bytes = yield* read(join(directory, "record.json"), ctx.settings.timeline.limits.maxRecordBytes).pipe(Effect.mapError(() => notFound));
     const record = yield* decode(ShotRecord, bytes, "NotFound", id).pipe(Effect.mapError(() => notFound));
     if (record.id !== id || record.imagePath === undefined) return yield* Effect.fail(notFound);
-    const type = IMAGE_TYPES[extname(record.imagePath).toLowerCase()];
+    const type = imageContentType(record.imagePath);
     if (type === undefined) return yield* Effect.fail(notFound);
     return yield* HttpServerResponse.file(join(directory, record.imagePath), { headers: { "content-type": type, "cache-control": "no-cache" } }).pipe(Effect.mapError(() => notFound));
   }))));
@@ -256,9 +263,18 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     const body = Stream.make(sse("ready")).pipe(Stream.concat(Stream.merge(changes, heartbeats)), Stream.encodeText);
     return HttpServerResponse.stream(body, { contentType: "text/event-stream", headers: { "cache-control": "no-cache", "x-accel-buffering": "no" } });
   }))));
+  const map = HttpRouter.add("GET", at("/map"), handle(withStory(({ ctx }) => Effect.map(storyMap(ctx), loaded => json(servedMap(ctx.clip.storyId, loaded))))));
+  const mapImage = HttpRouter.add("GET", at("/map/subjects/:subjectId/images/:index"), handle(withStory(({ ctx }) => Effect.gen(function* () {
+    const { subjectId, index } = yield* HttpRouter.params;
+    const notFound = editorError({ code: "NotFound", message: "No such story map image." });
+    const loaded = yield* storyMap(ctx);
+    const image = loaded.images.find(i => i.subjectId === subjectId && String(i.index) === index);
+    if (image === undefined) return yield* Effect.fail(notFound);
+    return yield* HttpServerResponse.file(image.path, { headers: { "content-type": image.contentType, "cache-control": "no-cache" } }).pipe(Effect.mapError(() => notFound));
+  }))));
   const apiFallback = HttpRouter.add("*", "/api/*", errorJson(404, "NotFound", "No such API route."));
   const root = options.staticDirectory === undefined
-    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`animator-v2 editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /audio /peaks /speech /events\n`))
+    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`animator-v2 editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /map /map/subjects/:subjectId/images/:index /audio /peaks /speech /events\n`))
     : HttpStaticServer.layer({ root: resolve(options.staticDirectory), index: "index.html", spa: true, cacheControl: "no-cache" });
-  return Layer.mergeAll(stories, story, timelineRoute, decisions, wordTiming, align, speech, shots, image, audio, peaks, events, apiFallback, root);
+  return Layer.mergeAll(stories, story, timelineRoute, decisions, wordTiming, align, speech, shots, image, map, mapImage, audio, peaks, events, apiFallback, root);
 }

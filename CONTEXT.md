@@ -2,7 +2,7 @@
 
 Shared working document for the user and the lead agent: the target, the pipeline, the words we use, the decisions with their reasons, and the backlog. Agent directives are in `AGENTS.md`; humans read `README.md`; the human roadmap is `HUMAN.md`.
 
-Updated: 2026-09-12, Australia/Melbourne. Alignment is ongoing; an open question is not an approved requirement. Implementation can proceed on settled modules while other branches are discussed.
+Updated: 2026-09-18, Australia/Melbourne. Alignment is ongoing; an open question is not an approved requirement. Implementation can proceed on settled modules while other branches are discussed.
 
 ## Target
 
@@ -54,12 +54,18 @@ Use these words in code, documents, and conversation; a schema comment defers to
 | element | One word (with timing) or one piece of punctuation, in transcript order. |
 | overlay | A file keyed to the transcript that changes what is read without changing the transcript: `word-timing.auto.json`, `word-timing.json`, `decisions.json`. |
 | record, shot | An immutable generation record under `shots/<ulid>/record.json`, possibly with an image beside it: a start on the clip clock, a mode, a producer. |
+| image track | An independent visual sequence over a story's narration. Each draft has its own image track; the editor previews one track at a time. Existing shots belong to `main`. |
 | decision | A per-shot override or selection in `decisions.json`, written only by the editor or a CLI verb. |
-| candidate group | Every shot with the same effective start; one is selected, by decision or newest-wins. |
-| stitched timeline | The selected shots in order, each holding until the next start, with an explicit opening gap when nothing starts at sample 0. |
+| candidate group | Every shot in one image track with the same effective start; one is selected, by decision or newest-wins. |
+| stitched timeline | Each image track's selected shots in order, each holding until its track's next start, with an explicit opening gap when nothing starts at sample 0. |
 | chunk | A run of words the editor draws as one box: ended by a sentence mark with an audible gap, a long pause, or the end. |
 | sentence | A unit of the working text delimited by sentence punctuation, with abbreviations and quoted continuations accounted for. Its membership does not depend on narration gaps or timing edits. |
 | subtitle cue | The text displayed together over the picture: a whole sentence when it fits, otherwise one successive phrase from that sentence. It follows its words' effective timing independently of shots. |
+| story map | `story-map.json`: a story's subjects and sections as ranges of transcript word ids, pinned to the clip identity. Written by agents and scripts, read by the explorer and `story map`. |
+| subject | A character, location, object, or motif that recurs in a story, with a stable id, its mentions, and optional reference images. |
+| mention | An inclusive run of words where the narration names or clearly refers to a subject. |
+| section | A run of the narration with a structural role: act, chapter, scene, or beat. Sections nest by containment. |
+| explorer | The editor view that shows the story map: structure on the left, cast on the right, both seeking the shared playhead. |
 | speech region | A span the energy detector calls speech; the snap targets and the align pass use them. |
 | run | One invocation of a tool: its effective settings are the code defaults with an optional run file laid over them, and its outputs record them. |
 | settings | The values a run uses, one section per module: `story`, `timeline`, `editor`, `inventory`, `transcription`. |
@@ -105,6 +111,7 @@ Audiobook -> movie
 │           ├── 16:9 letterboxed preview, per-story setting [Q20]
 │           ├── Old prototype player discarded [A17]; behaviours from demo viewer carried [A24]
 │           ├── Preview subtitles: whole sentences or automatic phrases, optional word highlighting; export and manual subtitle editing later [A61]
+│           ├── Story map and explorer: subjects and sections as word ranges, read-only in the browser [A62]
 │           └── Word timing alignment against the audio [Q21–Q25 confirmed 2026-09-09]
 │               ├── Overlay files, transcript untouched; script and editor own separate files [A36, A42]
 │               ├── Three visible tracks: Original, Auto, Edited [A52]
@@ -200,7 +207,9 @@ One file per decision under [docs/decisions](docs/decisions/), each with its sta
 | A57 | [Defaults live in code; a config is a record of one run, kept beside its output.](docs/decisions/A57-defaults-in-code-run-files.md) | standing |
 | A58 | [Shapes and pure rules shared by server and client live once, in `packages/domain`.](docs/decisions/A58-one-source-of-truth-for-shapes.md) | standing |
 | A59 | [Intake produces stories; everything else consumes them, and the story manifest is the boundary.](docs/decisions/A59-intake-produces-stories.md) | standing |
+| A60 | [Image tracks are independent sequences over one story's narration.](docs/decisions/A60-independent-image-tracks.md) | standing |
 | A61 | [Preview subtitles derive sentences and phrases from the working transcript, independently of timeline chunks.](docs/decisions/A61-derived-preview-subtitles.md) | standing |
+| A62 | [A story map names a story's subjects and structure as word ranges; the editor explores it read-only.](docs/decisions/A62-story-map-and-explorer.md) | standing |
 
 ## When a new book arrives
 
@@ -240,6 +249,7 @@ Round-by-round responses, source-file evidence, the stack survey from foundation
 | B22 | Story selector: multi-story editor server and a header picker in the client | Done 2026-09-09 | A56. `GET /api/stories` plus story-scoped routes; `--story` on the word-timing CLI; the mock server lists two stories. Completion: route tests on the synthetic fixture (listing, 404s, every route under the prefix) and browser QA switching between stories on the running dev server. |
 | B23 | Agent ergonomics: `src/core/`, `src/intake/`, `packages/domain`, run files instead of `config/`, one command tree, `animator status` | Done 2026-09-11 | A57 to A59. Every step verified by `pnpm check`; the review that led here is `docs/reviews/2026-09-09-agent-ergonomics-review.md`. The story-level error types are folded into one `AnimatorError` carrying `module` and `code`; intake keeps its own, being frozen. |
 | B24 | Preview subtitles with automatic sentence/phrase grouping and optional word highlighting | Done 2026-09-12 | A61. Two-line display follows effective word timing; separate subtitle and highlight toggles are remembered in the browser. Domain tests cover text preservation, grouping, layout, and timing. Browser checks cover playback, toggles, resizing, story switching, and pending timing edits. Export and manual subtitle editing remain deferred. |
+| B25 | Story map and explorer: `story-map.json` schema and rules in the domain, server route and `story map` verb, explorer view in the client | Done 2026-09-18 | A62. Domain tests cover the rules, resolution, and the current chain; server tests cover refusal cases and image serving; the mock server carries a map. The Great Silence has an agent-authored map: 17 subjects with 158 mentions, 5 acts holding the analysis's 15 beats, continuity images attached. Understand has one written from the transcript alone: 32 subjects with 355 mentions, 9 acts and 49 beats, no images. Map authoring is by hand or agent; no extraction tool exists. |
 | B13 | Local input organization and source relocation | Done | Five input files moved with exact hashes retained; current paths/configs/docs updated. Real imports and all 20 Exhalation pairs reuse 97 unchanged artifacts. No loose root audio/transcript files or compatibility symlinks for those inputs remain. |
 
 Current readiness assessment: all 17 stories have verified audio/transcript pairs and live under `data/stories/`, with notes and credits retained with their books. The Great Silence is selected. Its source analysis is drafted, its editable timeline and study imports work in the browser editor, and the whole clip has an automatic timing overlay. The next product delivery is a complete moodboard film: consistent visual references and story images, final pacing, and a separate render command. Image provider, budget, output settings, and quality criteria remain open. Reusable autonomous discovery and semantic generation remain backlog work. The 95% autonomy target is not demonstrated; no complete movie has been rendered.

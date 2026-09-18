@@ -4,14 +4,18 @@ import { IsoUtc, NonNegative, Positive, Text } from "./schema.js";
 import { ULID_PATTERN } from "./ulid.js";
 
 export const ShotId = Schema.String.check(Schema.isPattern(ULID_PATTERN));
-export const ShotMode = Schema.Literals(["graphic-illustration", "poetic-abstraction"]);
+export const ShotMode = Schema.Literals(["graphic-illustration", "poetic-abstraction", "source-screenshot"]);
 export type ShotMode = typeof ShotMode.Type;
 export const SHOT_MODES: ReadonlyArray<ShotMode> = ShotMode.literals;
+/** Independent image sequence over the same narration (A60). Old immutable records belong to `main`. */
+export const ImageTrackId = Schema.String.check(Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/));
+export const DEFAULT_IMAGE_TRACK = "main";
+export const imageTrackOf = (record: { readonly trackId?: string }): string => record.trackId ?? DEFAULT_IMAGE_TRACK;
 /** One path segment inside the record's own directory: no separators, no `.`/`..`, never absolute. */
 export const ImagePath = Schema.String.check(Schema.isPattern(/^(?!\.\.?$)[^\0/\\]+$/));
 
 const shotFields = {
-  id: ShotId, startSample: NonNegative, mode: ShotMode,
+  id: ShotId, startSample: NonNegative, mode: ShotMode, trackId: Schema.optionalKey(ImageTrackId),
   label: Schema.optionalKey(Text), prompt: Schema.optionalKey(Text), imagePath: Schema.optionalKey(ImagePath), notes: Schema.optionalKey(Text),
   createdAt: IsoUtc, producer: Producer,
 };
@@ -43,16 +47,16 @@ export const DEFAULT_SETTINGS: TimelineSettings = { frameAspect: { width: 16, he
 const SelectionSource = Schema.Literals(["decision", "default"]);
 /** A record after its decision: overrides applied, anchor reported, selection resolved within its candidate group. */
 export const EffectiveShot = Schema.Struct({
-  ...shotFields, imageUrl: Schema.optionalKey(Text), anchorWordId: Schema.optionalKey(Text),
+  ...shotFields, trackId: ImageTrackId, imageUrl: Schema.optionalKey(Text), anchorWordId: Schema.optionalKey(Text),
   hidden: Schema.Boolean, selected: Schema.Boolean, selectionSource: Schema.optionalKey(SelectionSource),
 });
 export type EffectiveShot = typeof EffectiveShot.Type;
-/** Shots sharing one effective startSample. `selectedId` is null only when every candidate is hidden. */
-export const CandidateGroup = Schema.Struct({ startSample: NonNegative, shots: Schema.Array(EffectiveShot), selectedId: Schema.NullOr(ShotId), selectionSource: Schema.NullOr(SelectionSource) });
+/** Shots sharing one track and effective startSample. `selectedId` is null only when every candidate is hidden. */
+export const CandidateGroup = Schema.Struct({ trackId: ImageTrackId, startSample: NonNegative, shots: Schema.Array(EffectiveShot), selectedId: Schema.NullOr(ShotId), selectionSource: Schema.NullOr(SelectionSource) });
 export type CandidateGroup = typeof CandidateGroup.Type;
 export const StitchedEntry = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("shot"), ...EffectiveShot.fields, endSample: Positive }),
-  Schema.Struct({ kind: Schema.Literal("gap"), startSample: NonNegative, endSample: Positive }),
+  Schema.Struct({ kind: Schema.Literal("gap"), trackId: ImageTrackId, startSample: NonNegative, endSample: Positive }),
 ]);
 export type StitchedEntry = typeof StitchedEntry.Type;
 
@@ -67,7 +71,7 @@ export type MergedTimeline = {
 type MutableShot = { -readonly [K in keyof EffectiveShot]: EffectiveShot[K] };
 
 /**
- * The one timeline rule (A19, A25, A30 to A32, A51). Decision overrides are applied over record fields, shots with the same effective start
+ * The one timeline rule (A19, A25, A30 to A32, A51, A60). Decision overrides are applied over record fields, shots in the same track with the same effective start
  * form a candidate group, one candidate is selected per group (the explicitly selected one, else the newest by `createdAt`, never a hidden
  * one), and the selected shots are stitched so each holds until the next start and the last until the clip end; an opening gap is explicit.
  * `wordStarts` maps word id to effective start sample: an anchored shot starts at its word. When `wordStarts` is empty the words are unknown
@@ -87,36 +91,51 @@ export function mergeTimeline(records: ReadonlyArray<ServedShotRecord>, decision
       else unresolvedAnchors.push(id);
     }
   }
-  const groups = new Map<number, MutableShot[]>();
+  const tracks = new Map<string, Map<number, MutableShot[]>>();
+  if (records.length === 0) tracks.set(DEFAULT_IMAGE_TRACK, new Map());
   for (const record of records) {
     const d = decisions.shots[record.id] ?? {};
     const { schemaVersion: _v, kind: _k, clip: _c, ...fields } = record;
     const anchored = d.anchorWordId !== undefined ? wordStarts.get(d.anchorWordId) : undefined;
-    const shot: MutableShot = { ...fields, startSample: anchored ?? d.startSample ?? record.startSample, ...(d.anchorWordId !== undefined ? { anchorWordId: d.anchorWordId } : {}),
+    const shot: MutableShot = { ...fields, trackId: imageTrackOf(record), startSample: anchored ?? d.startSample ?? record.startSample, ...(d.anchorWordId !== undefined ? { anchorWordId: d.anchorWordId } : {}),
       mode: d.mode ?? record.mode, ...(d.notes !== undefined ? { notes: d.notes } : {}),
       hidden: d.hidden === true, selected: false, ...(d.selected === true ? { selectionSource: "decision" as const } : {}) };
+    const groups = tracks.get(shot.trackId) ?? new Map<number, MutableShot[]>();
+    tracks.set(shot.trackId, groups);
     const group = groups.get(shot.startSample) ?? [];
     group.push(shot); groups.set(shot.startSample, group);
   }
   const candidates: CandidateGroup[] = [];
-  for (const startSample of [...groups.keys()].sort((a, b) => a - b)) {
-    const shots = groups.get(startSample)!.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
-    const explicit = shots.filter(s => s.selectionSource === "decision");
-    if (explicit.length > 1) problems.push(`More than one shot selected at sample ${startSample}: ${explicit.map(s => s.id).join(", ")}`);
-    const visible = shots.filter(s => !s.hidden);
-    const chosen = explicit[0] ?? visible[0];
-    for (const s of shots) { if (s !== chosen) delete s.selectionSource; }
-    if (chosen) { chosen.selected = true; chosen.selectionSource = explicit[0] ? "decision" : "default"; }
-    candidates.push({ startSample, shots, selectedId: chosen?.id ?? null, selectionSource: chosen?.selectionSource ?? null });
+  const stitched: StitchedEntry[] = [];
+  for (const trackId of [...tracks.keys()].sort((a, b) => a === DEFAULT_IMAGE_TRACK ? -1 : b === DEFAULT_IMAGE_TRACK ? 1 : a.localeCompare(b))) {
+    const groups = tracks.get(trackId)!;
+    const trackCandidates: CandidateGroup[] = [];
+    for (const startSample of [...groups.keys()].sort((a, b) => a - b)) {
+      const shots = groups.get(startSample)!.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+      const explicit = shots.filter(s => s.selectionSource === "decision");
+      if (explicit.length > 1) problems.push(`More than one shot selected at sample ${startSample} in track ${trackId}: ${explicit.map(s => s.id).join(", ")}`);
+      const visible = shots.filter(s => !s.hidden);
+      const chosen = explicit[0] ?? visible[0];
+      for (const s of shots) { if (s !== chosen) delete s.selectionSource; }
+      if (chosen) { chosen.selected = true; chosen.selectionSource = explicit[0] ? "decision" : "default"; }
+      trackCandidates.push({ trackId, startSample, shots, selectedId: chosen?.id ?? null, selectionSource: chosen?.selectionSource ?? null });
+    }
+    const selected = trackCandidates.flatMap(g => g.shots.filter(s => s.selected));
+    const trackStitched: StitchedEntry[] = selected.map((shot, i) => ({ kind: "shot", ...shot, endSample: selected[i + 1]?.startSample ?? sampleCount }));
+    const firstStart = trackStitched[0]?.startSample ?? sampleCount;
+    if (firstStart > 0) trackStitched.unshift({ kind: "gap", trackId, startSample: 0, endSample: firstStart });
+    candidates.push(...trackCandidates);
+    stitched.push(...trackStitched);
   }
-  const selected = candidates.flatMap(g => g.shots.filter(s => s.selected));
-  const stitched: StitchedEntry[] = selected.map((shot, i) => ({ kind: "shot", ...shot, endSample: selected[i + 1]?.startSample ?? sampleCount }));
-  const firstStart = stitched[0]?.startSample ?? sampleCount;
-  if (firstStart > 0) stitched.unshift({ kind: "gap", startSample: 0, endSample: firstStart });
   return { candidates, stitched, unresolvedAnchors, problems };
 }
 
-/** The stitched entry under `sample`, with a tolerance so a seek that lands a hair early still reads as the intended shot. */
+/** Project one independent sequence before preview, playback, or candidate editing (A60). */
+export function timelineForTrack(timeline: Pick<MergedTimeline, "candidates" | "stitched">, trackId: string) {
+  return { candidates: timeline.candidates.filter(group => group.trackId === trackId), stitched: timeline.stitched.filter(entry => entry.trackId === trackId) };
+}
+
+/** The entry under `sample` in one track's stitched sequence, with a tolerance for seeks that land a hair early. */
 export function entryAt(stitched: ReadonlyArray<StitchedEntry>, sample: number, toleranceSamples: number): StitchedEntry | null {
   let current: StitchedEntry | null = null;
   for (const entry of stitched) {

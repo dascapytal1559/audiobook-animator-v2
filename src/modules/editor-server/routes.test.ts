@@ -6,6 +6,7 @@ import test, { type TestContext } from "node:test";
 import { NodeHttpServer, NodeServices } from "@effect/platform-node";
 import { Effect, Layer, Stream } from "effect";
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http";
+import { decodeStrict, StoryMapResponse, TimelineResponse } from "@animator/domain";
 import { fixture, type FixtureWord } from "../story/context.fixture.js";
 import { loadEditorLibrary, makeEditorRoutes } from "./index.js";
 const encode = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
@@ -26,7 +27,7 @@ async function serve(t: TestContext, options: { readonly staticDirectory?: strin
   // At 10 Hz a 100 ms frame is one sample; the lead is 2 samples.
   const settings = { story: story.settings, timeline: { limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } },
     editor: { ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 }, speech: { frameMs: 100, thresholdDbfs: -50, minSilenceMs: 200, minSpeechMs: 100 }, alignment: { leadMs: 200, boundaryPauseMs: 300 },
-      watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } } };
+      watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576, maxStoryMapBytes: 65536 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } } };
   const library = await Effect.runPromise(loadEditorLibrary({ storiesDirectory: story.root, settings }).pipe(Effect.provide(NodeServices.layer)));
   const { ctx } = await Effect.runPromise(library.open("pilot").pipe(Effect.provide(NodeServices.layer)));
   const layer = HttpRouter.serve(makeEditorRoutes(library, { producer: { name: "editor", version: "test" }, ...(options.staticDirectory !== undefined ? { staticDirectory: options.staticDirectory } : {}) }), { disableLogger: true, disableListenLog: true })
@@ -63,6 +64,43 @@ test("/api/story carries the verified clip, titles, the book-clock start, the el
     chunks: [{ id: "c0", startSample: 13, endSample: 23, text: "Uncorrected.", wordIds: ["m2:e0"], breakReason: "end" }],
     chunking: { minSentenceBreakMs: 0, pauseBreakMs: 600, mergedSentenceBreaks: [] }, timing: { inversions: 0, autoRuns: [], manualCount: 0, autoCount: 0 } });
   assert.deepEqual([s.clip.bookId, s.clip.storyId, s.clip.sampleRateHz, s.clip.sampleCount], ["book", "pilot", 10, 100]);
+});
+
+test("/api/map is 404 until story-map.json exists, then serves the map with image URLs the image route answers; a foreign clip is 409 and a map off the transcript is 500 naming the rule", async t => {
+  const s = await serve(t, { words: MORE_WORDS });
+  const mapPath = join(s.planningDirectory, "story-map.json");
+  const base = { schemaVersion: 1, kind: "story-map", clip: s.clip, createdAt: "2026-09-18T00:00:00.000Z", producer: { name: "test", version: "1" } };
+  const subjects = [{ id: "hero", kind: "character", name: "Hero", description: "Speaks.", mentions: [{ startWordId: "m2:e2", endWordId: "m2:e4" }], images: [{ path: "refs/hero.png", role: "canonical" }] }, { id: "silence", kind: "motif", name: "Silence", mentions: [] }];
+  const sections = [{ id: "act-1", kind: "act", title: "All", startWordId: "m2:e0", endWordId: "m2:e6" }, { id: "beat-1", kind: "beat", title: "Later", summary: "The rest.", startWordId: "m2:e2", endWordId: "m2:e6" }];
+  await mkdir(join(s.planningDirectory, "refs"));
+  await writeFile(join(s.planningDirectory, "refs", "hero.png"), PNG);
+  await s.run(Effect.gen(function* () {
+    const absent = yield* get("/api/stories/pilot/map");
+    assert.equal(absent.status, 404);
+    assert.equal((yield* bodyJson(absent))["code"], "NotFound");
+    yield* Effect.promise(() => writeFile(mapPath, encode({ ...base, subjects, sections })));
+    const served = yield* get("/api/stories/pilot/map");
+    assert.equal(served.status, 200);
+    const body = yield* bodyJson(served);
+    assert.deepEqual(decodeStrict(StoryMapResponse, body), { ...base, sections, subjects: [{ ...subjects[0], images: [{ path: "refs/hero.png", role: "canonical", url: "/api/stories/pilot/map/subjects/hero/images/0" }] }, subjects[1]] });
+    const image = yield* get("/api/stories/pilot/map/subjects/hero/images/0");
+    assert.equal(image.status, 200);
+    assert.equal(image.headers["content-type"], "image/png");
+    assert.deepEqual(yield* bodyBytes(image), PNG);
+    for (const path of ["/api/stories/pilot/map/subjects/hero/images/1", "/api/stories/pilot/map/subjects/silence/images/0", "/api/stories/pilot/map/subjects/nobody/images/0"]) {
+      assert.equal((yield* get(path)).status, 404, path);
+    }
+    yield* Effect.promise(() => writeFile(mapPath, encode({ ...base, clip: { ...s.clip, transcriptSha256: "b".repeat(64) }, subjects: [], sections: [] })));
+    const foreign = yield* get("/api/stories/pilot/map");
+    assert.equal(foreign.status, 409);
+    assert.equal((yield* bodyJson(foreign))["code"], "IdentityMismatch");
+    yield* Effect.promise(() => writeFile(mapPath, encode({ ...base, subjects: [], sections: [{ id: "a", kind: "act", title: "A", startWordId: "m2:e0", endWordId: "m2:e4" }, { id: "b", kind: "beat", title: "B", startWordId: "m2:e2", endWordId: "m2:e6" }] })));
+    const invalid = yield* get("/api/stories/pilot/map");
+    assert.equal(invalid.status, 500);
+    const error = yield* bodyJson(invalid);
+    assert.equal(error["code"], "InvalidMap");
+    assert.match(String(error["message"]), /^sections a and b overlap without one containing the other in .*story-map\.json\.$/);
+  }));
 });
 
 test("/api/stories lists every story directory with its manifest summary and the configured default; unknown or missing story ids are 404 before any file is read", async t => {
@@ -214,7 +252,7 @@ test("a multipart shot is created with its image, the timeline round-trips throu
   const s = await serve(t);
   await s.run(Effect.gen(function* () {
     const empty = yield* bodyJson(yield* get("/api/stories/pilot/timeline"));
-    assert.deepEqual([empty["records"], empty["stitched"]], [[], [{ kind: "gap", startSample: 0, endSample: 100 }]]);
+    assert.deepEqual([empty["records"], empty["stitched"]], [[], [{ kind: "gap", trackId: "main", startSample: 0, endSample: 100 }]]);
     const created = yield* HttpClient.execute(shotForm({ startSeconds: "2.36", mode: "graphic-illustration", label: "Opening", prompt: "A parrot" }, { name: "tiny.PNG", bytes: PNG }));
     assert.equal(created.status, 201);
     const record = yield* bodyJson(created);
@@ -267,6 +305,27 @@ test("a multipart shot is created with its image, the timeline round-trips throu
       assert.match(String(body["message"]) + String(body["code"]), pattern);
     }
     assert.equal((yield* bodyJson(yield* get("/api/stories/pilot/timeline")))["records"].length, 2, "rejected uploads leave no record behind");
+  }));
+});
+
+test("independent screenshot tracks round-trip shared schemas and decisions without competing at the same anchor", async t => {
+  const s = await serve(t);
+  await s.run(Effect.gen(function* () {
+    const firstResponse = yield* HttpClient.execute(shotForm({ startSample: "0", mode: "source-screenshot", trackId: "claude", label: "Frame 01" }, { name: "tiny.png", bytes: PNG }));
+    assert.equal(firstResponse.status, 201);
+    const first = yield* bodyJson(firstResponse);
+    const secondResponse = yield* HttpClient.execute(shotForm({ startSample: "0", mode: "source-screenshot", trackId: "grok" }, { name: "tiny.png", bytes: PNG }));
+    assert.equal(secondResponse.status, 201);
+    const second = yield* bodyJson(secondResponse);
+    const saved = yield* putJson("/api/stories/pilot/decisions", { settings: { frameAspect: { width: 16, height: 9 } }, shots: {
+      [first["id"] as string]: { selected: true, anchorWordId: "m2:e0" }, [second["id"] as string]: { selected: true, anchorWordId: "m2:e0" },
+    } });
+    assert.equal(saved.status, 200);
+    const timeline = decodeStrict(TimelineResponse, yield* bodyJson(saved));
+    assert.deepEqual(timeline.records.map(record => [record.trackId, record.mode]), [["claude", "source-screenshot"], ["grok", "source-screenshot"]]);
+    assert.deepEqual(timeline.candidates.map(group => [group.trackId, group.startSample, group.selectedId]), [["claude", 13, first["id"]], ["grok", 13, second["id"]]]);
+    assert.deepEqual(timeline.stitched.map(entry => [entry.trackId, entry.startSample, entry.endSample]), [["claude", 0, 13], ["claude", 13, 100], ["grok", 0, 13], ["grok", 13, 100]]);
+    assert.equal((yield* HttpClient.execute(shotForm({ startSample: "0", mode: "source-screenshot", trackId: "../bad" }))).status, 400);
   }));
 });
 

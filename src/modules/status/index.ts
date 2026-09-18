@@ -4,7 +4,7 @@
  */
 
 import { Effect, FileSystem, Option } from "effect";
-import type { StorySummary } from "@animator/domain";
+import type { StitchedEntry, StorySummary } from "@animator/domain";
 import { type EditorShared, listStories, openStory } from "../editor-server/routes.js";
 import { readPeaksCache, readSpeechCache } from "../editor-server/peaks.js";
 import { loadTiming } from "../editor-server/timing.js";
@@ -27,8 +27,8 @@ export type StoryStatus = {
   };
   readonly timeline: {
     readonly records: number; readonly withImage: number; readonly selected: number; readonly hidden: number;
-    /** Sample ranges no selected shot covers: today only an opening gap can exist. */
-    readonly gaps: ReadonlyArray<{ readonly startSample: number; readonly endSample: number }>;
+    /** Sample ranges no selected shot covers in the named image track (A60): today only an opening gap can exist. */
+    readonly gaps: ReadonlyArray<Pick<StitchedEntry, "trackId" | "startSample" | "endSample">>;
     /** Candidate groups with more than one visible shot and no explicit selection: newest-wins is deciding there. */
     readonly undecidedGroups: number;
     readonly unresolvedAnchors: ReadonlyArray<string>;
@@ -73,7 +73,7 @@ export function storyStatus(shared: EditorShared, summary: StorySummary): Effect
       timeline: {
         records: timeline.records.length, withImage: timeline.records.filter(r => r.imagePath !== undefined).length,
         selected: shots.filter(s => s.selected).length, hidden: shots.filter(s => s.hidden).length,
-        gaps: timeline.stitched.flatMap(e => e.kind === "gap" ? [{ startSample: e.startSample, endSample: e.endSample }] : []),
+        gaps: timeline.stitched.flatMap(e => e.kind === "gap" ? [{ trackId: e.trackId, startSample: e.startSample, endSample: e.endSample }] : []),
         undecidedGroups: timeline.candidates.filter(g => g.selectionSource === "default" && g.shots.filter(s => !s.hidden).length > 1).length,
         unresolvedAnchors: timeline.unresolvedAnchors,
       },
@@ -102,4 +102,3 @@ export function statusReport(options: EditorShared & { readonly storyId?: string
     return { storiesDirectory: options.storiesDirectory, stories, editorServer: editorServer ?? { url, listening: false, stories: null } } satisfies StatusReport;
   });
 }
-

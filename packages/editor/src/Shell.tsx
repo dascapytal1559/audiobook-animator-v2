@@ -25,6 +25,8 @@ export function Shell() {
   const select = useCallback((storyId: string) => {
     const url = new URL(window.location.href);
     url.searchParams.set(STORY_PARAM, storyId);
+    url.searchParams.delete("track");
+    url.searchParams.delete("at");
     window.history.pushState(null, "", url);
     setUrlStory(storyId);
   }, []);

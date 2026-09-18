@@ -32,6 +32,7 @@ const add = Command.make("add", {
   atSample: Flag.optional(Flag.integer("at-sample")).pipe(Flag.withDescription("Start on the clip clock, in samples.")),
   atSeconds: Flag.optional(Flag.float("at-seconds")).pipe(Flag.withDescription("Start on the clip clock, in seconds.")),
   mode: Flag.choice("mode", ShotMode.literals).pipe(Flag.withDescription("Visual mode of the shot.")),
+  track: optionalText("track", "Independent image track id (lowercase slug); defaults to main."),
   label: optionalText("label", "Short label."), prompt: optionalText("prompt", "Generation prompt, if any."), notes: optionalText("notes", "Free notes."),
   image: optionalText("image", "Image file to copy beside the record, resolved from the working directory."),
   producerName: Flag.string("producer-name").pipe(Flag.withDefault("visual-timeline-cli"), Flag.withDescription("Who is writing the record.")),
@@ -39,6 +40,7 @@ const add = Command.make("add", {
 }, handle(flags => Effect.gen(function* () {
   const t = yield* target(flags);
   const record = yield* addShot({ ...t, mode: flags.mode, producer: { name: flags.producerName, version: flags.producerVersion },
+    ...(has(flags.track) ? { trackId: flags.track.value } : {}),
     ...(has(flags.atSample) ? { startSample: flags.atSample.value } : {}), ...(has(flags.atSeconds) ? { startSeconds: flags.atSeconds.value } : {}),
     ...(has(flags.label) ? { label: flags.label.value } : {}), ...(has(flags.prompt) ? { prompt: flags.prompt.value } : {}),
     ...(has(flags.image) ? { imageSourcePath: flags.image.value } : {}), ...(has(flags.notes) ? { notes: flags.notes.value } : {}) });

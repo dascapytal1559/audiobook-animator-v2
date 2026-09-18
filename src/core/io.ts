@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { Effect, FileSystem, Option, Schema } from "effect";
 import { AnimatorError, errorsOf } from "./error.js";
 
@@ -61,3 +61,7 @@ export function writeAtomic(path: string, bytes: Uint8Array): Effect.Effect<void
 
 /** Pretty JSON with a trailing newline, the on-disk form of every artifact this repository writes. */
 export const encodeJson = (value: unknown): Buffer => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+
+/** The image files the editor serves, by extension: the content type, or undefined for anything else. */
+const IMAGE_TYPES: Readonly<Record<string, string>> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
+export const imageContentType = (path: string): string | undefined => IMAGE_TYPES[extname(path).toLowerCase()];

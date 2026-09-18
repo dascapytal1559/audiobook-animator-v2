@@ -4,6 +4,7 @@ import { Chunk } from "./chunks.js";
 import { ClipIdentity } from "./identity.js";
 import { Id, NonNegative, Positive, PositiveSeconds, Text } from "./schema.js";
 import { CandidateGroup, Decisions, ServedShotRecord, ShotId, StitchedEntry } from "./shots.js";
+import { StoryMap, Subject, SubjectImage } from "./story-map.js";
 import { AlignReport, AlignRun, TimingEntries, TimingEntry } from "./timing.js";
 
 /** One entry of `GET /api/stories`: identity and size from the manifest, without opening the transcript. */
@@ -48,6 +49,12 @@ export const TimelineResponse = Schema.Struct({
   candidates: Schema.Array(CandidateGroup), stitched: Schema.Array(StitchedEntry), unresolvedAnchors: Schema.Array(ShotId),
 });
 export type TimelineResponse = typeof TimelineResponse.Type;
+
+/** `GET .../map`: the story map as written (A62), each image given the URL the server serves it at. The client resolves word ranges with its effective timing. */
+export const ServedSubject = Schema.Struct({ ...Subject.fields, images: Schema.optionalKey(Schema.Array(Schema.Struct({ ...SubjectImage.fields, url: Text }))) });
+export type ServedSubject = typeof ServedSubject.Type;
+export const StoryMapResponse = Schema.Struct({ ...StoryMap.fields, subjects: Schema.Array(ServedSubject) });
+export type StoryMapResponse = typeof StoryMapResponse.Type;
 
 /** `PUT .../word-timing`: the complete manual overlay, keyed by word id (A36). Replaces the file wholesale, like decisions. */
 export const WordTimingBody = Schema.Struct({ words: TimingEntries });

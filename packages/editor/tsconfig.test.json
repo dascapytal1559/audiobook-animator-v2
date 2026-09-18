@@ -25,6 +25,8 @@
     "src/selection.test.ts",
     "src/timing.ts",
     "src/timing.test.ts",
-    "src/api.ts"
+    "src/api.ts",
+    "src/view.ts",
+    "src/view.test.ts"
   ]
 }

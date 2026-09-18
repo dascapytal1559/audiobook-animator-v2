@@ -1,8 +1,9 @@
-// Loopback mock of the editor API for smoke-testing the client without the real server. node:http only.
+// Loopback mock of the editor API for smoke-testing the client without the real server; shared timeline rules come from the domain.
 // Lists two stories at GET /api/stories that share one synthetic 2-second clip and one in-memory state (enough to exercise the story
 // selector); every other route lives under /api/stories/:storyId/. Echoes PUT .../decisions and PUT .../word-timing through the same merge
 // rules, answers POST .../word-timing/align with a canned report, and records every PUT at GET /mock/puts.
 import { createServer } from "node:http";
+import { decodeStrict, ImageTrackId, mergeTimeline, SHOT_MODES } from "@animator/domain";
 
 const PORT = Number(process.env["MOCK_PORT"] ?? "63621");
 const RATE = 48000;
@@ -82,27 +83,8 @@ const sseClients = new Set();
 
 const withUrl = (storyId) => (r) => (r.imagePath === undefined ? r : { ...r, imageUrl: `/api/stories/${storyId}/shots/${r.id}/image` });
 function merge(storyId) {
-  const groups = new Map();
-  for (const rec of records.map(withUrl(storyId))) {
-    const d = decisions.shots[rec.id] ?? {};
-    const { schemaVersion, kind, clip: _c, ...fields } = rec;
-    const anchored = d.anchorWordId !== undefined ? wordsById().get(d.anchorWordId)?.startSample : undefined;
-    const shot = { ...fields, startSample: anchored ?? d.startSample ?? rec.startSample, mode: d.mode ?? rec.mode, ...(d.notes !== undefined ? { notes: d.notes } : {}), hidden: d.hidden === true, selected: false, ...(d.selected === true ? { selectionSource: "decision" } : {}) };
-    const g = groups.get(shot.startSample) ?? []; g.push(shot); groups.set(shot.startSample, g);
-  }
-  const candidates = [];
-  for (const startSample of [...groups.keys()].sort((a, b) => a - b)) {
-    const shots = groups.get(startSample).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
-    const explicit = shots.filter(s => s.selectionSource === "decision");
-    const chosen = explicit[0] ?? shots.filter(s => !s.hidden)[0];
-    for (const s of shots) if (s !== chosen) delete s.selectionSource;
-    if (chosen) { chosen.selected = true; chosen.selectionSource = explicit[0] ? "decision" : "default"; }
-    candidates.push({ startSample, shots, selectedId: chosen?.id ?? null, selectionSource: chosen?.selectionSource ?? null });
-  }
-  const selected = candidates.flatMap(g => g.shots.filter(s => s.selected));
-  const stitched = selected.map((shot, i) => ({ kind: "shot", ...shot, endSample: selected[i + 1]?.startSample ?? COUNT }));
-  const firstStart = stitched[0]?.startSample ?? COUNT;
-  if (firstStart > 0) stitched.unshift({ kind: "gap", startSample: 0, endSample: firstStart });
+  const wordStarts = new Map(effective().map(word => [word.id, word.startSample]));
+  const { candidates, stitched } = mergeTimeline(records.map(withUrl(storyId)), decisions, COUNT, wordStarts);
   return { candidates, stitched };
 }
 const timeline = (storyId) => ({ clip, storyDirectory: `/mock/stories/${storyId}`, records: records.map(withUrl(storyId)), decisions, ...merge(storyId), unresolvedAnchors: [] });
@@ -163,6 +145,26 @@ function parseMultipart(body, contentType) {
   return { fields, files };
 }
 
+// Story map (A62): the second story has none, so the explorer's empty state is reachable; the first has two acts, three beats, and three subjects.
+const mapImages = { "narrator": { type: "image/svg+xml", bytes: Buffer.from(svg("#2f6b3a", "Narrator")) }, "arecibo": { type: "image/svg+xml", bytes: Buffer.from(svg("#3a4d6b", "Arecibo")) } };
+const storyMap = {
+  schemaVersion: 1, kind: "story-map", clip, createdAt: "2026-09-18T00:00:00.000Z", producer: { name: "mock", version: "1" },
+  subjects: [
+    { id: "narrator", kind: "character", name: "The narrator", description: "A parrot speaking for its species.", mentions: [{ startWordId: "w2", endWordId: "w2" }, { startWordId: "w4", endWordId: "w4" }], images: [{ path: "refs/narrator.svg", role: "canonical identity" }] },
+    { id: "arecibo", kind: "object", name: "Arecibo", description: "The listening instrument.", mentions: [{ startWordId: "w3", endWordId: "w3" }], images: [{ path: "refs/arecibo.svg", role: "intact landscape" }] },
+    { id: "silence", kind: "motif", name: "The Great Silence", mentions: [{ startWordId: "w6", endWordId: "w7" }] },
+  ],
+  sections: [
+    { id: "act-1", kind: "act", title: "The listeners", summary: "Humans build an ear.", startWordId: "w1", endWordId: "w4" },
+    { id: "beat-1", kind: "beat", title: "Title", startWordId: "w1", endWordId: "w1" },
+    { id: "beat-2", kind: "beat", title: "An overlooked neighbour", summary: "The narrator is right here.", startWordId: "w2", endWordId: "w4" },
+    { id: "act-2", kind: "act", title: "Silence", startWordId: "w5", endWordId: "w7" },
+    { id: "beat-3", kind: "beat", title: "What they would call it", startWordId: "w5", endWordId: "w7" },
+  ],
+};
+const servedMap = (storyId) => ({ ...storyMap, clip: { ...clip, storyId }, subjects: storyMap.subjects.map(({ images, ...subject }) => images === undefined ? subject
+  : { ...subject, images: images.map((image, index) => ({ ...image, url: `/api/stories/${storyId}/map/subjects/${subject.id}/images/${index}` })) }) });
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
   try {
@@ -177,6 +179,14 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && path === "/api/speech") return json(res, 200, speech);
     if (req.method === "GET" && path === "/api/timeline") return json(res, 200, timeline(storyId));
     if (req.method === "GET" && path === "/api/peaks") return json(res, 200, peaks);
+    if (req.method === "GET" && path === "/api/map") return storyId === STORIES[0].id ? json(res, 200, servedMap(storyId)) : fail(res, 404, "NotFound", `No story map for ${storyId}.`);
+    const mapImage = /^\/api\/map\/subjects\/([a-z0-9-]+)\/images\/(\d+)$/.exec(path);
+    if (req.method === "GET" && mapImage) {
+      const file = storyId === STORIES[0].id && mapImage[2] === "0" ? mapImages[mapImage[1]] : undefined;
+      if (!file) return fail(res, 404, "NotFound", "No such story map image.");
+      res.writeHead(200, { "content-type": file.type, "content-length": file.bytes.length });
+      return res.end(file.bytes);
+    }
     if (req.method === "GET" && path === "/api/audio") {
       const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
       if (range) {
@@ -249,8 +259,12 @@ const server = createServer(async (req, res) => {
       const { fields, files } = parseMultipart(await readBody(req), req.headers["content-type"] ?? "");
       const startSample = Number(fields.startSample);
       if (!Number.isInteger(startSample) || startSample < 0 || startSample >= COUNT) return fail(res, 400, "InvalidRequest", "startSample out of range.");
-      if (!["graphic-illustration", "poetic-abstraction"].includes(fields.mode)) return fail(res, 400, "InvalidRequest", "mode invalid.");
+      if (!SHOT_MODES.includes(fields.mode)) return fail(res, 400, "InvalidRequest", "mode invalid.");
       const extra = {};
+      if (fields.trackId !== undefined) {
+        try { extra.trackId = decodeStrict(ImageTrackId, fields.trackId); }
+        catch { return fail(res, 400, "InvalidRequest", "trackId invalid."); }
+      }
       for (const key of ["label", "prompt", "notes"]) if (fields[key] !== undefined && fields[key].trim() !== "") extra[key] = fields[key];
       const created = addRecord(startSample, fields.mode, extra, files.image);
       posts.push({ at: new Date().toISOString(), fields, image: files.image ? { name: files.image.name, bytes: files.image.bytes.length } : null });

@@ -1,5 +1,6 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
-import { clampSample, formatClock, millisecondsToSamples } from "@animator/domain";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent as ReactWheelEvent } from "react";
+import { booleanFlags, useViewPreference } from "./preferences.js";
+import { clampSample, formatClock, millisecondsToSamples, timelineForTrack } from "@animator/domain";
 import type { AlignReport, CandidateGroup, Chunk, PeaksResponse, Span, StitchedEntry, TimingMeasure, Word } from "./api.js";
 import { ChunkLane, type RowVariant, type TextLaneMode } from "./ChunkLane.js";
 import { selectedIds as selectedIdsOf, type Selection, type SelectionItem } from "./selection.js";
@@ -16,10 +17,11 @@ const MAX_PX_PER_SECOND = 2000;
 const DEFAULT_PX_PER_SECOND = 120;
 /** Below this zoom the speech band and the timing rows are unreadable, so they are not drawn; the row toggles keep their state. */
 const DETAIL_MIN_PX_PER_SECOND = 20;
-const LANE_HEIGHTS = { ruler: 20, waveform: 72, row: 36, shots: 44 } as const;
+const LANE_HEIGHTS = { ruler: 20, group: 24, waveform: 72, row: 36, shots: 44 } as const;
 const SNAP_TEXT_MAX_CHARS = 40;
 
 type ShotEntry = Extract<StitchedEntry, { kind: "shot" }>;
+export type SubtitleToggles = { visible: boolean; highlight: boolean };
 export type TimingRowData = { words: ReadonlyArray<Word>; chunks: ReadonlyArray<Chunk> };
 type Props = {
   /** The Edited row (A52): effective words in transcript order with any in-progress group move applied, and the server's chunks re-timed to them. */
@@ -31,6 +33,11 @@ type Props = {
   selectionLeadStart: number | null;
   sampleRateHz: number; sampleCount: number; peaks: PeaksResponse | null; speech: ReadonlyArray<Span> | null;
   stitched: ReadonlyArray<StitchedEntry>; candidates: ReadonlyArray<CandidateGroup>;
+  activeTrackId: string; onSelectTrack: (trackId: string) => void;
+  /** Start samples of the active track's shots before and after the current one, for the step buttons in the image group header. */
+  previousImageSample: number | null; nextImageSample: number | null;
+  /** The preview's subtitle toggles (A61), shown in the text group header because they follow the text timing. */
+  subtitles: SubtitleToggles; onToggleSubtitle: (key: keyof SubtitleToggles) => void;
   playhead: number; playing: boolean; follow: boolean; currentWordId: string | null; currentShotId: string | null;
   working: { start: number; end: number } | null; drag: Drag | null;
   selection: Selection | null; wordDrag: WordDrag | null; alignReport: AlignReport | null; alignBusy: boolean;
@@ -45,40 +52,32 @@ type Props = {
 const MemoWaveform = memo(Waveform);
 const MemoChunkLane = memo(ChunkLane);
 const MemoShotLane = memo(ShotLane);
-/** The text lane's words-or-sentences choice and the row toggles are browser view preferences, never part of the saved timeline. */
+/** Browser view preferences (see preferences.ts): the text lane's words-or-sentences choice, the row toggles, and which track groups are open. */
 const TEXT_LANE_MODE_KEY = "editor.textLaneMode";
 const ROWS_KEY = "editor.timelineRows";
+const GROUPS_KEY = "editor.timelineGroups";
 type RowToggles = { speech: boolean; original: boolean; auto: boolean; edited: boolean };
 const DEFAULT_ROWS: RowToggles = { speech: true, original: true, auto: true, edited: true };
-function readTextLaneMode(): TextLaneMode {
-  try { return window.localStorage.getItem(TEXT_LANE_MODE_KEY) === "words" ? "words" : "sentences"; } catch { return "sentences"; }
-}
-function readRows(): RowToggles {
-  try {
-    const raw = window.localStorage.getItem(ROWS_KEY);
-    if (raw === null) return DEFAULT_ROWS;
-    const parsed = JSON.parse(raw) as Partial<Record<keyof RowToggles, unknown>>;
-    const pick = (key: keyof RowToggles) => (typeof parsed[key] === "boolean" ? parsed[key] : DEFAULT_ROWS[key]);
-    return { speech: pick("speech"), original: pick("original"), auto: pick("auto"), edited: pick("edited") };
-  } catch { return DEFAULT_ROWS; }
-}
+/** The track groups, top to bottom: the waveform, the timing rows, and the image tracks. Each folds on its own. */
+type TrackGroupId = "audio" | "text" | "image";
+const DEFAULT_GROUPS: Record<TrackGroupId, boolean> = { audio: true, text: true, image: true };
+const parseTextLaneMode = (stored: unknown): TextLaneMode => (stored === "words" ? "words" : "sentences");
+const parseRows = booleanFlags(DEFAULT_ROWS);
+const parseGroups = booleanFlags(DEFAULT_GROUPS);
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 const noop = () => undefined;
 
-/** Horizontally scrollable, zoomable strip with ruler, waveform, up to three timing rows, and the shot lane. Only the visible window is drawn. */
+/** Horizontally scrollable, zoomable strip: a ruler over three folding track groups, audio (the waveform), text (up to three timing rows), and image (one row per image track). Only the visible window is drawn. */
 export function Timeline(p: Props) {
+  const tracks = useMemo(() => [...new Set(p.stitched.map(entry => entry.trackId))].map(id => ({ id, ...timelineForTrack(p, id) })), [p.stitched, p.candidates]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [pxPerSecond, setPxPerSecond] = useState(DEFAULT_PX_PER_SECOND);
-  const [textMode, setTextMode] = useState<TextLaneMode>(readTextLaneMode);
-  const chooseTextMode = (mode: TextLaneMode) => { setTextMode(mode); try { window.localStorage.setItem(TEXT_LANE_MODE_KEY, mode); } catch { /* view preference only */ } };
-  const [rows, setRows] = useState<RowToggles>(readRows);
-
-  const toggleRow = (key: keyof RowToggles) => {
-    const next = { ...rows, [key]: !rows[key] };
-    setRows(next);
-    try { window.localStorage.setItem(ROWS_KEY, JSON.stringify(next)); } catch { /* view preference only */ }
-  };
+  const [textMode, chooseTextMode] = useViewPreference<TextLaneMode>(TEXT_LANE_MODE_KEY, "sentences", parseTextLaneMode);
+  const [rows, setRows] = useViewPreference(ROWS_KEY, DEFAULT_ROWS, parseRows);
+  const toggleRow = (key: keyof RowToggles) => setRows({ ...rows, [key]: !rows[key] });
+  const [groups, setGroups] = useViewPreference(GROUPS_KEY, DEFAULT_GROUPS, parseGroups);
+  const toggleGroup = (id: TrackGroupId) => setGroups({ ...groups, [id]: !groups[id] });
   const [view, setView] = useState({ scrollLeft: 0, width: 0 });
   const pxPerSample = pxPerSecond / p.sampleRateHz;
   const totalWidth = Math.ceil(p.sampleCount * pxPerSample);
@@ -107,14 +106,14 @@ export function Timeline(p: Props) {
     return () => { observer.disconnect(); el.removeEventListener("scroll", update); };
   }, []);
 
-  // Follow playback: keep the playhead in view while it moves during playback. Deliberately not re-run on zoom or resize,
+  // Follow playback and explicit seeks, including a link opened at a sentence. Deliberately not re-run on zoom or resize,
   // or a zoom that pushes the playhead off screen would snap the scroll away from the anchor.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el === null || !p.follow || !p.playing || p.drag !== null || p.wordDrag !== null || view.width === 0) return;
+    if (el === null || !p.follow || p.drag !== null || p.wordDrag !== null || view.width === 0) return;
     const x = p.playhead * pxPerSample;
     if (x < el.scrollLeft + view.width * 0.05 || x > el.scrollLeft + view.width * 0.9) el.scrollLeft = Math.max(0, x - view.width * 0.2);
-  }, [p.playhead, p.follow, p.playing, p.drag, p.wordDrag]);
+  }, [p.playhead, p.follow, p.playing, p.drag, p.wordDrag, view.width > 0]);
 
   // Zoom keeps the sample under the anchor fixed on screen. The scroll correction must land in the same commit as the new
   // scale (before paint), or the content, the sticky waveform, and the culling window disagree for a frame and flicker.
@@ -149,7 +148,9 @@ export function Timeline(p: Props) {
   }, [pxPerSample, p.sampleCount]);
 
   const onBackgroundClick = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).closest(".marker, .chunk") !== null) return;
+    if ((e.target as HTMLElement).closest(".marker, .chunk, .image-track-label, .track-group-bar") !== null) return;
+    const trackId = (e.target as HTMLElement).closest<HTMLElement>("[data-image-track]")?.dataset["imageTrack"];
+    if (trackId !== undefined) p.onSelectTrack(trackId);
     p.onSeek(sampleAtClientX(e.clientX), false);
   };
 
@@ -159,9 +160,11 @@ export function Timeline(p: Props) {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
+    p.onSelectTrack(entry.trackId);
+    p.onSeek(entry.startSample, false);
     dragOffsetRef.current = sampleAtClientX(e.clientX) - entry.startSample;
     p.onDragStart(entry.id, entry.startSample);
-  }, [sampleAtClientX, p.onDragStart]);
+  }, [sampleAtClientX, p.onDragStart, p.onSelectTrack, p.onSeek]);
 
   useEffect(() => {
     if (p.drag === null) return;
@@ -225,7 +228,6 @@ export function Timeline(p: Props) {
   const playheadX = p.playhead * pxPerSample;
   const detail = pxPerSecond >= DETAIL_MIN_PX_PER_SECOND;
   const rowOrder: ReadonlyArray<RowVariant> = detail ? (["original", "auto", "edited"] as const).filter(r => rows[r]) : [];
-  const laneTotal = LANE_HEIGHTS.ruler + LANE_HEIGHTS.waveform + LANE_HEIGHTS.row * rowOrder.length + LANE_HEIGHTS.shots;
   const rowData = (variant: RowVariant): TimingRowData => (variant === "original" ? p.original : variant === "auto" ? p.auto : { words: p.words, chunks: p.chunks });
   const wordDragHint = p.wordDrag === null ? null : `${formatDeltaMs(p.wordDrag.delta, p.sampleRateHz)}${p.wordDrag.snap ? ` · ${describeSnap(p.wordDrag.snap, p.sampleRateHz)}` : ""}`;
 
@@ -236,16 +238,6 @@ export function Timeline(p: Props) {
         <span className="zoom-value">{pxPerSecond.toFixed(pxPerSecond < 10 ? 1 : 0)} px/s</span>
         <button type="button" onClick={() => zoomTo(pxPerSecond * 1.5, null)} aria-label="Zoom in">+</button>
         <button type="button" onClick={() => zoomTo(minPxPerSecond, null)}>Fit</button>
-        <span className="toolbar-group" role="radiogroup" aria-label="Text lane">
-          <button type="button" className={textMode === "sentences" ? "toggle on" : "toggle"} aria-pressed={textMode === "sentences"} onClick={() => chooseTextMode("sentences")}>Sentences</button>
-          <button type="button" className={textMode === "words" ? "toggle on" : "toggle"} aria-pressed={textMode === "words"} onClick={() => chooseTextMode("words")}>Words</button>
-        </span>
-        <span className="toolbar-group" role="group" aria-label="Rows" title={detail ? undefined : `Rows are hidden below ${DETAIL_MIN_PX_PER_SECOND} px/s; zoom in to show them`}>
-          <button type="button" className={rows.speech ? "toggle on" : "toggle"} aria-pressed={rows.speech} onClick={() => toggleRow("speech")} disabled={!detail} title={p.speech === null ? "Speech regions have not loaded" : `${p.speech.length} speech regions`} data-testid="toggle-speech">Speech</button>
-          <button type="button" className={rows.original ? "toggle on" : "toggle"} aria-pressed={rows.original} onClick={() => toggleRow("original")} disabled={!detail} title="Initial timing of the working transcript, before waveform alignment" data-testid="toggle-original">{p.transcriptProvider === "openai" ? "GPT initial" : "Rev split"}</button>
-          <button type="button" className={rows.auto ? "toggle on" : "toggle"} aria-pressed={rows.auto} onClick={() => toggleRow("auto")} disabled={!detail} title="Scripted align result, read-only" data-testid="toggle-auto">Auto</button>
-          <button type="button" className={rows.edited ? "toggle on" : "toggle"} aria-pressed={rows.edited} onClick={() => toggleRow("edited")} disabled={!detail} title="Effective timing: select and drag here" data-testid="toggle-edited">Edited</button>
-        </span>
         <button type="button" className="align-button" onClick={p.onAlign} disabled={p.selection === null || p.alignBusy || p.wordDrag !== null} title="Run the automatic pass on the selected words (A43)" data-testid="align-selection">
           {p.alignBusy ? "Aligning…" : "Align selection"}
         </button>
@@ -255,15 +247,38 @@ export function Timeline(p: Props) {
         {p.alignReport !== null && <AlignReportView report={p.alignReport} onDismiss={p.onDismissReport} />}
       </div>
       <div ref={scrollRef} className={`timeline-scroll${p.drag || p.wordDrag ? " dragging" : ""}`} onWheel={onWheel} onPointerDown={onBackgroundClick}>
-        <div ref={contentRef} className="timeline-content" style={{ width: totalWidth, height: laneTotal }}>
+        <div ref={contentRef} className="timeline-content" style={{ width: totalWidth }}>
           <div className="lane lane-ruler" style={{ height: LANE_HEIGHTS.ruler }}>
             {ticks.map(t => <span key={t.sample} className="tick" style={{ left: t.sample * pxPerSample }}>{t.label}</span>)}
           </div>
-          <div className="lane lane-waveform" style={{ height: LANE_HEIGHTS.waveform }}>
-            <div className="sticky" style={{ left: 0, width: view.width }}>
-              <MemoWaveform peaks={p.peaks} regions={rows.speech && detail ? p.speech : null} viewStartSample={viewStartSample} pxPerSample={pxPerSample} width={view.width} height={LANE_HEIGHTS.waveform} />
+          <TrackGroup id="audio" label="Audio" summary={p.speech === null ? "narration" : `narration · ${count(p.speech.length, "speech region")}`} open={groups.audio} onToggle={toggleGroup} controls={
+            <span className="track-group-controls" role="group" aria-label="Waveform" title={detail ? undefined : `Speech shading is hidden below ${DETAIL_MIN_PX_PER_SECOND} px/s; zoom in to show it`}>
+              <button type="button" className={rows.speech ? "toggle on" : "toggle"} aria-pressed={rows.speech} onClick={() => toggleRow("speech")} disabled={!detail} title={p.speech === null ? "Speech regions have not loaded" : `${p.speech.length} speech regions`} data-testid="toggle-speech">Speech</button>
+            </span>
+          }>
+            <div className="lane lane-waveform" style={{ height: LANE_HEIGHTS.waveform }}>
+              <div className="sticky" style={{ left: 0, width: view.width }}>
+                <MemoWaveform peaks={p.peaks} regions={rows.speech && detail ? p.speech : null} viewStartSample={viewStartSample} pxPerSample={pxPerSample} width={view.width} height={LANE_HEIGHTS.waveform} />
+              </div>
             </div>
-          </div>
+          </TrackGroup>
+          <TrackGroup id="text" label="Text" summary={detail ? count(rowOrder.length, "timing row") : `rows hidden below ${DETAIL_MIN_PX_PER_SECOND} px/s`} open={groups.text} onToggle={toggleGroup} controls={
+            <span className="track-group-controls">
+              <span className="control-set" role="radiogroup" aria-label="Text lane">
+                <button type="button" className={textMode === "sentences" ? "toggle on" : "toggle"} aria-pressed={textMode === "sentences"} onClick={() => chooseTextMode("sentences")}>Sentences</button>
+                <button type="button" className={textMode === "words" ? "toggle on" : "toggle"} aria-pressed={textMode === "words"} onClick={() => chooseTextMode("words")}>Words</button>
+              </span>
+              <span className="control-set" role="group" aria-label="Rows" title={detail ? undefined : `Rows are hidden below ${DETAIL_MIN_PX_PER_SECOND} px/s; zoom in to show them`}>
+                <button type="button" className={rows.original ? "toggle on" : "toggle"} aria-pressed={rows.original} onClick={() => toggleRow("original")} disabled={!detail} title="Initial timing of the working transcript, before waveform alignment" data-testid="toggle-original">{p.transcriptProvider === "openai" ? "GPT initial" : "Rev split"}</button>
+                <button type="button" className={rows.auto ? "toggle on" : "toggle"} aria-pressed={rows.auto} onClick={() => toggleRow("auto")} disabled={!detail} title="Scripted align result, read-only" data-testid="toggle-auto">Auto</button>
+                <button type="button" className={rows.edited ? "toggle on" : "toggle"} aria-pressed={rows.edited} onClick={() => toggleRow("edited")} disabled={!detail} title="Effective timing: select and drag here" data-testid="toggle-edited">Edited</button>
+              </span>
+              <span className="control-set" role="group" aria-label="Subtitle controls">
+                <button type="button" className={p.subtitles.visible ? "toggle on" : "toggle"} aria-pressed={p.subtitles.visible} onClick={() => p.onToggleSubtitle("visible")} title="Show sentence subtitles on the preview" data-testid="toggle-subtitles">Subtitles</button>
+                <button type="button" className={p.subtitles.highlight ? "toggle on" : "toggle"} aria-pressed={p.subtitles.highlight} disabled={!p.subtitles.visible} onClick={() => p.onToggleSubtitle("highlight")} title="Highlight the spoken word in the subtitle" data-testid="toggle-subtitle-highlight">Highlight word</button>
+              </span>
+            </span>
+          }>
           {rowOrder.map(variant => {
             const data = rowData(variant);
             const edited = variant === "edited";
@@ -278,9 +293,21 @@ export function Timeline(p: Props) {
               </div>
             );
           })}
-          <div style={{ height: LANE_HEIGHTS.shots, position: "relative" }}>
-            <MemoShotLane stitched={p.stitched} candidates={p.candidates} pxPerSample={pxPerSample} currentId={p.currentShotId} drag={p.drag} onMarkerPointerDown={onMarkerPointerDown} />
-          </div>
+          </TrackGroup>
+          <TrackGroup id="image" label="Image" summary={count(tracks.length, "track")} open={groups.image} onToggle={toggleGroup} controls={
+            <span className="track-group-controls" role="group" aria-label="Image track controls">
+              <select aria-label="Image track" value={p.activeTrackId} onChange={e => p.onSelectTrack(e.target.value)}>
+                {tracks.map(track => <option key={track.id} value={track.id}>{track.id}</option>)}
+              </select>
+              <button type="button" disabled={p.previousImageSample === null} onClick={() => { if (p.previousImageSample !== null) p.onSeek(p.previousImageSample, false); }}>Previous image</button>
+              <button type="button" disabled={p.nextImageSample === null} onClick={() => { if (p.nextImageSample !== null) p.onSeek(p.nextImageSample, false); }}>Next image</button>
+            </span>
+          }>
+          {tracks.map(track => <div key={track.id} className={`image-track-row${track.id === p.activeTrackId ? " active" : ""}`} data-image-track={track.id} style={{ height: LANE_HEIGHTS.shots, position: "relative" }}>
+            <MemoShotLane stitched={track.stitched} candidates={track.candidates} pxPerSample={pxPerSample} currentId={p.currentShotId} drag={p.drag} onMarkerPointerDown={onMarkerPointerDown} />
+            <button type="button" className="image-track-label" aria-pressed={track.id === p.activeTrackId} onClick={() => p.onSelectTrack(track.id)}>{track.id}</button>
+          </div>)}
+          </TrackGroup>
           {p.working && <>
             <div className="working-shade" style={{ left: 0, width: p.working.start * pxPerSample }} />
             <div className="working-shade" style={{ left: p.working.end * pxPerSample, width: Math.max(0, totalWidth - p.working.end * pxPerSample) }} />
@@ -293,6 +320,27 @@ export function Timeline(p: Props) {
     </div>
   );
 }
+
+/** One folding band of the timeline. The header is a full-width strip; its label and the group's own controls stay at the left edge while the strip scrolls. */
+function TrackGroup({ id, label, summary, open, onToggle, controls, children }: { id: TrackGroupId; label: string; summary: string; open: boolean; onToggle: (id: TrackGroupId) => void; controls?: ReactNode; children: ReactNode }) {
+  return (
+    <section className={`track-group${open ? "" : " folded"}`} data-track-group={id}>
+      <div className="track-group-header" style={{ height: LANE_HEIGHTS.group }}>
+        <div className="track-group-bar">
+          <button type="button" className="track-group-label" aria-expanded={open} onClick={() => onToggle(id)} title={`${open ? "Fold" : "Unfold"} the ${label.toLowerCase()} group`}>
+            <span className="chevron" aria-hidden="true">{open ? "▾" : "▸"}</span>
+            <span>{label}</span>
+            <span className="track-group-summary">{summary}</span>
+          </button>
+          {controls}
+        </div>
+      </div>
+      {open && children}
+    </section>
+  );
+}
+
+const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
 
 /** Before → after for one align run (A48), compact enough for the toolbar. Unknown extra report fields are not rendered. */
 function AlignReportView({ report, onDismiss }: { report: AlignReport; onDismiss: () => void }) {

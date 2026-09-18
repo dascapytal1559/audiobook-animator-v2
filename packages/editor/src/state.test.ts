@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ClipIdentity, Decisions, ShotRecord, StoryResponse, TimelineResponse, Word } from "./api.js";
 import { applyPatch, decisionsForView, initialState, isDirty, isTimingDirty, reduce, wordsForView, workingBounds, type EditorState } from "./state.js";
-import { mergeTimeline } from "@animator/domain";
+import { mergeTimeline, timelineForTrack } from "@animator/domain";
 
 const clip: ClipIdentity = { bookId: "b", storyId: "s", audioSha256: "a".repeat(64), transcriptSha256: "b".repeat(64), sampleRateHz: 48000, sampleCount: 96000 };
 const record = (id: string, startSample: number, createdAt: string, extra: Partial<ShotRecord> = {}): ShotRecord =>
@@ -68,6 +68,20 @@ test("hiding clears selected so the server never sees both flags", () => {
   let state = reduce(loaded(), { type: "shot-selected", id: "bbb", groupIds: ["bbb", "ccc"] });
   state = reduce(state, { type: "shots-hidden", ids: ["bbb"] });
   assert.deepEqual(state.decisions.shots["bbb"], { hidden: true });
+});
+
+test("candidate selection and drag projection preserve other image tracks at the same start", () => {
+  const at = "2026-01-01T00:00:00Z";
+  const shots = [record("a", 0, at, { trackId: "claude" }), record("b", 0, at, { trackId: "claude" }), record("g", 0, at, { trackId: "grok" })];
+  let state = reduce(initialState, { type: "timeline-loaded", timeline: timeline(shots, decisions({ a: { selected: true }, g: { selected: true } })) });
+  state = reduce(state, { type: "shot-selected", id: "b", groupIds: ["a", "b", "g"] });
+  assert.deepEqual(state.decisions.shots, { b: { selected: true }, g: { selected: true } });
+  state = reduce(state, { type: "drag-start", id: "b", startSample: 0 });
+  state = reduce(state, { type: "drag-move", startSample: 48000, snap: null });
+  const merged = mergeTimeline(state.records, decisionsForView(state), clip.sampleCount, new Map());
+  assert.deepEqual(merged.problems, []);
+  assert.deepEqual(timelineForTrack(merged, "grok").stitched.map(entry => [entry.startSample, entry.endSample]), [[0, 96000]]);
+  assert.deepEqual(timelineForTrack(merged, "claude").stitched.map(entry => [entry.startSample, entry.endSample]), [[0, 48000], [48000, 96000]]);
 });
 
 test("empty notes and moving back to the record start drop their overrides", () => {

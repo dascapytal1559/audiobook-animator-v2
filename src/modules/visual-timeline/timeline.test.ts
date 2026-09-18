@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 import { NodeServices } from "@effect/platform-node";
-import { Effect } from "effect";
+import { Deferred, Effect, FileSystem, PlatformError } from "effect";
 import { fixture } from "../story/context.fixture.js";
 import { loadStoryContext, isStoryError } from "../story/index.js";
 import { addShot, type DecisionsBody, loadVisualTimeline, mintUlid, ULID_PATTERN, isTimelineError, writeDecisions } from "./index.js";
@@ -55,7 +55,7 @@ test("an empty story directory yields no records, default settings, and one gap 
   assert.deepEqual(result.decisions.settings, { frameAspect: { width: 16, height: 9 } });
   assert.deepEqual(result.decisions.clip, p.clip);
   assert.deepEqual(result.candidates, []);
-  assert.deepEqual(result.stitched, [{ kind: "gap", startSample: 0, endSample: 100 }]);
+  assert.deepEqual(result.stitched, [{ kind: "gap", trackId: "main", startSample: 0, endSample: 100 }]);
 });
 
 test("records with a bad id, wrong directory, out-of-range start, escaping image path, missing image, wrong mode, or extra field are rejected by name", async t => {
@@ -69,6 +69,8 @@ test("records with a bad id, wrong directory, out-of-range start, escaping image
     [{ imagePath: "/etc/passwd" }, undefined, /schema/],
     [{ imagePath: "missing.png" }, undefined, /does not exist/],
     [{ mode: "watercolour" }, undefined, /schema/],
+    [{ trackId: "../escape" }, undefined, /schema/],
+    [{ trackId: "" }, undefined, /schema/],
     [{ unexpected: true }, undefined, /excess property/],
   ];
   for (const [fields, directoryName, pattern] of cases) {
@@ -133,7 +135,7 @@ test("decision overrides move a shot into another group; hidden shots are never 
   assert.deepEqual(result.stitched.map(e => [e.kind, e.startSample, e.endSample]), [["shot", 0, 100]]);
   await p.decisions({ [a.id]: { hidden: true }, [b.id]: { hidden: true } });
   result = await p.load();
-  assert.deepEqual(result.stitched, [{ kind: "gap", startSample: 0, endSample: 100 }]);
+  assert.deepEqual(result.stitched, [{ kind: "gap", trackId: "main", startSample: 0, endSample: 100 }]);
   await p.decisions({ ["01ARZ3NDEKTSV4RRFFQ69G5FAV"]: { hidden: true } });
   await assert.rejects(p.load(), failsWith("InvalidDecisions", /no generation record: 01ARZ3NDEKTSV4RRFFQ69G5FAV/));
   await p.decisions({ [a.id]: { hidden: true, selected: true } });
@@ -208,6 +210,69 @@ test("addShot never overwrites: an explicit id whose directory already exists is
   const explicit = await provide(addShot({ ...(await p.target()), id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", startSample: 3, mode: "graphic-illustration", producer: p.producer }));
   assert.equal(explicit.id, "01ARZ3NDEKTSV4RRFFQ69G5FAV");
   assert.deepEqual((await readdir(join(p.planningDirectory, "shots"))).sort(), [explicit.id, id].sort());
+});
+
+test("addShot keeps image preparation invisible to readers and removes staging after a failed write", async t => {
+  const p = await planning(t);
+  const source = join(p.story.dir, "source.png");
+  await writeFile(source, "image bytes");
+  const target = await p.target();
+  const id = mintUlid();
+  const shotsDirectory = join(p.planningDirectory, "shots");
+  let observedPreparation = false;
+  const attempt = Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const intercepted: FileSystem.FileSystem = { ...fs, writeFile: (path, data, options) => {
+      if (!basename(path).startsWith(".image.png.")) return fs.writeFile(path, data, options);
+      return Effect.gen(function* () {
+        observedPreparation = true;
+        const entries = yield* fs.readDirectory(shotsDirectory);
+        assert.equal(entries.length, 1, "there is one in-progress staging directory");
+        assert.ok(entries.every(name => name.startsWith(".")), "no ULID directory is visible before its image and record are complete");
+        const timeline = yield* loadVisualTimeline(target).pipe(Effect.provideService(FileSystem.FileSystem, fs), Effect.orDie);
+        assert.deepEqual(timeline.records, [], "a concurrent reader ignores staging and succeeds");
+        return yield* Effect.fail(PlatformError.systemError({ _tag: "PermissionDenied", module: "FileSystem", method: "writeFile", pathOrDescriptor: path }));
+      });
+    } };
+    return yield* addShot({ ...target, id, startSample: 0, mode: "source-screenshot", imageSourcePath: source, producer: p.producer }).pipe(Effect.provideService(FileSystem.FileSystem, intercepted));
+  });
+  await assert.rejects(provide(attempt), failsWith("IoFailed", /image\.png/));
+  assert.ok(observedPreparation);
+  assert.deepEqual(await readdir(shotsDirectory), [], "failure removes even the hidden staging directory");
+  const record = await provide(addShot({ ...target, id, startSample: 0, mode: "source-screenshot", imageSourcePath: source, producer: p.producer }));
+  assert.deepEqual((await p.load()).records, [record], "the failed id can be retried without an orphan directory");
+  assert.deepEqual(await readdir(shotsDirectory), [id]);
+});
+
+test("concurrent addShot calls with the same id publish one complete record and refuse the other without overwriting", async t => {
+  const p = await planning(t);
+  const target = await p.target();
+  const id = mintUlid();
+  const directory = join(p.planningDirectory, "shots", id);
+  const outcomes = await provide(Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const bothReady = yield* Deferred.make<void>();
+    let publishers = 0;
+    const intercepted: FileSystem.FileSystem = { ...fs, rename: (from, to) => {
+      if (to !== directory) return fs.rename(from, to);
+      return Effect.gen(function* () {
+        publishers++;
+        if (publishers === 2) yield* Deferred.succeed(bothReady, undefined);
+        yield* Deferred.await(bothReady);
+        return yield* fs.rename(from, to);
+      });
+    } };
+    return yield* Effect.all(["first", "second"].map(label => addShot({ ...target, id, label, startSample: 0, mode: "source-screenshot", producer: p.producer }).pipe(Effect.result)), { concurrency: 2 }).pipe(Effect.provideService(FileSystem.FileSystem, intercepted));
+  }));
+  const successes = outcomes.filter(result => result._tag === "Success");
+  const failures = outcomes.filter(result => result._tag === "Failure");
+  assert.equal(successes.length, 1);
+  assert.equal(failures.length, 1);
+  assert.ok(failsWith("RecordExists")(failures[0]?.failure));
+  const winner = successes[0]!.success;
+  assert.deepEqual(JSON.parse(await readFile(join(directory, "record.json"), "utf8")), winner);
+  assert.deepEqual((await p.load()).records, [winner]);
+  assert.deepEqual(await readdir(join(p.planningDirectory, "shots")), [id], "neither publisher leaves staging behind");
 });
 
 test("writeDecisions round-trips through load, sets updatedAt, and rejects invalid overlays without touching the file", async t => {

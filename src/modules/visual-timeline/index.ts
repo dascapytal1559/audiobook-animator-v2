@@ -87,7 +87,7 @@ export function loadVisualTimeline(options: TimelineTarget & { readonly wordStar
 export type VisualTimeline = Effect.Success<ReturnType<typeof loadVisualTimeline>>;
 
 export type AddShotRequest = TimelineTarget & {
-  readonly startSample?: number; readonly startSeconds?: number; readonly mode: ShotMode;
+  readonly startSample?: number; readonly startSeconds?: number; readonly mode: ShotMode; readonly trackId?: string;
   /** Explicit ULID for reproducible imports; a fresh one is minted when absent. */
   readonly id?: string;
   /** Explicit ISO-8601 UTC instant for reproducible imports; the current time when absent. */
@@ -95,7 +95,7 @@ export type AddShotRequest = TimelineTarget & {
   readonly label?: string; readonly prompt?: string; readonly imageSourcePath?: string; readonly notes?: string;
   readonly producer: { readonly name: string; readonly version: string };
 };
-/** Mint or take an id, create `shots/<id>/`, copy the image beside the record, and write `record.json` atomically. Never overwrites. */
+/** Prepare the image and record in a hidden directory, then publish the completed `shots/<id>/` by one rename. Never overwrites a shot; readers see only complete records. */
 export function addShot(request: AddShotRequest) {
   return wrap(Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -116,6 +116,7 @@ export function addShot(request: AddShotRequest) {
     const directory = join(ctx.shotsDirectory, id);
     if (yield* io(fs.exists(directory), `Cannot inspect ${directory}.`)) return yield* fail("RecordExists", `A record directory already exists: ${directory}.`);
     const record = { schemaVersion: 1, kind: "visual-shot-generation", id, clip: ctx.clip, startSample, mode: request.mode,
+      ...(request.trackId !== undefined ? { trackId: request.trackId } : {}),
       ...(request.label !== undefined ? { label: request.label } : {}), ...(request.prompt !== undefined ? { prompt: request.prompt } : {}),
       ...(image ? { imagePath: image.name } : {}), ...(request.notes !== undefined ? { notes: request.notes } : {}),
       createdAt: request.createdAt ?? new Date().toISOString(), producer: request.producer };
@@ -123,10 +124,21 @@ export function addShot(request: AddShotRequest) {
     const decoded = yield* decode(ShotRecord, bytes, "InvalidRequest", `the new record ${id}`);
     if (bytes.byteLength > ctx.settings.limits.maxRecordBytes) return yield* fail("InvalidRequest", `The new record would exceed maxRecordBytes (${ctx.settings.limits.maxRecordBytes}).`);
     yield* io(fs.makeDirectory(ctx.shotsDirectory, { recursive: true }), `Cannot create ${ctx.shotsDirectory}.`);
-    yield* fs.makeDirectory(directory).pipe(Effect.mapError(() => timelineError({ code: "RecordExists", message: `Cannot create a fresh record directory: ${directory}.` })));
-    if (image) yield* io(fs.writeFile(join(directory, image.name), image.bytes, { flag: "wx" }), `Cannot copy the image into ${directory}.`);
-    yield* writeAtomic(join(directory, "record.json"), bytes);
-    return decoded;
+    return yield* Effect.acquireUseRelease(
+      io(fs.makeTempDirectory({ directory: ctx.shotsDirectory, prefix: `.${id}.` }), `Cannot stage the new shot ${directory}.`),
+      staging => Effect.gen(function* () {
+        if (image) yield* writeAtomic(join(staging, image.name), image.bytes);
+        yield* writeAtomic(join(staging, "record.json"), bytes);
+        if (yield* io(fs.exists(directory), `Cannot inspect ${directory}.`)) return yield* fail("RecordExists", `A record directory already exists: ${directory}.`);
+        // Another publisher of this id may win after the existence check. Its completed, nonempty directory cannot be replaced by rename.
+        yield* fs.rename(staging, directory).pipe(Effect.catch(() => Effect.gen(function* () {
+          const exists = yield* io(fs.exists(directory), `Cannot inspect ${directory}.`);
+          return yield* fail(exists ? "RecordExists" : "IoFailed", `Cannot publish a fresh record directory: ${directory}.`);
+        })));
+        return decoded;
+      }),
+      staging => io(fs.remove(staging, { recursive: true, force: true }), `Cannot remove shot staging directory ${staging}.`),
+    );
   }));
 }
 

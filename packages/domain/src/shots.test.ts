@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ClipIdentity } from "./identity.js";
-import { entryAt, mergeTimeline, type ShotRecord } from "./shots.js";
+import { entryAt, mergeTimeline, timelineForTrack, type ShotRecord } from "./shots.js";
 
 const clip: ClipIdentity = { bookId: "b", storyId: "s", audioSha256: "a".repeat(64), transcriptSha256: "b".repeat(64), sampleRateHz: 48000, sampleCount: 96000 };
 const record = (id: string, startSample: number, createdAt: string): ShotRecord =>
@@ -35,7 +35,7 @@ test("every broken rule is reported as a problem, in order, without aborting the
     "Decision startSample 96000 is outside the clip's 96000 samples for shot aaa",
     "Shot aaa is both selected and hidden",
     "Shot aaa is anchored to a word that is not in the transcript: gone",
-    "More than one shot selected at sample 0: ccc, bbb",
+    "More than one shot selected at sample 0 in track main: ccc, bbb",
   ]);
 });
 
@@ -67,4 +67,31 @@ test("a record served with imageUrl keeps it on its shot and stitched entry", ()
   const records = [{ ...record("aaa", 0, "2026-01-01T00:00:00Z"), imagePath: "image.png", imageUrl: "/api/stories/s/shots/aaa/image" }];
   const { stitched } = mergeTimeline(records, { settings, shots: {} }, clip.sampleCount, new Map());
   assert.equal(stitched[0]?.kind === "shot" ? stitched[0].imageUrl : null, "/api/stories/s/shots/aaa/image");
+});
+
+test("tracks sharing starts and word anchors choose candidates and hold independently", () => {
+  const at = "2026-01-01T00:00:00Z";
+  const records = [record("main", 0, at),
+    { ...record("c1", 10000, at), trackId: "claude" }, { ...record("c2", 60000, at), trackId: "claude" },
+    { ...record("g1", 10000, at), trackId: "grok" }, { ...record("g2", 20000, at), trackId: "grok" }];
+  const merged = mergeTimeline(records, { settings, shots: {
+    c1: { selected: true, anchorWordId: "sentence" }, g1: { selected: true, anchorWordId: "sentence" }, g2: { hidden: true },
+  } }, clip.sampleCount, new Map([["sentence", 30000]]));
+  assert.deepEqual(merged.problems, []);
+  assert.deepEqual(merged.candidates.map(g => [g.trackId, g.startSample, g.selectedId]), [
+    ["main", 0, "main"], ["claude", 30000, "c1"], ["claude", 60000, "c2"], ["grok", 20000, null], ["grok", 30000, "g1"],
+  ]);
+  const spans = (track: string) => timelineForTrack(merged, track).stitched.map(e => [e.kind, e.startSample, e.endSample]);
+  assert.deepEqual(spans("main"), [["shot", 0, 96000]]);
+  assert.deepEqual(spans("claude"), [["gap", 0, 30000], ["shot", 30000, 60000], ["shot", 60000, 96000]]);
+  assert.deepEqual(spans("grok"), [["gap", 0, 30000], ["shot", 30000, 96000]]);
+  assert.deepEqual(timelineForTrack(merged, "missing"), { candidates: [], stitched: [] });
+  assert.equal(entryAt(timelineForTrack(merged, "claude").stitched, 70000, 0)?.kind, "shot");
+});
+
+test("an empty or wholly hidden track keeps its own opening gap", () => {
+  const empty = mergeTimeline([], { settings, shots: {} }, clip.sampleCount, new Map());
+  assert.deepEqual(empty.stitched, [{ kind: "gap", trackId: "main", startSample: 0, endSample: 96000 }]);
+  const hidden = mergeTimeline([{ ...record("a", 1, "2026-01-01T00:00:00Z"), trackId: "proof" }], { settings, shots: { a: { hidden: true } } }, clip.sampleCount, new Map());
+  assert.deepEqual(hidden.stitched, [{ kind: "gap", trackId: "proof", startSample: 0, endSample: 96000 }]);
 });

@@ -2,8 +2,8 @@
  * Editor state: loaded story and timeline, the locally edited decisions overlay, the locally edited word-timing overlay with its undo
  * stack (A41), the word selection (A38), save status, and client-only playback state.
  */
-import { DEFAULT_SETTINGS } from "@animator/domain";
-import type { AlignReport, Decisions, DecisionsBody, ShotDecision, ShotRecord, StoryResponse, TimelineResponse, Word } from "./api.js";
+import { DEFAULT_SETTINGS, imageTrackOf } from "@animator/domain";
+import type { AlignReport, Decisions, DecisionsBody, ShotDecision, ShotRecord, StoryMapResponse, StoryResponse, TimelineResponse, Word } from "./api.js";
 import { selectedRange, type Selection } from "./selection.js";
 import type { SnapTarget } from "./snap.js";
 import { clampDelta, effectiveWords, manualMapOf, moveWords, shiftedWords, type ManualMap } from "./timing.js";
@@ -17,8 +17,12 @@ export type Drag = { readonly id: string; readonly originalStart: number; readon
 /** A group move in progress: the sample delta applied to every selected word, already snapped and clamped. */
 export type WordDrag = { readonly delta: number; readonly snap: SnapTarget | null };
 
+/** The story map (A62) as last fetched: absent is a normal state, since an agent writes the file whenever it is ready. */
+export type MapState = { readonly status: "loading" } | { readonly status: "absent" } | { readonly status: "loaded"; readonly map: StoryMapResponse } | { readonly status: "error"; readonly message: string };
+
 export type EditorState = {
   readonly story: StoryResponse | null;
+  readonly map: MapState;
   readonly records: ReadonlyArray<ShotRecord>;
   readonly storyDirectory: string | null;
   readonly serverDecisions: Decisions | null;
@@ -49,7 +53,7 @@ export type EditorState = {
 export { DEFAULT_SETTINGS };
 
 export const initialState: EditorState = {
-  story: null, records: [], storyDirectory: null, serverDecisions: null,
+  story: null, map: { status: "loading" }, records: [], storyDirectory: null, serverDecisions: null,
   decisions: { settings: DEFAULT_SETTINGS, shots: {} }, editVersion: 0, savedVersion: 0, saveNonce: 0, save: { status: "saved" },
   manual: {}, timingPast: [], timingFuture: [], timingEditVersion: 0, timingSavedVersion: 0, selection: null, wordDrag: null, alignReport: null,
   working: { enabled: false, inSample: null, outSample: null }, loop: false, follow: true, playhead: 0, playing: false, drag: null, error: null,
@@ -58,6 +62,7 @@ export const initialState: EditorState = {
 export type Action =
   | { type: "story-loaded"; story: StoryResponse }
   | { type: "timeline-loaded"; timeline: TimelineResponse }
+  | { type: "map-loaded"; map: StoryMapResponse } | { type: "map-absent" } | { type: "map-failed"; message: string }
   | { type: "record-added"; record: ShotRecord }
   | { type: "save-started"; version: number }
   | { type: "save-succeeded"; version: number; timeline: TimelineResponse }
@@ -90,6 +95,9 @@ export function reduce(state: EditorState, action: Action): EditorState {
   switch (action.type) {
     case "story-loaded": return adoptStory(state, action.story, state.timingEditVersion === state.timingSavedVersion);
     case "timeline-loaded": return adoptTimeline(state, action.timeline, state.editVersion === state.savedVersion);
+    case "map-loaded": return { ...state, map: { status: "loaded", map: action.map } };
+    case "map-absent": return { ...state, map: { status: "absent" } };
+    case "map-failed": return { ...state, map: { status: "error", message: action.message } };
     case "record-added":
       return state.records.some(r => r.id === action.record.id) ? state : { ...state, records: [...state.records, action.record] };
     case "save-started": return { ...state, save: { status: "saving" } };
@@ -144,8 +152,12 @@ export function reduce(state: EditorState, action: Action): EditorState {
     case "align-report-set": return { ...state, alignReport: action.report };
     case "shot-edited": return edit(state, { [action.id]: applyPatch(state.decisions.shots[action.id] ?? {}, action.patch) });
     case "shot-selected": {
+      const target = state.records.find(record => record.id === action.id);
+      if (target === undefined) return state;
+      const trackIds = new Set(state.records.filter(record => imageTrackOf(record) === imageTrackOf(target)).map(record => record.id));
       const shots: Record<string, ShotDecision> = {};
       for (const id of action.groupIds) {
+        if (!trackIds.has(id)) continue;
         const current = state.decisions.shots[id] ?? {};
         shots[id] = id === action.id ? applyPatch(current, { selected: true, hidden: undefined }) : applyPatch(current, { selected: undefined });
       }

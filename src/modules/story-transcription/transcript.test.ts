@@ -32,7 +32,7 @@ test("GPT is the working planning/editor transcript; edits use GPT IDs and rejec
   assert.equal((await run(loadStoryContext({ storyDirectory: f.dir, settings: f.settings }))).transcript.kind, "story-transcript");
   const library = await run(loadEditorLibrary({ storiesDirectory: f.root, settings: { story: f.settings, timeline: { limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } },
     editor: { ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 }, speech: { frameMs: 100, thresholdDbfs: -50, minSilenceMs: 150, minSpeechMs: 50 }, alignment: { leadMs: 150, boundaryPauseMs: 300 },
-      watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } } } }));
+      watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576, maxStoryMapBytes: 65536 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } } } }));
   const { ctx } = await run(library.open("pilot"));
   const payload = await run(storyPayload(ctx));
   assert.equal(payload.story.transcriptProvider, "openai");
