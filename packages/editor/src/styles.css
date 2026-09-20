@@ -167,6 +167,8 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .explorer-cast { min-height: 0; display: flex; flex-direction: column; background: var(--bg-2); }
 /* The list owns the column until a subject is selected; then the divider splits it by --cast-split, each pane scrolling on its own. */
 .cast-list { flex: var(--cast-split) 1 0; }
+/* Alone, a grow factor below 1 claims only that fraction of the free space; the sole child must take it all. */
+.cast-list:only-child { flex-grow: 1; }
 .subject-detail { flex: calc(1 - var(--cast-split)) 1 0; }
 .explorer h2 { font-size: 14px; margin: 0 0 8px; }
 .explorer-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
