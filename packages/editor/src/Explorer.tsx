@@ -101,6 +101,7 @@ export function Explorer({ map, words, elements, playhead, sampleRateHz, onSeek 
         </ol>
       </div>
       <div className="explorer-cast">
+        <div className="cast-list">
         <h2>Cast</h2>
         {resolved.subjects.length === 0 && <p className="muted">The map names no subjects.</p>}
         {SUBJECT_GROUPS.map(([kind, label]) => {
@@ -122,9 +123,13 @@ export function Explorer({ map, words, elements, playhead, sampleRateHz, onSeek 
             </div>
           );
         })}
+        </div>
         {selected !== null && (
           <div className="subject-detail" data-testid="subject-detail">
-            <h3>{selected.name} <span className="muted">· {selected.kind}</span></h3>
+            <div className="explorer-heading">
+              <h3>{selected.name} <span className="muted">· {selected.kind}</span></h3>
+              <button type="button" className="detail-close" onClick={() => setSelectedId(null)} aria-label={`Close ${selected.name}`} data-testid="subject-close">×</button>
+            </div>
             {selected.description !== undefined && <p className="subject-description">{selected.description}</p>}
             {selected.images !== undefined && selected.images.length > 0 && (
               <div className="subject-images">

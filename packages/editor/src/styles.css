@@ -156,8 +156,10 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .explorer { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 3fr) minmax(320px, 2fr); overflow: hidden; }
 .explorer-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 24px; text-align: center; }
 .explorer-empty p { max-width: 560px; margin: 0; }
-.explorer-structure, .explorer-cast { min-height: 0; overflow-y: auto; padding: 10px 14px; }
-.explorer-cast { border-left: 1px solid var(--line); background: var(--bg-2); }
+.explorer-structure, .cast-list, .subject-detail { min-height: 0; overflow-y: auto; padding: 10px 14px; }
+.explorer-cast { min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg-2); }
+/* The list owns the column until a subject is selected; then list and detail split it in half, each scrolling on its own. */
+.cast-list, .subject-detail { flex: 1 1 0; }
 .explorer h2 { font-size: 14px; margin: 0 0 8px; }
 .explorer-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .explorer-heading-actions { display: inline-flex; gap: 4px; }
@@ -190,8 +192,10 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .subject-thumb { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 4px; background: #000; }
 .subject-thumb.placeholder { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 11px; }
 .subject-name { font-weight: 600; font-size: 12px; }
-.subject-detail { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.subject-detail { border-top: 1px solid var(--line); background: var(--bg); }
 .subject-detail h3 { text-transform: none; letter-spacing: 0; font-size: 14px; color: inherit; margin: 0 0 6px; }
+.detail-close { background: none; border: 0; padding: 0 4px; color: var(--muted); cursor: pointer; font: inherit; font-size: 16px; line-height: 1; }
+.detail-close:hover:not(:disabled) { background: none; color: var(--text); }
 .subject-description { margin: 0 0 6px; font-size: 12px; }
 .subject-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
 .subject-images figure { margin: 0; }
