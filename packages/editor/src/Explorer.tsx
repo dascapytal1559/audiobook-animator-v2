@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { currentSections, resolveStoryMap } from "@animator/domain";
 import type { ResolvedSection, ResolvedStoryMap, ResolvedSubject, SectionKind, ServedSubject, StoryResponse, SubjectKind, Word } from "./api.js";
+import { splitRatio, useViewPreference } from "./preferences.js";
 import type { MapState } from "./state.js";
 
 type Props = { map: MapState; words: ReadonlyArray<Word>; elements: StoryResponse["elements"]; playhead: number; sampleRateHz: number; onSeek: (sample: number, andPlay: boolean) => void };
@@ -16,6 +17,10 @@ const SECTION_LABELS: Readonly<Record<SectionKind, string>> = { act: "Act", chap
  */
 export function Explorer({ map, words, elements, playhead, sampleRateHz, onSeek }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  /** Browser view preferences (see preferences.ts): how much of the explorer the structure column takes, and how much of the cast column the list keeps. */
+  const [columnSplit, setColumnSplit] = useViewPreference("explorer.columnSplit", 0.6, splitRatio(0.6));
+  const [castSplit, setCastSplit] = useViewPreference("explorer.castSplit", 0.5, splitRatio(0.5));
+  const [dragging, setDragging] = useState<"x" | "y" | null>(null);
   /** Beats whose transcript passage is shown. */
   const [transcripts, setTranscripts] = useState<ReadonlySet<string>>(() => new Set());
   const elementIndex = useMemo(() => { const m = new Map<string, number>(); elements.forEach((e, i) => { if (e.kind === "word") m.set(e.id, i); }); return m; }, [elements]);
@@ -81,7 +86,7 @@ export function Explorer({ map, words, elements, playhead, sampleRateHz, onSeek 
   );
 
   return (
-    <section className="explorer" data-testid="explorer">
+    <section className={`explorer${dragging === null ? "" : ` dragging-${dragging}`}`} style={{ "--column-split": columnSplit, "--cast-split": castSplit } as React.CSSProperties} data-testid="explorer">
       <div className="explorer-structure">
         <div className="explorer-heading">
           <h2>Structure</h2>
@@ -100,6 +105,7 @@ export function Explorer({ map, words, elements, playhead, sampleRateHz, onSeek 
           ))}
         </ol>
       </div>
+      <Divider axis="x" label="Resize structure and cast" onResize={setColumnSplit} onDragging={setDragging} />
       <div className="explorer-cast">
         <div className="cast-list">
         <h2>Cast</h2>
@@ -124,7 +130,8 @@ export function Explorer({ map, words, elements, playhead, sampleRateHz, onSeek 
           );
         })}
         </div>
-        {selected !== null && (
+        {selected !== null && <>
+          <Divider axis="y" label="Resize cast list and detail" onResize={setCastSplit} onDragging={setDragging} />
           <div className="subject-detail" data-testid="subject-detail">
             <div className="explorer-heading">
               <h3>{selected.name} <span className="muted">· {selected.kind}</span></h3>
@@ -157,10 +164,31 @@ export function Explorer({ map, words, elements, playhead, sampleRateHz, onSeek 
               </ol>
             )}
           </div>
-        )}
+        </>}
       </div>
     </section>
   );
+}
+
+type DividerProps = { axis: "x" | "y"; label: string; onResize: (ratio: number) => void; onDragging: (axis: "x" | "y" | null) => void };
+/** A drag handle between two panes. From press to release it reports the pointer's position as a fraction of the parent along `axis`, clamped so neither pane vanishes. */
+function Divider({ axis, label, onResize, onDragging }: DividerProps) {
+  const start = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const parent = e.currentTarget.parentElement!;
+    const move = (ev: PointerEvent) => {
+      const box = parent.getBoundingClientRect();
+      const ratio = axis === "x" ? (ev.clientX - box.left) / box.width : (ev.clientY - box.top) / box.height;
+      onResize(Math.min(0.85, Math.max(0.15, ratio)));
+    };
+    const stop = () => {
+      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); window.removeEventListener("pointercancel", stop);
+      onDragging(null);
+    };
+    window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); window.addEventListener("pointercancel", stop);
+    onDragging(axis);
+  };
+  return <div className={`divider divider-${axis}`} role="separator" aria-label={label} aria-orientation={axis === "x" ? "vertical" : "horizontal"} data-testid={`divider-${axis}`} onPointerDown={start} />;
 }
 
 type RowProps = {

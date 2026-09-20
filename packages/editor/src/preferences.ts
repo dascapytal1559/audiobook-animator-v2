@@ -17,3 +17,7 @@ export const booleanFlags = <T extends Record<string, boolean>>(defaults: T) => 
   const parsed = typeof stored === "object" && stored !== null ? stored as Record<string, unknown> : {};
   return Object.fromEntries(Object.entries(defaults).map(([key, fallback]) => [key, typeof parsed[key] === "boolean" ? parsed[key] : fallback])) as T;
 };
+
+/** A stored pane split as a fraction of the container; anything outside [min, max] or not a number keeps the default. */
+export const splitRatio = (fallback: number, min = 0.15, max = 0.85) => (stored: unknown): number =>
+  typeof stored === "number" && Number.isFinite(stored) ? Math.min(max, Math.max(min, stored)) : fallback;
