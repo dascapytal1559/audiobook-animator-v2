@@ -102,6 +102,7 @@ Audiobook -> movie
 │       ├── One complete visual pilot: The Great Silence [Q9 confirmed]
 │       ├── Source-grounded story plan -> visual timeline -> images and composition
 │       ├── Graphic illustration / poetic abstraction per scene [Q10/Q11 confirmed]; production settings and quality criteria [open]
+│       ├── Scene images: hosted GPT-5.4 Image 2, local Qwen Image 2.1 as free fallback [A64]
 │       └── Story editor centred on one audio clip [Q12 confirmed]
 │           ├── Viewer over script-generated shots first; frontend generation later [Q12]
 │           ├── Vite + React client in its own workspace package [Q13, A28]
@@ -214,6 +215,7 @@ One file per decision under [docs/decisions](docs/decisions/), each with its sta
 | A61 | [Preview subtitles derive sentences and phrases from the working transcript, independently of timeline chunks.](docs/decisions/A61-derived-preview-subtitles.md) | standing |
 | A62 | [A story map names a story's subjects and structure as word ranges; the editor explores it read-only.](docs/decisions/A62-story-map-and-explorer.md) | standing |
 | A63 | [The editor is one page of collapsible sections; the story map is the Scenes and Cast & world sections.](docs/decisions/A63-single-page-of-collapsible-sections.md) | standing |
+| A64 | [Scene images are rendered by hosted GPT-5.4 Image 2; local Qwen Image 2.1 is the free fallback. What follows Understand's waking shot is open.](docs/decisions/A64-hosted-scene-image-renderer.md) | standing |
 
 ## When a new book arrives
 
