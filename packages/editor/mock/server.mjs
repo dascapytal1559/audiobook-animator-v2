@@ -3,7 +3,7 @@
 // selector); every other route lives under /api/stories/:storyId/. Echoes PUT .../decisions and PUT .../word-timing through the same merge
 // rules, answers POST .../word-timing/align with a canned report, and records every PUT at GET /mock/puts.
 import { createServer } from "node:http";
-import { decodeStrict, ImageTrackId, mergeTimeline, SHOT_MODES } from "@animator/domain";
+import { declaredShots, decodeStrict, ImageTrackId, mergeTimeline, SHOT_MODES } from "@animator/domain";
 
 const PORT = Number(process.env["MOCK_PORT"] ?? "63621");
 const RATE = 48000;
@@ -76,7 +76,8 @@ addRecord(ms(700), "poetic-abstraction", { label: "Silence", notes: "Older candi
 addRecord(ms(700), "poetic-abstraction", { label: "Silence alt" }, { name: "image.svg", type: "image/svg+xml", bytes: Buffer.from(svg("#7a3d6a", "Silence B")) });
 addRecord(ms(1500), "graphic-illustration", { label: "Closing", notes: "No image yet; placeholder card expected." });
 
-let decisions = { schemaVersion: 1, kind: "visual-timeline-decisions", clip, updatedAt: new Date().toISOString(), settings: { frameAspect: { width: 16, height: 9 } }, shots: {} };
+// The two "Silence" candidates are anchored to "use" (w3), so the mock has one declared shot (A65) inside beat-2 for its description takes.
+let decisions = { schemaVersion: 1, kind: "visual-timeline-decisions", clip, updatedAt: new Date().toISOString(), settings: { frameAspect: { width: 16, height: 9 } }, shots: { [ulid(2)]: { anchorWordId: "w3" }, [ulid(3)]: { anchorWordId: "w3" } } };
 const puts = [];
 const posts = [];
 const sseClients = new Set();
@@ -162,10 +163,10 @@ const storyMap = {
     { id: "beat-3", kind: "beat", title: "What they would call it", startWordId: "w5", endWordId: "w7" },
   ],
 };
-// Scene description takes (A63): the first story's second beat has two, appended to by POST like the real route; the rest have none.
+// Scene description takes (A63, A65): the first story's declared shot at w3 has two, appended to by POST like the real route; the rest have none.
 const takes = [
-  { id: ulid(9001), sectionId: "beat-2", model: "openai/gpt-6-astra", text: "A parrot on a branch, seen from below, the Arecibo dish a pale bowl behind the canopy.", startWordId: "w2", endWordId: "w4", createdAt: "2026-09-22T10:00:00.000Z", producer: { name: "mock", version: "1" } },
-  { id: ulid(9002), sectionId: "beat-2", model: "anthropic/claude-fable-5.1", text: "Green leaves fill the frame. One grey parrot turns its head toward the listening dish, which glints through a gap in the trees.", startWordId: "w2", endWordId: "w4", createdAt: "2026-09-22T10:01:00.000Z", producer: { name: "mock", version: "1" } },
+  { id: ulid(9001), anchorWordId: "w3", model: "openai/gpt-6-astra", text: "A parrot on a branch, seen from below, the Arecibo dish a pale bowl behind the canopy.", createdAt: "2026-09-22T10:00:00.000Z", producer: { name: "mock", version: "1" } },
+  { id: ulid(9002), anchorWordId: "w3", model: "anthropic/claude-fable-5.1", text: "Green leaves fill the frame. One grey parrot turns its head toward the listening dish, which glints through a gap in the trees.", createdAt: "2026-09-22T10:01:00.000Z", producer: { name: "mock", version: "1" } },
 ];
 const servedMap = (storyId) => ({ ...storyMap, clip: { ...clip, storyId }, subjects: storyMap.subjects.map(({ images, ...subject }) => images === undefined ? subject
   : { ...subject, images: images.map((image, index) => ({ ...image, url: `/api/stories/${storyId}/map/subjects/${subject.id}/images/${index}` })) }) });
@@ -220,11 +221,11 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && path === "/api/scene-descriptions") return json(res, 200, { takes: storyId === STORIES[0].id ? takes : [] });
     if (req.method === "POST" && path === "/api/scene-descriptions") {
       const body = JSON.parse((await readBody(req)).toString());
-      const section = storyMap.sections.find(s => s.id === body?.sectionId);
-      if (storyId !== STORIES[0].id) return fail(res, 404, "NotFound", `No story map for ${storyId}.`);
-      if (typeof body?.model !== "string" || typeof body?.text !== "string" || !section) return fail(res, 400, "InvalidRequest", "Body must be a take with sectionId, model, text, and optional prompt and notes.");
-      if (takes.some(t => t.sectionId === body.sectionId && t.model === body.model && t.text === body.text)) return fail(res, 409, "TakeExists", "That take is already recorded.");
-      const take = { id: ulid(9000 + takes.length + 1), sectionId: body.sectionId, model: body.model, text: body.text, ...(body.prompt !== undefined ? { prompt: body.prompt } : {}), ...(body.notes !== undefined ? { notes: body.notes } : {}), startWordId: section.startWordId, endWordId: section.endWordId, createdAt: new Date().toISOString(), producer: { name: "mock", version: "1" } };
+      if (storyId !== STORIES[0].id) return fail(res, 400, "InvalidRequest", "The mock records description takes for its first story only.");
+      if (typeof body?.anchorWordId !== "string" || typeof body?.model !== "string" || typeof body?.text !== "string") return fail(res, 400, "InvalidRequest", "Body must be a take with anchorWordId, model, text, and optional prompt and notes.");
+      if (!declaredShots(merge(storyId).stitched).some(shot => shot.anchorWordId === body.anchorWordId)) return fail(res, 400, "InvalidRequest", `No declared shot starts at ${body.anchorWordId}: anchor a shot to that word on the visual timeline first.`);
+      if (takes.some(t => t.anchorWordId === body.anchorWordId && t.model === body.model && t.text === body.text)) return fail(res, 409, "TakeExists", "That take is already recorded.");
+      const take = { id: ulid(9000 + takes.length + 1), anchorWordId: body.anchorWordId, model: body.model, text: body.text, ...(body.prompt !== undefined ? { prompt: body.prompt } : {}), ...(body.notes !== undefined ? { notes: body.notes } : {}), createdAt: new Date().toISOString(), producer: { name: "mock", version: "1" } };
       takes.push(take);
       posts.push({ at: take.createdAt, route: "/api/scene-descriptions", body });
       json(res, 201, take);

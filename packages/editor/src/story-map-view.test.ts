@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { StitchedEntry, StoryMapResponse, Word } from "./api.js";
+import type { SceneDescriptionTake, StitchedEntry, StoryMapResponse, Word } from "./api.js";
 import type { MapState } from "./state.js";
-import { clock, currentChain, imageTakesAt, resolveMapView, sceneToShow } from "./story-map-view.js";
+import { clock, currentChain, imageTakesAt, resolveMapView, sceneShots, sceneToShow } from "./story-map-view.js";
 
 const words = ["w0", "w1", "w2", "w3", "w4", "w5"].map((id, i) => ({ id, value: `v${i}`, startSample: i * 10, endSample: i * 10 + 8 })) as unknown as ReadonlyArray<Word>;
 const section = (id: string, kind: "act" | "beat", a: number, b: number) => ({ id, kind, title: id, startWordId: `w${a}`, endWordId: `w${b}` });
@@ -63,4 +63,28 @@ test("the image takes at a sample are one per track in track order: the shot hel
   // The main track's shot at 50 has no image, so it is not a take.
   assert.deepEqual(imageTakesAt(stitched, 50, 0).map(t => t.shot.id), ["Q2", "G1"]);
   assert.deepEqual(imageTakesAt([], 0, 0), []);
+});
+
+test("a scene's shots are the declared shot holding at its start, then each declared shot inside it, each with its own takes; no map section is involved", () => {
+  const shot = (trackId: string, id: string, startSample: number, endSample: number, anchorWordId?: string) =>
+    ({ kind: "shot", trackId, id, startSample, endSample, mode: "graphic-illustration", createdAt: "2026-01-01T00:00:00.000Z", producer: { name: "t", version: "1" }, hidden: false, selected: true, imageUrl: `/${id}`, ...(anchorWordId === undefined ? {} : { anchorWordId }) }) as unknown as StitchedEntry;
+  const take = (id: string, anchorWordId: string, model: string, createdAt: string) => ({ id, anchorWordId, model, text: `${model} on ${anchorWordId}`, createdAt, producer: { name: "t", version: "1" } }) as SceneDescriptionTake;
+  // Two tracks: gpt declares shots at w1 (10), w5 (50), and w8 (80); qwen holds its w1 image throughout; main has an unanchored shot at 60.
+  const stitched = [
+    shot("gpt", "G1", 10, 50, "w1"), shot("gpt", "G2", 50, 80, "w5"), shot("gpt", "G3", 80, 200, "w8"),
+    shot("qwen", "Q1", 10, 200, "w1"),
+    { kind: "gap", trackId: "main", startSample: 0, endSample: 60 } as StitchedEntry, shot("main", "M1", 60, 200),
+  ];
+  const takes = [take("T3", "w5", "b", "2026-01-02T00:00:00.000Z"), take("T1", "w1", "a", "2026-01-01T00:00:00.000Z"), take("T2", "w5", "a", "2026-01-01T00:00:00.000Z"), take("T4", "w9", "a", "2026-01-01T00:00:00.000Z")];
+  const summary = (scene: { startSample: number; endSample: number }) => sceneShots(stitched, takes, scene, 0).map(s => [s.anchorWordId, s.startSample, s.images.map(i => i.shot.id), s.descriptions.map(d => d.id)]);
+  // A beat opening on the first declared shot and holding all three: each shot shows the images that start with it, qwen's under shot one
+  // only; takes follow their anchor word, and one for an undeclared word shows nowhere. Main's unanchored shot starts mid-shot and is no one's take.
+  assert.deepEqual(summary({ startSample: 10, endSample: 100 }), [["w1", 10, ["G1", "Q1"], ["T1"]], ["w5", 50, ["G2"], ["T2", "T3"]], ["w8", 80, ["G3"], []]]);
+  // A beat starting mid-shot opens with the shot holding there, then what else the tracks show at its start: qwen's held image and main's unanchored shot.
+  assert.deepEqual(summary({ startSample: 65, endSample: 120 }), [["w5", 50, ["G2"], ["T2", "T3"]], [null, 65, ["Q1", "M1"], []], ["w8", 80, ["G3"], []]]);
+  // Before any declared shot, the scene lists the declared shots inside it, and an empty group only when nothing else is listed.
+  assert.deepEqual(summary({ startSample: 0, endSample: 60 }), [["w1", 10, ["G1", "Q1"], ["T1"]], ["w5", 50, ["G2"], ["T2", "T3"]]]);
+  assert.deepEqual(summary({ startSample: 0, endSample: 5 }), [[null, 0, [], []]]);
+  const unanchored = [{ kind: "gap", trackId: "main", startSample: 0, endSample: 60 } as StitchedEntry, shot("main", "M1", 60, 200)];
+  assert.deepEqual(sceneShots(unanchored, takes, { startSample: 70, endSample: 90 }, 0).map(s => [s.anchorWordId, s.images.map(i => i.shot.id)]), [[null, ["M1"]]]);
 });

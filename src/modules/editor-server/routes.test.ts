@@ -66,38 +66,37 @@ test("/api/story carries the verified clip, titles, the book-clock start, the el
   assert.deepEqual([s.clip.bookId, s.clip.storyId, s.clip.sampleRateHz, s.clip.sampleCount], ["book", "pilot", 10, 100]);
 });
 
-test("/api/scene-descriptions reads as no takes, then POST appends one take per call with the section's words and answers 201; a repeat is 409, an unknown section or unshaped body 400, and a story without a map 404", async t => {
+test("/api/scene-descriptions reads as no takes, then POST appends one take per call for a declared shot and answers 201, with no story map needed; a repeat is 409, an undeclared shot or unshaped body 400", async t => {
   const s = await serve(t, { words: MORE_WORDS });
-  const base = { schemaVersion: 1, kind: "story-map", clip: s.clip, createdAt: "2026-09-18T00:00:00.000Z", producer: { name: "test", version: "1" } };
-  const sections = [{ id: "act-1", kind: "act", title: "All", startWordId: "m2:e0", endWordId: "m2:e6" }, { id: "beat-1", kind: "beat", title: "Later", startWordId: "m2:e2", endWordId: "m2:e6" }];
-  const take = { sectionId: "beat-1", model: "anthropic/claude-fable-5.1", text: "Beneath a ceiling of ice.", notes: "seeded by the route test" };
+  const take = { anchorWordId: "m2:e2", model: "anthropic/claude-fable-5.1", text: "Beneath a ceiling of ice.", notes: "seeded by the route test" };
   await s.run(Effect.gen(function* () {
     const empty = yield* get("/api/stories/pilot/scene-descriptions");
     assert.equal(empty.status, 200);
     assert.deepEqual(decodeStrict(SceneDescriptionsResponse, yield* bodyJson(empty)), { takes: [] });
-    const unmapped = yield* postJson("/api/stories/pilot/scene-descriptions", take);
-    assert.equal(unmapped.status, 404);
-    yield* Effect.promise(() => writeFile(join(s.planningDirectory, "story-map.json"), encode({ ...base, subjects: [], sections })));
+    const undeclared = yield* postJson("/api/stories/pilot/scene-descriptions", take);
+    assert.equal(undeclared.status, 400);
+    assert.match((yield* bodyJson(undeclared))["message"], /No declared shot starts at m2:e2/);
+    const shot = yield* bodyJson(yield* HttpClient.execute(shotForm({ startSample: "5", mode: "graphic-illustration" })));
+    assert.equal((yield* putJson("/api/stories/pilot/decisions", { settings: { frameAspect: { width: 16, height: 9 } }, shots: { [shot["id"] as string]: { anchorWordId: "m2:e2" } } })).status, 200);
     const created = yield* postJson("/api/stories/pilot/scene-descriptions", take);
     assert.equal(created.status, 201);
     const recorded = decodeStrict(SceneDescriptionTake, yield* bodyJson(created));
-    assert.deepEqual({ ...recorded, id: "x", createdAt: "t" }, { ...take, id: "x", startWordId: "m2:e2", endWordId: "m2:e6", createdAt: "t", producer: { name: "editor", version: "test" } });
-    const second = yield* postJson("/api/stories/pilot/scene-descriptions", { sectionId: "beat-1", model: "openai/gpt-6-astra", text: "Under the ice." });
+    assert.deepEqual({ ...recorded, id: "x", createdAt: "t" }, { ...take, id: "x", createdAt: "t", producer: { name: "editor", version: "test" } });
+    const second = yield* postJson("/api/stories/pilot/scene-descriptions", { anchorWordId: "m2:e2", model: "openai/gpt-6-astra", text: "Under the ice." });
     assert.equal(second.status, 201);
     const repeat = yield* postJson("/api/stories/pilot/scene-descriptions", take);
     assert.equal(repeat.status, 409);
     assert.equal((yield* bodyJson(repeat))["code"], "TakeExists");
-    const unknown = yield* postJson("/api/stories/pilot/scene-descriptions", { ...take, sectionId: "beat-9" });
-    assert.equal(unknown.status, 400);
-    assert.match((yield* bodyJson(unknown))["message"], /no section beat-9/);
-    const unshaped = yield* postJson("/api/stories/pilot/scene-descriptions", { ...take, picked: true });
+    const elsewhere = yield* postJson("/api/stories/pilot/scene-descriptions", { ...take, anchorWordId: "m2:e4" });
+    assert.equal(elsewhere.status, 400);
+    const unshaped = yield* postJson("/api/stories/pilot/scene-descriptions", { ...take, sectionId: "beat-1" });
     assert.equal(unshaped.status, 400);
     assert.equal((yield* bodyJson(unshaped))["code"], "InvalidRequest");
     const listed = decodeStrict(SceneDescriptionsResponse, yield* bodyJson(yield* get("/api/stories/pilot/scene-descriptions")));
-    assert.deepEqual(listed.takes.map(t => [t.model, t.text]), [["anthropic/claude-fable-5.1", "Beneath a ceiling of ice."], ["openai/gpt-6-astra", "Under the ice."]]);
+    assert.deepEqual(listed.takes.map(t => [t.anchorWordId, t.model, t.text]), [["m2:e2", "anthropic/claude-fable-5.1", "Beneath a ceiling of ice."], ["m2:e2", "openai/gpt-6-astra", "Under the ice."]]);
     assert.equal(listed.takes[0]!.id, recorded.id);
     const file = yield* readJson(join(s.planningDirectory, "scene-descriptions.json"));
-    assert.equal(file["kind"], "scene-descriptions");
+    assert.deepEqual([file["schemaVersion"], file["kind"]], [2, "scene-descriptions"]);
     assert.deepEqual(file["clip"], s.clip);
     assert.deepEqual(file["takes"], listed.takes);
   }));

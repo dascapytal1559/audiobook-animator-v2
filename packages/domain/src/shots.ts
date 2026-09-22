@@ -130,6 +130,21 @@ export function mergeTimeline(records: ReadonlyArray<ServedShotRecord>, decision
   return { candidates, stitched, unresolvedAnchors, problems };
 }
 
+/**
+ * A declared shot (A65): a place where a new shot begins, declared by anchoring a shot to a transcript word (A51). Nothing automatic
+ * declares one; the word is the shot's identity, so it follows timing edits, and takes of the shot name that word.
+ */
+export type DeclaredShot = { readonly anchorWordId: string; readonly startSample: number };
+/**
+ * Every declared shot in timeline order: the distinct anchor words of the shots the image tracks show, each at its word's effective start.
+ * A hidden or unselected shot declares nothing, and an unanchored shot is a placement, not a declaration.
+ */
+export function declaredShots(stitched: ReadonlyArray<StitchedEntry>): ReadonlyArray<DeclaredShot> {
+  const starts = new Map<string, number>();
+  for (const entry of stitched) if (entry.kind === "shot" && entry.anchorWordId !== undefined && !starts.has(entry.anchorWordId)) starts.set(entry.anchorWordId, entry.startSample);
+  return [...starts].map(([anchorWordId, startSample]) => ({ anchorWordId, startSample })).sort((a, b) => a.startSample - b.startSample || a.anchorWordId.localeCompare(b.anchorWordId));
+}
+
 /** Project one independent sequence before preview, playback, or candidate editing (A60). */
 export function timelineForTrack(timeline: Pick<MergedTimeline, "candidates" | "stitched">, trackId: string) {
   return { candidates: timeline.candidates.filter(group => group.trackId === trackId), stitched: timeline.stitched.filter(entry => entry.trackId === trackId) };

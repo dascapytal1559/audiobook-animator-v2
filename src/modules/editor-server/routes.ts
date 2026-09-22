@@ -9,7 +9,7 @@ import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotR
 import { type TimingEntries } from "../word-timing/index.js";
 import { type LoadedStoryMap, loadStoryMap } from "../story-map/index.js";
 import { addSceneDescriptionTake, loadSceneDescriptions, SceneDescriptionTakeBody } from "../scene-descriptions/index.js";
-import { type ChunkElement, type SceneDescriptionsResponse, type StoriesResponse, type StoryMapResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
+import { type ChunkElement, declaredShots, type SceneDescriptionsResponse, type StoriesResponse, type StoryMapResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
 export type { StorySummary };
 import { type EditorSettings, editorError, type EditorCode } from "./contracts.js";
 import type { PeaksIdentity, SpeechIdentity } from "./peaks.js";
@@ -279,12 +279,12 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     return yield* HttpServerResponse.file(image.path, { headers: { "content-type": image.contentType, "cache-control": "no-cache" } }).pipe(Effect.mapError(() => notFound));
   }))));
   const sceneDescriptions = HttpRouter.add("GET", at("/scene-descriptions"), handle(withStory(({ ctx }) => Effect.map(descriptions(ctx), takes => json({ takes } satisfies SceneDescriptionsResponse)))));
-  /** A writer records one description take for a beat (A63): the body is the take's fields, the server adds id, words, time, and producer, and answers 201 with the take as recorded. */
+  /** A writer records one description take for a declared shot (A63, A65): the body is the take's fields, the server adds id, time, and producer, and answers 201 with the take as recorded. */
   const sceneDescriptionTake = HttpRouter.add("POST", at("/scene-descriptions"), request => handle(withStory(({ ctx }) => takeLock(ctx.clip.storyId).withPermits(1)(Effect.gen(function* () {
     const body = yield* readJsonObject(request, ctx.settings.editor.limits.maxSceneDescriptionsBytes);
-    const take = yield* Schema.decodeUnknownEffect(SceneDescriptionTakeBody, { onExcessProperty: "error" })(body).pipe(Effect.mapError(e => editorError({ code: "InvalidRequest", message: `Body must be a take with sectionId, model, text, and optional prompt and notes. ${e.message.replace(/\s+/g, " ")}` })));
-    const loaded = yield* storyMap(ctx);
-    const recorded = yield* addSceneDescriptionTake({ story: ctx.story, maxBytes: ctx.settings.editor.limits.maxSceneDescriptionsBytes, take, sections: loaded.map.sections, producer: options.producer });
+    const take = yield* Schema.decodeUnknownEffect(SceneDescriptionTakeBody, { onExcessProperty: "error" })(body).pipe(Effect.mapError(e => editorError({ code: "InvalidRequest", message: `Body must be a take with anchorWordId, model, text, and optional prompt and notes. ${e.message.replace(/\s+/g, " ")}` })));
+    const { stitched } = yield* timeline(ctx);
+    const recorded = yield* addSceneDescriptionTake({ story: ctx.story, maxBytes: ctx.settings.editor.limits.maxSceneDescriptionsBytes, take, shots: declaredShots(stitched), producer: options.producer });
     return json(recorded, 201);
   })))));
   const apiFallback = HttpRouter.add("*", "/api/*", errorJson(404, "NotFound", "No such API route."));

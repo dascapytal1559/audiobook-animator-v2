@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { Effect, FileSystem } from "effect";
-import { sameClip, type Section } from "@animator/domain";
+import { type DeclaredShot, sameClip } from "@animator/domain";
 import { decodeJson, encodeJson, readBounded, writeAtomic } from "../../core/io.js";
 import { clipOf, type StoryContext } from "../story/index.js";
 import { mintUlid } from "../visual-timeline/ulid.js";
@@ -33,28 +33,28 @@ export function loadSceneDescriptions(target: DescriptionsTarget): Effect.Effect
 
 export type AddTakeRequest = DescriptionsTarget & {
   readonly take: SceneDescriptionTakeBody;
-  /** The map's sections as loaded: the take must name one of them, and records the words it covered. */
-  readonly sections: ReadonlyArray<Section>;
+  /** The declared shots on the timeline as merged now (A65): the take must name one of them by its anchor word. */
+  readonly shots: ReadonlyArray<DeclaredShot>;
   readonly producer: { readonly name: string; readonly version: string };
 };
 /**
  * Append one take: the file is reread, the take appended with a fresh id and time, and the whole file written by temp file and rename, so a
- * reader never sees a partial file and no earlier take is touched. A take that repeats an earlier one's section, model, and text is refused
- * as `TakeExists`, so a rerun of the same generation is a no-op rather than a duplicate. Callers serialize writers to one story; two writers
- * appending at once would each read the same file and the later rename would drop the earlier take.
+ * reader never sees a partial file and no earlier take is touched. A take must depict a declared shot, named by its anchor word; a take that
+ * repeats an earlier one's shot, model, and text is refused as `TakeExists`, so a rerun of the same generation is a no-op rather than a
+ * duplicate. Callers serialize writers to one story; two writers appending at once would each read the same file and the later rename would
+ * drop the earlier take.
  */
 export function addSceneDescriptionTake(request: AddTakeRequest): Effect.Effect<SceneDescriptionTake, ReturnType<typeof descriptionsError>, FileSystem.FileSystem> {
   return wrap(Effect.gen(function* () {
     const path = pathOf(request);
-    const section = request.sections.find(s => s.id === request.take.sectionId);
-    if (section === undefined) return yield* fail("InvalidRequest", `The story map has no section ${request.take.sectionId}.`);
+    if (!request.shots.some(shot => shot.anchorWordId === request.take.anchorWordId)) return yield* fail("InvalidRequest", `No declared shot starts at ${request.take.anchorWordId}: anchor a shot to that word on the visual timeline first.`);
     const previous = yield* loadSceneDescriptions(request);
     const now = new Date().toISOString();
-    const take: SceneDescriptionTake = { id: mintUlid(), ...request.take, startWordId: section.startWordId, endWordId: section.endWordId, createdAt: now, producer: request.producer };
+    const take: SceneDescriptionTake = { id: mintUlid(), ...request.take, createdAt: now, producer: request.producer };
     const takes = [...previous, take];
     const problems = sceneDescriptionProblems(takes);
     if (problems.length > 0) return yield* fail("TakeExists", `${problems[0]}: ${path}.`);
-    const bytes = encodeJson({ schemaVersion: 1, kind: "scene-descriptions", clip: clipOf(request.story), updatedAt: now, takes });
+    const bytes = encodeJson({ schemaVersion: 2, kind: "scene-descriptions", clip: clipOf(request.story), updatedAt: now, takes });
     const decoded = yield* decodeJson(SceneDescriptions, bytes, "the new take", true).pipe(Effect.mapError(e => descriptionsError({ code: "InvalidRequest", message: e.message })));
     if (bytes.byteLength > request.maxBytes) return yield* fail("InvalidRequest", `The scene descriptions would exceed the ${request.maxBytes}-byte limit.`);
     yield* writeAtomic(path, bytes).pipe(Effect.mapError(e => descriptionsError({ code: "IoFailed", message: e.message })));

@@ -46,7 +46,7 @@ export function storyApi(storyId: string) {
     getPeaks: () => request(PeaksFile, `${base}/peaks`),
     getSpeech: () => request(SpeechFile, `${base}/speech`),
     getMap: () => request(StoryMapResponse, `${base}/map`),
-    /** Every description take recorded for the story (A63); the Scenes section shows those of the shown beat. Writers append through POST on the same path; the browser never does. */
+    /** Every description take recorded for the story (A63, A65); the Scenes section shows those of the shots on screen in the shown scene. Writers append through POST on the same path; the browser never does. */
     getSceneDescriptions: () => request(SceneDescriptionsResponse, `${base}/scene-descriptions`),
     putWordTiming: (body: WordTimingBody) => request(StoryResponse, `${base}/word-timing`, jsonInit("PUT", body)),
     postAlign: (body: AlignRequest) => request(AlignResponse, `${base}/word-timing/align`, jsonInit("POST", body)),

@@ -1,5 +1,5 @@
-import { currentSections, entryAt, resolveStoryMap } from "@animator/domain";
-import type { ResolvedSection, ResolvedStoryMap, SectionKind, ServedSubject, StitchedEntry, Word } from "./api.js";
+import { currentSections, declaredShots, entryAt, resolveStoryMap, takesForShot } from "@animator/domain";
+import type { ResolvedSection, ResolvedStoryMap, SceneDescriptionTake, SectionKind, ServedSubject, StitchedEntry, Word } from "./api.js";
 import type { MapState } from "./state.js";
 
 export type Resolved = ResolvedStoryMap<ServedSubject>;
@@ -41,7 +41,7 @@ export const sceneToShow = (sections: ReadonlyArray<ResolvedSection>, selectedId
   return chain[chain.length - 1] ?? null;
 };
 
-/** One image take of a scene (A63): the shot an image track shows at the scene's start, with the track it came from. */
+/** One image take (A63): the shot an image track shows at a sample, with the track it came from. */
 export type ImageTake = { readonly trackId: string; readonly shot: Extract<StitchedEntry, { kind: "shot" }> & { readonly imageUrl: string } };
 
 /**
@@ -55,6 +55,40 @@ export function imageTakesAt(stitched: ReadonlyArray<StitchedEntry>, sample: num
     const entry = entryAt(stitched.filter(e => e.trackId === trackId), sample, toleranceSamples);
     return entry !== null && entry.kind === "shot" && entry.imageUrl !== undefined ? [{ trackId, shot: { ...entry, imageUrl: entry.imageUrl } }] : [];
   });
+}
+
+/** One shot on screen during a scene (A65), with every source's take of it. */
+export type SceneShot = {
+  /** The declared shot's anchor word, or null for what else the tracks show at the scene's start, outside any listed declared shot. */
+  readonly anchorWordId: string | null;
+  /** Where the shot starts on the clip clock; before the scene when it is holding from an earlier one. */
+  readonly startSample: number;
+  readonly images: ReadonlyArray<ImageTake>;
+  readonly descriptions: ReadonlyArray<SceneDescriptionTake>;
+};
+
+/**
+ * The shots of a scene in timeline order (A65): the declared shot holding at the scene's start, then each declared shot that starts inside
+ * it. Nothing here decides where a shot begins; only a word anchor on the timeline declares one. A declared shot's image takes are the
+ * images the tracks start with it, one per track; its description takes are those recorded for its anchor word. Whatever else a track
+ * shows at the scene's start (an unanchored shot, or an earlier shot's image still holding) is listed once, after the holding shot, with
+ * no descriptions, since a description can only name a declared shot; when nothing at all is listed, that group stays to say so.
+ */
+export function sceneShots(stitched: ReadonlyArray<StitchedEntry>, takes: ReadonlyArray<SceneDescriptionTake>, scene: { readonly startSample: number; readonly endSample: number }, toleranceSamples: number): ReadonlyArray<SceneShot> {
+  const trackIds = [...new Set(stitched.map(entry => entry.trackId))];
+  const startingAt = (sample: number): ReadonlyArray<ImageTake> => trackIds.flatMap(trackId => {
+    const entry = stitched.find(e => e.trackId === trackId && e.kind === "shot" && Math.abs(e.startSample - sample) <= toleranceSamples);
+    return entry !== undefined && entry.kind === "shot" && entry.imageUrl !== undefined ? [{ trackId, shot: { ...entry, imageUrl: entry.imageUrl } }] : [];
+  });
+  const declared = declaredShots(stitched);
+  const holding = declared.filter(shot => shot.startSample <= scene.startSample + toleranceSamples).at(-1);
+  const inside = declared.filter(shot => shot.startSample > scene.startSample + toleranceSamples && shot.startSample < scene.endSample);
+  const listed = (holding === undefined ? inside : [holding, ...inside]).map(shot => ({ anchorWordId: shot.anchorWordId, startSample: shot.startSample, images: startingAt(shot.startSample), descriptions: takesForShot(takes, shot.anchorWordId) }));
+  const shown = new Set(listed.flatMap(shot => shot.images.map(image => image.shot.id)));
+  const rest = imageTakesAt(stitched, scene.startSample, toleranceSamples).filter(image => !shown.has(image.shot.id));
+  if (rest.length === 0 && listed.length > 0) return listed;
+  const others: SceneShot = { anchorWordId: null, startSample: scene.startSample, images: rest, descriptions: [] };
+  return holding === undefined ? [others, ...listed] : [listed[0]!, others, ...listed.slice(1)];
 }
 
 export const SECTION_LABELS: Readonly<Record<SectionKind, string>> = { act: "Act", chapter: "Chapter", scene: "Scene", beat: "Beat" };

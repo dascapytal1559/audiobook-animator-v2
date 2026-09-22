@@ -23,7 +23,7 @@ export type MapState = { readonly status: "loading" } | { readonly status: "abse
 export type EditorState = {
   readonly story: StoryResponse | null;
   readonly map: MapState;
-  /** Every scene description take recorded for the story (A63), as last fetched; empty until a writer records one. */
+  /** Every scene description take recorded for the story, each naming its shot's anchor word (A63, A65), as last fetched; empty until a writer records one. */
   readonly takes: ReadonlyArray<SceneDescriptionTake>;
   readonly records: ReadonlyArray<ShotRecord>;
   readonly storyDirectory: string | null;

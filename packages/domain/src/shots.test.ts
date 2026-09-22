@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ClipIdentity } from "./identity.js";
-import { entryAt, mergeTimeline, timelineForTrack, type ShotRecord } from "./shots.js";
+import { declaredShots, entryAt, mergeTimeline, timelineForTrack, type ShotRecord } from "./shots.js";
 
 const clip: ClipIdentity = { bookId: "b", storyId: "s", audioSha256: "a".repeat(64), transcriptSha256: "b".repeat(64), sampleRateHz: 48000, sampleCount: 96000 };
 const record = (id: string, startSample: number, createdAt: string): ShotRecord =>
@@ -94,4 +94,14 @@ test("an empty or wholly hidden track keeps its own opening gap", () => {
   assert.deepEqual(empty.stitched, [{ kind: "gap", trackId: "main", startSample: 0, endSample: 96000 }]);
   const hidden = mergeTimeline([{ ...record("a", 1, "2026-01-01T00:00:00Z"), trackId: "proof" }], { settings, shots: { a: { hidden: true } } }, clip.sampleCount, new Map());
   assert.deepEqual(hidden.stitched, [{ kind: "gap", trackId: "proof", startSample: 0, endSample: 96000 }]);
+});
+
+test("declared shots are the distinct anchor words of the shown shots across tracks, in timeline order; unanchored, hidden, and unselected shots declare nothing", () => {
+  const onTrack = (id: string, startSample: number, trackId: string, createdAt = "2026-01-01T00:00:00Z"): ShotRecord => ({ ...record(id, startSample, createdAt), trackId });
+  const records = [onTrack("aaa", 0, "one"), onTrack("bbb", 0, "two"), onTrack("ccc", 5000, "one"), onTrack("ddd", 9000, "two"), onTrack("eee", 20000, "one"), onTrack("fff", 40000, "one", "2026-01-02T00:00:00Z")];
+  const starts = new Map([["w0", 100], ["w5", 30000], ["w9", 60000], ["w12", 70000]]);
+  const shots = { aaa: { anchorWordId: "w0" }, bbb: { anchorWordId: "w0" }, ddd: { anchorWordId: "w5" }, eee: { anchorWordId: "w9", hidden: true }, fff: { anchorWordId: "w12" } };
+  const { stitched } = mergeTimeline(records, { settings, shots }, clip.sampleCount, starts);
+  assert.deepEqual(declaredShots(stitched), [{ anchorWordId: "w0", startSample: 100 }, { anchorWordId: "w5", startSample: 30000 }, { anchorWordId: "w12", startSample: 70000 }]);
+  assert.deepEqual(declaredShots([]), []);
 });

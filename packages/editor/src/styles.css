@@ -198,8 +198,14 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .subject-detail h3, .scene-detail h3 { text-transform: none; letter-spacing: 0; font-size: 14px; color: inherit; margin: 0 0 6px; }
 /* A scene's takes (A63): the image takes and the description takes side by side, each labelled by its source; an empty place stays visible. */
 .scene-summary { margin: 0 0 6px; font-size: 12px; color: var(--muted); }
-.scene-look { display: grid; grid-template-columns: minmax(160px, 2fr) minmax(200px, 3fr); gap: 8px; margin-top: 8px; align-items: start; }
-.scene-look h4 { margin-top: 0; }
+/* A scene's shots (A65): one block per declared shot in timeline order, headed by where it begins. */
+.scene-shot { margin-top: 10px; padding-top: 6px; border-top: 1px solid var(--line); }
+.scene-shot > h4 { margin: 0; font-size: 12px; text-transform: none; letter-spacing: 0; color: var(--text); }
+.scene-shot-head { background: none; border: 0; padding: 0; color: var(--text); cursor: pointer; font: inherit; font-weight: 600; text-align: left; }
+.scene-shot-head:hover:not(:disabled) { background: none; color: var(--accent); }
+.scene-shot-opening { font-weight: 400; font-style: italic; }
+.scene-look { display: grid; grid-template-columns: minmax(160px, 2fr) minmax(200px, 3fr); gap: 8px; margin-top: 6px; align-items: start; }
+.scene-look h5 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
 .scene-look .placeholder { border: 1px dashed var(--line); border-radius: 6px; padding: 8px 10px; }
 .scene-look .placeholder p { margin: 0; font-size: 12px; }
 .take-label { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--bg-3); color: var(--text); }
@@ -216,7 +222,7 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .image-take-dialog figcaption { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; font-size: 12px; }
 .image-take-dialog figcaption .detail-close { margin-left: auto; }
 .description-take { margin: 0 0 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
-.description-take h5 { margin: 0 0 4px; font-size: 11px; font-weight: 400; display: flex; align-items: baseline; gap: 6px; }
+.description-take h6 { margin: 0 0 4px; font-size: 11px; font-weight: 400; display: flex; align-items: baseline; gap: 6px; }
 .take-text { margin: 0; font-size: 12px; line-height: 1.45; white-space: pre-wrap; }
 .detail-close { background: none; border: 0; padding: 0 4px; color: var(--muted); cursor: pointer; font: inherit; font-size: 16px; line-height: 1; }
 .detail-close:hover:not(:disabled) { background: none; color: var(--text); }
