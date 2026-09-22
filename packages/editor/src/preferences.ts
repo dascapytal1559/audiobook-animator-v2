@@ -2,13 +2,18 @@ import { useCallback, useState } from "react";
 
 /**
  * Browser view preferences, never part of the saved timeline: read once from localStorage under `key`, written back as JSON on every
- * change. `parse` turns whatever was stored into a valid value; a missing or unreadable entry yields the fallback.
+ * change. `parse` turns whatever was stored into a valid value; a missing or unreadable entry yields the fallback. The setter takes a value
+ * or an updater of the latest value, like React's, so two toggles in one tick both land.
  */
-export function useViewPreference<T>(key: string, fallback: T, parse: (stored: unknown) => T): [T, (next: T) => void] {
+export function useViewPreference<T>(key: string, fallback: T, parse: (stored: unknown) => T): [T, (next: T | ((previous: T) => T)) => void] {
   const [value, setValue] = useState<T>(() => {
     try { const raw = window.localStorage.getItem(key); return raw === null ? fallback : parse(JSON.parse(raw)); } catch { return fallback; }
   });
-  const set = useCallback((next: T) => { setValue(next); try { window.localStorage.setItem(key, JSON.stringify(next)); } catch { /* view preference only */ } }, [key]);
+  const set = useCallback((next: T | ((previous: T) => T)) => setValue(previous => {
+    const resolved = typeof next === "function" ? (next as (previous: T) => T)(previous) : next;
+    try { window.localStorage.setItem(key, JSON.stringify(resolved)); } catch { /* view preference only */ }
+    return resolved;
+  }), [key]);
   return [value, set];
 }
 

@@ -65,7 +65,7 @@ Use these words in code, documents, and conversation; a schema comment defers to
 | subject | A character, location, object, or motif that recurs in a story, with a stable id, its mentions, and optional reference images. |
 | mention | An inclusive run of words where the narration names or clearly refers to a subject. |
 | section | A run of the narration with a structural role: act, chapter, scene, or beat. Sections nest by containment. |
-| explorer | The editor view that shows the story map: structure on the left, cast on the right, both seeking the shared playhead. |
+| explorer | The component that shows the story map: structure on the left, cast on the right, both seeking the shared playhead. Its user-facing name is the World map section (A63). |
 | speech region | A span the energy detector calls speech; the snap targets and the align pass use them. |
 | run | One invocation of a tool: its effective settings are the code defaults with an optional run file laid over them, and its outputs record them. |
 | settings | The values a run uses, one section per module: `story`, `timeline`, `editor`, `inventory`, `transcription`. |
@@ -112,6 +112,7 @@ Audiobook -> movie
 │           ├── Old prototype player discarded [A17]; behaviours from demo viewer carried [A24]
 │           ├── Preview subtitles: whole sentences or automatic phrases, optional word highlighting; export and manual subtitle editing later [A61]
 │           ├── Story map and explorer: subjects and sections as word ranges, read-only in the browser [A62]
+│           ├── One editor page of collapsible sections: Video, World map, transport, lanes [A63]
 │           └── Word timing alignment against the audio [Q21–Q25 confirmed 2026-09-09]
 │               ├── Overlay files, transcript untouched; script and editor own separate files [A36, A42]
 │               ├── Three visible tracks: Original, Auto, Edited [A52]
@@ -210,6 +211,7 @@ One file per decision under [docs/decisions](docs/decisions/), each with its sta
 | A60 | [Image tracks are independent sequences over one story's narration.](docs/decisions/A60-independent-image-tracks.md) | standing |
 | A61 | [Preview subtitles derive sentences and phrases from the working transcript, independently of timeline chunks.](docs/decisions/A61-derived-preview-subtitles.md) | standing |
 | A62 | [A story map names a story's subjects and structure as word ranges; the editor explores it read-only.](docs/decisions/A62-story-map-and-explorer.md) | standing |
+| A63 | [The editor is one page of collapsible sections; the story map is the World map section.](docs/decisions/A63-single-page-of-collapsible-sections.md) | standing |
 
 ## When a new book arrives
 

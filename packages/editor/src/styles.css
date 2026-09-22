@@ -28,7 +28,19 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .header .story-picker select { width: auto; max-width: 420px; }
 .header .error { margin-left: auto; background: #3a1d1d; border-color: var(--danger); color: #ffb4b0; max-width: 60%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .main { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr; }
-.stage { min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* One page of stacked sections (A63): the page scrolls when the open sections and the lanes' floor exceed the window. */
+.stage { min-width: 0; display: flex; flex-direction: column; overflow-x: hidden; overflow-y: auto; }
+.panel { flex-shrink: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--line); }
+.panel-head { display: flex; align-items: center; background: var(--bg-2); }
+.panel-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 14px; background: none; border: 0; border-radius: 0; color: inherit; cursor: pointer; text-align: left; font: inherit; }
+.panel-toggle:hover:not(:disabled) { background: var(--bg-3); }
+.panel-toggle .chevron { display: inline-block; color: var(--muted); transition: transform 120ms; }
+.panel-toggle .chevron.open { transform: rotate(90deg); }
+.panel-title { font-size: 13px; font-weight: 600; }
+.panel-hint { font-size: 11px; margin-left: auto; }
+.panel-body { display: flex; flex-direction: column; min-height: 0; }
+/* The World map section keeps a fixed share of the window so the lanes below always have room; its columns scroll inside it. */
+.panel-world-map .panel-body { height: 38vh; }
 
 .preview { width: 100%; flex-shrink: 0; margin: 0 auto; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .preview-frame { width: 100%; position: relative; container-type: inline-size; display: flex; align-items: center; justify-content: center; overflow: hidden; }
@@ -41,7 +53,7 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .preview-card-title { font-size: 20px; font-weight: 600; }
 .preview-card-body { margin-top: 8px; color: var(--muted); white-space: pre-wrap; }
 
-.transport { display: flex; align-items: center; gap: 14px; padding: 8px 14px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--bg-2); flex-wrap: wrap; }
+.transport { flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--bg-2); flex-wrap: wrap; }
 .transport-play { min-width: 72px; font-weight: 600; }
 .clocks { display: flex; gap: 14px; }
 .clock { display: flex; flex-direction: column; line-height: 1.1; }
@@ -54,7 +66,8 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .status-on { color: var(--ok); } .status-off { color: var(--danger); }
 .save-button.save-saved { color: var(--ok); } .save-button.save-saving { color: var(--accent); } .save-button.save-error { color: var(--danger); border-color: var(--danger); }
 
-.timeline { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* The lanes take what the open sections leave, never less than their floor; beyond that the page scrolls. */
+.timeline { flex: 1; min-height: 320px; display: flex; flex-direction: column; }
 .timeline-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 14px; font-size: 12px; color: var(--muted); }
 .zoom-value { min-width: 64px; text-align: center; font-family: ui-monospace, Menlo, monospace; }
 .snap-hint { margin-left: 12px; color: var(--accent); }
@@ -130,11 +143,7 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .track-group-label .chevron { width: 8px; font-size: 10px; }
 .track-group-summary { text-transform: none; letter-spacing: 0; opacity: 0.7; }
 
-/* Story explorer (A62): structure left, cast right, over the same preview and transport as the timeline. */
-.view-switch { display: inline-flex; }
-.view-switch button { border-radius: 0; }
-.view-switch button:first-child { border-radius: 4px 0 0 4px; }
-.view-switch button:last-child { border-radius: 0 4px 4px 0; margin-left: -1px; }
+/* World map (A62, A63): structure left, cast right, inside its own section of the page. */
 .explorer { --column-split: 0.6; --cast-split: 0.5; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(240px, calc(var(--column-split) * 100%)) auto minmax(280px, 1fr); overflow: hidden; }
 .explorer.dragging-x, .explorer.dragging-y { user-select: none; }
 .explorer.dragging-x { cursor: col-resize; }

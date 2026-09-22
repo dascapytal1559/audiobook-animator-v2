@@ -6,6 +6,7 @@ import { planTick } from "./playback.js";
 import { selectItem, selectedRange, type SelectionItem } from "./selection.js";
 import type { SnapTarget } from "./snap.js";
 import { Explorer } from "./Explorer.js";
+import { Panel } from "./Panel.js";
 import { Preview } from "./Preview.js";
 import { StoryPicker } from "./StoryPicker.js";
 import { decisionsForView, initialState, isDecisionsDirty, isDirty, isTimingDirty, reduce, wordsForView, workingBounds } from "./state.js";
@@ -13,12 +14,16 @@ import { booleanFlags, useViewPreference } from "./preferences.js";
 import { Timeline, type SubtitleToggles, type TimingRowData } from "./Timeline.js";
 import { effectiveWords, wordStartMap } from "./timing.js";
 import { Transport } from "./Transport.js";
-import { type EditorView, viewFromSearch } from "./view.js";
+import { viewFromSearch } from "./view.js";
 
 /** The preview's subtitle toggles (A61) are a browser view preference, kept here because the preview shows them and the timeline's text group toggles them. */
 const SUBTITLES_KEY = "editor.subtitles";
 const SUBTITLE_TOGGLE_DEFAULTS: SubtitleToggles = { visible: subtitleDefaults.visible, highlight: subtitleDefaults.highlight };
 const parseSubtitles = booleanFlags(SUBTITLE_TOGGLE_DEFAULTS);
+/** Which of the page's collapsible sections are open (A63): a browser view preference like the subtitle toggles. */
+const PANELS_KEY = "editor.panels";
+const PANEL_DEFAULTS = { video: true, worldMap: true };
+const parsePanels = booleanFlags(PANEL_DEFAULTS);
 
 const SAVE_DEBOUNCE_MS = 300;
 const SEEK_TOLERANCE_MS = 1;
@@ -42,7 +47,6 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const [alignBusy, setAlignBusy] = useState(false);
   const [openingView, setOpeningView] = useState(() => viewFromSearch(window.location.search));
   const [requestedTrack, setRequestedTrack] = useState(openingView.trackId);
-  const [view, setView] = useState<EditorView>(openingView.view);
   const audioRef = useRef<HTMLAudioElement>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -73,20 +77,13 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const activeTrackId = trackIds.includes(requestedTrack) ? requestedTrack : trackIds[0] ?? "main";
   const activeTimeline = useMemo(() => timelineForTrack(merged, activeTrackId), [merged, activeTrackId]);
   const [subtitles, setSubtitles] = useViewPreference(SUBTITLES_KEY, SUBTITLE_TOGGLE_DEFAULTS, parseSubtitles);
+  const [panels, setPanels] = useViewPreference(PANELS_KEY, PANEL_DEFAULTS, parsePanels);
+  const togglePanel = useCallback((key: keyof typeof PANEL_DEFAULTS) => setPanels(previous => ({ ...previous, [key]: !previous[key] })), [setPanels]);
   const selectTrack = useCallback((trackId: string) => {
     setRequestedTrack(trackId);
     loopAnchorRef.current = null;
     const url = new URL(window.location.href);
     url.searchParams.set("track", trackId);
-    const rate = stateRef.current.story?.clip.sampleRateHz ?? 0;
-    if (rate > 0) url.searchParams.set("at", String(stateRef.current.playhead / rate));
-    window.history.replaceState(null, "", url);
-  }, []);
-  /** Timeline or explorer (A62); the choice rides in the URL like the track, so a link opens the same view. */
-  const selectView = useCallback((next: EditorView) => {
-    setView(next);
-    const url = new URL(window.location.href);
-    if (next === "timeline") url.searchParams.delete("view"); else url.searchParams.set("view", next);
     const rate = stateRef.current.story?.clip.sampleRateHz ?? 0;
     if (rate > 0) url.searchParams.set("at", String(stateRef.current.playhead / rate));
     window.history.replaceState(null, "", url);
@@ -195,7 +192,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
     window.history.replaceState(null, "", url);
   }, [seekKeepingLoop]);
   useEffect(() => {
-    const onPopState = () => { const opening = viewFromSearch(window.location.search); setOpeningView(opening); setRequestedTrack(opening.trackId); setView(opening.view); };
+    const onPopState = () => { const opening = viewFromSearch(window.location.search); setOpeningView(opening); setRequestedTrack(opening.trackId); };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
@@ -341,17 +338,17 @@ export function App({ storyId, stories, onSelectStory }: Props) {
       <header className="header">
         <h1>Story editor</h1>
         <StoryPicker stories={stories} value={storyId} onChange={onPickStory} />
-        <div className="view-switch" role="group" aria-label="View">
-          <button type="button" className={`toggle${view === "timeline" ? " on" : ""}`} aria-pressed={view === "timeline"} onClick={() => selectView("timeline")} data-testid="view-timeline">Timeline</button>
-          <button type="button" className={`toggle${view === "explorer" ? " on" : ""}`} aria-pressed={view === "explorer"} onClick={() => selectView("explorer")} data-testid="view-explorer">Explorer</button>
-        </div>
         {state.story && <span className="muted">{state.story.story.bookTitle} · {state.story.clip.storyId} · {state.story.clip.sampleRateHz} Hz · {state.story.story.transcriptProvider === "openai" ? "GPT transcript" : "Rev split text — awaiting GPT"}</span>}
         {state.error && <button type="button" className="error" onClick={() => dispatch({ type: "error-clear" })} title="Dismiss" data-testid="error">{state.error}</button>}
       </header>
       <main className="main">
         <section className="stage">
-          {view === "timeline" && <>
-          <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} subtitles={subtitles} />
+          <Panel id="video" title="Video" open={panels.video} onToggle={() => togglePanel("video")}>
+            <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} subtitles={subtitles} />
+          </Panel>
+          <Panel id="world-map" title="World map" open={panels.worldMap} onToggle={() => togglePanel("worldMap")}>
+            {state.story && <Explorer map={state.map} words={words} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} onSeek={onSeek} />}
+          </Panel>
           <Transport
             playing={state.playing} playhead={state.playhead} sampleRateHz={Math.max(1, sampleRateHz)} sourceStartSample={state.story?.sourceStartSample ?? 0}
             loop={state.loop} follow={state.follow} working={state.working} save={state.save} dirty={isDirty(state)} connected={connected}
@@ -359,9 +356,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
             onToggleWorking={() => dispatch({ type: "working-toggle" })} onSetIn={() => dispatch({ type: "working-set-in" })} onSetOut={() => dispatch({ type: "working-set-out" })}
             onClearWorking={() => dispatch({ type: "working-clear" })} onSave={() => dispatch({ type: "save-requested" })}
           />
-          </>}
-          {state.story && view === "explorer" && <Explorer map={state.map} words={words} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} onSeek={onSeek} />}
-          {state.story && view === "timeline" && (
+          {state.story && (
             <Timeline
               words={words} chunks={chunks} original={originalRow} auto={autoRow} transcriptProvider={state.story?.story.transcriptProvider ?? "rev-ai"} selectionLeadStart={selectionLeadStart}
               sampleRateHz={sampleRateHz} sampleCount={sampleCount} peaks={peaks} speech={speech?.regions ?? null} stitched={merged.stitched} candidates={merged.candidates}
