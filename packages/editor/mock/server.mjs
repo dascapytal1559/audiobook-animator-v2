@@ -52,7 +52,7 @@ function story(storyId) {
   const words = effective();
   const inversions = words.filter((w, i) => i > 0 && w.startSample < words[i - 1].startSample).length;
   const listed = STORIES.find(s => s.id === storyId);
-  return { clip: { ...clip, bookId: listed.bookId, storyId }, story: { title: listed.title, bookTitle: listed.bookTitle }, sourceStartSample: 123456789, elements, words, chunks: chunksOf(words), chunking: { ...CHUNKING, mergedSentenceBreaks: [] }, timing: { inversions, autoRuns, manualCount: Object.keys(manual).length, autoCount: Object.keys(auto).length } };
+  return { clip: { ...clip, bookId: listed.bookId, storyId }, story: { title: listed.title, bookTitle: listed.bookTitle, transcriptProvider: "openai" }, sourceStartSample: 123456789, elements, words, chunks: chunksOf(words), chunking: { ...CHUNKING, mergedSentenceBreaks: [] }, timing: { inversions, autoRuns, manualCount: Object.keys(manual).length, autoCount: Object.keys(auto).length } };
 }
 // Speech regions (A44): the synthetic tone is silent only during the 850–1250 ms pause, so two regions with a deliberate 150 ms lead on the words.
 const speech = { schemaVersion: 1, kind: "speech-regions", audioSha256: clip.audioSha256, sampleRateHz: RATE, sampleCount: COUNT, frameSamples: ms(10), thresholdDbfs: -50, minSilenceMs: 150, minSpeechMs: 50, regions: [{ startSample: ms(250), endSample: ms(850) }, { startSample: ms(1250), endSample: ms(2000) }] };
