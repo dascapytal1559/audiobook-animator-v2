@@ -1,10 +1,10 @@
 /** Typed wrappers over the editor server API. Every response is decoded with the shared domain schema before the client trusts it (Q9). */
 import { useEffect } from "react";
-import { AlignResponse, ApiErrorBody, decodeStrict, PeaksFile, ServedShotRecord, SpeechFile, StoriesResponse, StoryMapResponse, StoryResponse, TimelineResponse, type AlignRequest, type DecisionsBody, type ShotMode, type WordTimingBody } from "@animator/domain";
+import { AlignResponse, ApiErrorBody, decodeStrict, PeaksFile, SceneDescriptionsResponse, ServedShotRecord, SpeechFile, StoriesResponse, StoryMapResponse, StoryResponse, TimelineResponse, type AlignRequest, type DecisionsBody, type ShotMode, type WordTimingBody } from "@animator/domain";
 export type {
   AlignReport, AlignRequest, AlignResponse, AlignRun, CandidateGroup, Chunk, ClipIdentity, Decisions, DecisionsBody, EffectiveShot, ShotDecision, ShotMode,
   StitchedEntry, StoriesResponse, StoryChunking, StoryResponse, StorySummary, TimelineResponse, TimelineSettings, TimingMeasure, TimingSummary, WordTimingBody,
-  ResolvedSection, ResolvedStoryMap, ResolvedSubject, SectionKind, ServedSubject, StoryMapResponse, SubjectKind,
+  ResolvedSection, ResolvedStoryMap, ResolvedSubject, SectionKind, ServedSubject, StoryMapResponse, SubjectKind, SceneDescriptionsResponse, SceneDescriptionTake,
   ServedShotRecord as ShotRecord, TimingEntry as Span, StoryWord as Word, PeaksFile as PeaksResponse, SpeechFile as SpeechResponse,
 } from "@animator/domain";
 export { SHOT_MODES } from "@animator/domain";
@@ -46,6 +46,8 @@ export function storyApi(storyId: string) {
     getPeaks: () => request(PeaksFile, `${base}/peaks`),
     getSpeech: () => request(SpeechFile, `${base}/speech`),
     getMap: () => request(StoryMapResponse, `${base}/map`),
+    /** Every description take recorded for the story (A63); the Scenes section shows those of the shown beat. Writers append through POST on the same path; the browser never does. */
+    getSceneDescriptions: () => request(SceneDescriptionsResponse, `${base}/scene-descriptions`),
     putWordTiming: (body: WordTimingBody) => request(StoryResponse, `${base}/word-timing`, jsonInit("PUT", body)),
     postAlign: (body: AlignRequest) => request(AlignResponse, `${base}/word-timing/align`, jsonInit("POST", body)),
     putDecisions: (body: DecisionsBody) => request(TimelineResponse, `${base}/decisions`, jsonInit("PUT", body)),

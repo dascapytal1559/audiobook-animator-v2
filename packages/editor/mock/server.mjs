@@ -162,6 +162,11 @@ const storyMap = {
     { id: "beat-3", kind: "beat", title: "What they would call it", startWordId: "w5", endWordId: "w7" },
   ],
 };
+// Scene description takes (A63): the first story's second beat has two, appended to by POST like the real route; the rest have none.
+const takes = [
+  { id: ulid(9001), sectionId: "beat-2", model: "openai/gpt-6-astra", text: "A parrot on a branch, seen from below, the Arecibo dish a pale bowl behind the canopy.", startWordId: "w2", endWordId: "w4", createdAt: "2026-09-22T10:00:00.000Z", producer: { name: "mock", version: "1" } },
+  { id: ulid(9002), sectionId: "beat-2", model: "anthropic/claude-fable-5.1", text: "Green leaves fill the frame. One grey parrot turns its head toward the listening dish, which glints through a gap in the trees.", startWordId: "w2", endWordId: "w4", createdAt: "2026-09-22T10:01:00.000Z", producer: { name: "mock", version: "1" } },
+];
 const servedMap = (storyId) => ({ ...storyMap, clip: { ...clip, storyId }, subjects: storyMap.subjects.map(({ images, ...subject }) => images === undefined ? subject
   : { ...subject, images: images.map((image, index) => ({ ...image, url: `/api/stories/${storyId}/map/subjects/${subject.id}/images/${index}` })) }) });
 
@@ -211,6 +216,19 @@ const server = createServer(async (req, res) => {
       sseClients.add(res);
       req.on("close", () => sseClients.delete(res));
       return;
+    }
+    if (req.method === "GET" && path === "/api/scene-descriptions") return json(res, 200, { takes: storyId === STORIES[0].id ? takes : [] });
+    if (req.method === "POST" && path === "/api/scene-descriptions") {
+      const body = JSON.parse((await readBody(req)).toString());
+      const section = storyMap.sections.find(s => s.id === body?.sectionId);
+      if (storyId !== STORIES[0].id) return fail(res, 404, "NotFound", `No story map for ${storyId}.`);
+      if (typeof body?.model !== "string" || typeof body?.text !== "string" || !section) return fail(res, 400, "InvalidRequest", "Body must be a take with sectionId, model, text, and optional prompt and notes.");
+      if (takes.some(t => t.sectionId === body.sectionId && t.model === body.model && t.text === body.text)) return fail(res, 409, "TakeExists", "That take is already recorded.");
+      const take = { id: ulid(9000 + takes.length + 1), sectionId: body.sectionId, model: body.model, text: body.text, ...(body.prompt !== undefined ? { prompt: body.prompt } : {}), ...(body.notes !== undefined ? { notes: body.notes } : {}), startWordId: section.startWordId, endWordId: section.endWordId, createdAt: new Date().toISOString(), producer: { name: "mock", version: "1" } };
+      takes.push(take);
+      posts.push({ at: take.createdAt, route: "/api/scene-descriptions", body });
+      json(res, 201, take);
+      return broadcast("timeline-changed");
     }
     if (req.method === "PUT" && path === "/api/decisions") {
       const body = JSON.parse((await readBody(req)).toString());

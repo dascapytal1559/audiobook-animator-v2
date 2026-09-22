@@ -1,12 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
-import type { ResolvedSection, StoryResponse, Word } from "./api.js";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ResolvedSection, SceneDescriptionTake, StitchedEntry, StoryResponse, Word } from "./api.js";
+import { takesForSection } from "@animator/domain";
 import { Divider } from "./Divider.js";
 import { MapNotice } from "./MapNotice.js";
 import { splitRatio, useViewPreference } from "./preferences.js";
-import { SECTION_LABELS, clock as clipClock, currentChain, sceneToShow, type MapView, type Resolved } from "./story-map-view.js";
+import { SECTION_LABELS, clock as clipClock, currentChain, imageTakesAt, sceneToShow, type ImageTake, type MapView, type Resolved } from "./story-map-view.js";
 
 type Props = {
   view: MapView; words: ReadonlyArray<Word>; elements: StoryResponse["elements"]; playhead: number; sampleRateHz: number;
+  /** Every track's stitched timeline (A60), so the detail can show what each track holds at the scene's start, and the seek tolerance the preview uses. */
+  stitched: ReadonlyArray<StitchedEntry>; tolerance: number;
+  /** Every description take recorded for the story (A63). */
+  takes: ReadonlyArray<SceneDescriptionTake>;
   /** The subject a chip on a section row points at; the Cast & world section shows it. */
   selectedSubjectId: string | null; onSelectSubject: (id: string | null) => void;
   onSeek: (sample: number, andPlay: boolean) => void;
@@ -18,10 +23,11 @@ const SPLIT_STEP = 0.02;
 /**
  * The Scenes section (A62, A63): the narration's structure on the left, resolved onto the words the timeline shows (pending timing edits
  * included) and seeking the shared playhead; on the right, the detail of one scene. Clicking a section's title seeks to it and pins its
- * detail; until a click, the detail follows the innermost section under the playhead. The description and image of a scene are places
- * for a later generator to fill; this section only lays them out. Read-only: the map file is written by agents and scripts.
+ * detail; until a click, the detail follows the innermost section under the playhead. What the scene looks like is shown as takes: every
+ * image track's shot at the scene's start and every description written for it, side by side, none of them picked. Read-only: the map and
+ * the takes are written by agents and scripts.
  */
-export function Scenes({ view, words, elements, playhead, sampleRateHz, selectedSubjectId, onSelectSubject, onSeek }: Props) {
+export function Scenes({ view, words, elements, playhead, sampleRateHz, stitched, tolerance, takes, selectedSubjectId, onSelectSubject, onSeek }: Props) {
   /** Browser view preference (see preferences.ts): how much of the section the structure column takes. The value saved under the explorer's old key is read until the first drag here. */
   const [columnSplit, setColumnSplit] = useViewPreference("scenes.columnSplit", 0.5, splitRatio(0.5), "explorer.columnSplit");
   const [dragging, setDragging] = useState(false);
@@ -96,22 +102,26 @@ export function Scenes({ view, words, elements, playhead, sampleRateHz, selected
           ))}
         </ol>
       </div>
-      <Divider axis="x" label="Resize structure and scene" onDragging={axis => setDragging(axis !== null)} onDrag={(p, box) => setColumnSplit(splitRatio(columnSplit)((p.x - box.left) / box.width))} onStep={d => setColumnSplit(previous => splitRatio(previous)(previous + d * SPLIT_STEP))} />
+      <Divider axis="x" label="Resize acts and scene" onDragging={axis => setDragging(axis !== null)} onDrag={(p, box) => setColumnSplit(splitRatio(columnSplit)((p.x - box.left) / box.width))} onStep={d => setColumnSplit(previous => splitRatio(previous)(previous + d * SPLIT_STEP))} />
       <div className="scene-detail" data-testid="scene-detail">
         {shown === null ? <p className="muted">Click an act or a beat to see the scene, or play: the detail follows the playhead.</p> : (
-          <SceneDetail section={shown} pinned={pinnedId !== null} clock={clock} passage={passage(shown)} chips={shown.subjectIds.flatMap(chip)} onUnpin={() => setPinnedId(null)} />
+          <SceneDetail section={shown} pinned={pinnedId !== null} clock={clock} passage={passage(shown)} chips={shown.subjectIds.flatMap(chip)} images={imageTakesAt(stitched, shown.startSample, tolerance)} descriptions={takesForSection(takes, shown.id)} onUnpin={() => setPinnedId(null)} />
         )}
       </div>
     </section>
   );
 }
 
-type DetailProps = { section: ResolvedSection; pinned: boolean; clock: (sample: number) => string; passage: ReadonlyArray<React.ReactElement> | null; chips: ReadonlyArray<React.ReactElement>; onUnpin: () => void };
+type DetailProps = {
+  section: ResolvedSection; pinned: boolean; clock: (sample: number) => string; passage: ReadonlyArray<React.ReactElement> | null; chips: ReadonlyArray<React.ReactElement>;
+  images: ReadonlyArray<ImageTake>; descriptions: ReadonlyArray<SceneDescriptionTake>; onUnpin: () => void;
+};
 /**
- * One scene's detail: its heading, the subjects it mentions, what it looks like, and its transcript passage. The description and image
- * are not generated yet; their places are laid out so a later generator's output drops in without a redesign.
+ * One scene's detail: its heading, the subjects it mentions, its takes, and its transcript passage. The takes are what each source produced
+ * for this scene (A63): the image every track holds at its start, labelled by track, and every description written for it, labelled by
+ * model, side by side and none of them picked. A place stays visible when it is empty, so the pane reads the same before and after generation.
  */
-function SceneDetail({ section, pinned, clock, passage, chips, onUnpin }: DetailProps) {
+function SceneDetail({ section, pinned, clock, passage, chips, images, descriptions, onUnpin }: DetailProps) {
   return (
     <>
       <div className="map-heading">
@@ -121,17 +131,63 @@ function SceneDetail({ section, pinned, clock, passage, chips, onUnpin }: Detail
       {section.summary !== undefined && <p className="scene-summary">{section.summary}</p>}
       {chips.length > 0 && <div className="chips">{chips}</div>}
       <div className="scene-look">
-        <div className="scene-image placeholder" data-testid="scene-image">
-          <h4>Image</h4>
-          <p className="muted">Not generated yet.</p>
+        <div className={`scene-images${images.length === 0 ? " placeholder" : ""}`} data-testid="scene-images">
+          <h4>Images <span className="muted">· {images.length === 0 ? "none" : `${images.length} ${images.length === 1 ? "take" : "takes"}`}</span></h4>
+          {images.length === 0 ? <p className="muted">No image track holds a shot at {clock(section.startSample)}.</p> : <ImageGallery takes={images} sectionStart={section.startSample} clock={clock} />}
         </div>
-        <div className="scene-description placeholder" data-testid="scene-description">
-          <h4>Description</h4>
-          <p className="muted">Not generated yet. What the scene looks like will be written here.</p>
+        <div className={`scene-descriptions${descriptions.length === 0 ? " placeholder" : ""}`} data-testid="scene-descriptions">
+          <h4>Descriptions <span className="muted">· {descriptions.length === 0 ? "none" : `${descriptions.length} ${descriptions.length === 1 ? "take" : "takes"}`}</span></h4>
+          {descriptions.length === 0 ? <p className="muted">No description has been written for this scene.</p> : descriptions.map(take => (
+            <article key={take.id} className="description-take" data-testid={`description-take-${take.id}`}>
+              <h5><span className="take-label">{take.model}</span> <span className="mono muted" title={take.createdAt}>{take.createdAt.slice(0, 10)}</span></h5>
+              <p className="take-text">{take.text}</p>
+            </article>
+          ))}
         </div>
       </div>
       <h4>Transcript <span className="muted">· {section.wordCount} words</span></h4>
       {passage === null ? <p className="muted">The passage is not in the transcript.</p> : <p className="passage" data-testid="scene-passage">{passage}</p>}
+    </>
+  );
+}
+
+type GalleryProps = { takes: ReadonlyArray<ImageTake>; sectionStart: number; clock: (sample: number) => string };
+/** The image takes as thumbnails, one per track; clicking one opens it large in a dialog that closes on Escape, its backdrop, or its own button. */
+function ImageGallery({ takes, sectionStart, clock }: GalleryProps) {
+  const [openId, setOpenId] = useState<string | null>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
+  const open = takes.find(take => take.shot.id === openId) ?? null;
+  useEffect(() => {
+    const element = dialog.current;
+    if (element === null) return;
+    if (open !== null && !element.open) element.showModal();
+    if (open === null && element.open) element.close();
+  }, [open]);
+  return (
+    <>
+      <div className="image-takes">
+        {takes.map(({ trackId, shot }) => (
+          <figure key={shot.id} className="image-take" data-testid={`image-take-${trackId}`}>
+            <button type="button" className="image-take-open" onClick={() => setOpenId(shot.id)} title={`Open ${shot.label ?? shot.id} large`} aria-label={`Open the ${trackId} take large`}>
+              <img src={shot.imageUrl} alt={shot.label ?? shot.id} draggable={false} loading="lazy" />
+            </button>
+            <figcaption>
+              <span className="take-label">{trackId}</span>
+              {shot.label !== undefined && <span className="muted image-take-title" title={shot.label}>{shot.label}</span>}
+              {shot.startSample < sectionStart && <span className="mono muted" title="This shot started before the scene and is still holding.">holding since {clock(shot.startSample)}</span>}
+            </figcaption>
+          </figure>
+        ))}
+      </div>
+      <dialog ref={dialog} className="image-take-dialog" onClose={() => setOpenId(null)} onClick={e => { if (e.target === e.currentTarget) setOpenId(null); }} data-testid="image-take-dialog">
+        {open !== null && (
+          <figure>
+            <img src={open.shot.imageUrl} alt={open.shot.label ?? open.shot.id} draggable={false} />
+            <figcaption><span className="take-label">{open.trackId}</span> {open.shot.label !== undefined && <span className="muted">{open.shot.label}</span>}
+              <button type="button" className="detail-close" onClick={() => setOpenId(null)} aria-label="Close" title="Close">×</button></figcaption>
+          </figure>
+        )}
+      </dialog>
     </>
   );
 }

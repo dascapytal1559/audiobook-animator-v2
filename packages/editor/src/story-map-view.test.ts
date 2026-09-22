@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { StoryMapResponse, Word } from "./api.js";
+import type { StitchedEntry, StoryMapResponse, Word } from "./api.js";
 import type { MapState } from "./state.js";
-import { clock, currentChain, resolveMapView, sceneToShow } from "./story-map-view.js";
+import { clock, currentChain, imageTakesAt, resolveMapView, sceneToShow } from "./story-map-view.js";
 
 const words = ["w0", "w1", "w2", "w3", "w4", "w5"].map((id, i) => ({ id, value: `v${i}`, startSample: i * 10, endSample: i * 10 + 8 })) as unknown as ReadonlyArray<Word>;
 const section = (id: string, kind: "act" | "beat", a: number, b: number) => ({ id, kind, title: id, startWordId: `w${a}`, endWordId: `w${b}` });
@@ -45,4 +45,22 @@ test("the clock shows minutes and tenths of a second on the clip clock", () => {
   assert.equal(clock(0, 48000), "0:00.0");
   assert.equal(clock(48000 * 61.25, 48000), "1:01.3");
   assert.equal(clock(48000, 0), "800:00.0");
+});
+
+test("the image takes at a sample are one per track in track order: the shot held there by the preview's rule, only when it has an image", () => {
+  const shot = (trackId: string, id: string, startSample: number, endSample: number, imageUrl?: string) =>
+    ({ kind: "shot", trackId, id, startSample, endSample, mode: "graphic-illustration", createdAt: "2026-01-01T00:00:00.000Z", producer: { name: "t", version: "1" }, hidden: false, selected: true, ...(imageUrl === undefined ? {} : { imageUrl }) }) as unknown as StitchedEntry;
+  const gap = (trackId: string, startSample: number, endSample: number) => ({ kind: "gap", trackId, startSample, endSample }) as StitchedEntry;
+  const stitched = [
+    gap("main", 0, 10), shot("main", "M1", 10, 40, "/m1"), shot("main", "M2", 40, 100),
+    shot("qwen", "Q1", 0, 30, "/q1"), shot("qwen", "Q2", 30, 100, "/q2"),
+    gap("gpt", 0, 30), shot("gpt", "G1", 30, 100, "/g1"),
+  ];
+  assert.deepEqual(imageTakesAt(stitched, 5, 0).map(t => [t.trackId, t.shot.id]), [["qwen", "Q1"]]);
+  assert.deepEqual(imageTakesAt(stitched, 30, 0).map(t => [t.trackId, t.shot.id, t.shot.imageUrl]), [["main", "M1", "/m1"], ["qwen", "Q2", "/q2"], ["gpt", "G1", "/g1"]]);
+  // A seek a hair before a start lands on the shot that starts there, as the preview does.
+  assert.deepEqual(imageTakesAt(stitched, 29, 1).map(t => t.shot.id), ["M1", "Q2", "G1"]);
+  // The main track's shot at 50 has no image, so it is not a take.
+  assert.deepEqual(imageTakesAt(stitched, 50, 0).map(t => t.shot.id), ["Q2", "G1"]);
+  assert.deepEqual(imageTakesAt([], 0, 0), []);
 });

@@ -3,7 +3,7 @@
  * stack (A41), the word selection (A38), save status, and client-only playback state.
  */
 import { DEFAULT_SETTINGS, imageTrackOf } from "@animator/domain";
-import type { AlignReport, Decisions, DecisionsBody, ShotDecision, ShotRecord, StoryMapResponse, StoryResponse, TimelineResponse, Word } from "./api.js";
+import type { AlignReport, Decisions, DecisionsBody, SceneDescriptionTake, ShotDecision, ShotRecord, StoryMapResponse, StoryResponse, TimelineResponse, Word } from "./api.js";
 import { selectedRange, type Selection } from "./selection.js";
 import type { SnapTarget } from "./snap.js";
 import { clampDelta, effectiveWords, manualMapOf, moveWords, shiftedWords, type ManualMap } from "./timing.js";
@@ -23,6 +23,8 @@ export type MapState = { readonly status: "loading" } | { readonly status: "abse
 export type EditorState = {
   readonly story: StoryResponse | null;
   readonly map: MapState;
+  /** Every scene description take recorded for the story (A63), as last fetched; empty until a writer records one. */
+  readonly takes: ReadonlyArray<SceneDescriptionTake>;
   readonly records: ReadonlyArray<ShotRecord>;
   readonly storyDirectory: string | null;
   readonly serverDecisions: Decisions | null;
@@ -53,7 +55,7 @@ export type EditorState = {
 export { DEFAULT_SETTINGS };
 
 export const initialState: EditorState = {
-  story: null, map: { status: "loading" }, records: [], storyDirectory: null, serverDecisions: null,
+  story: null, map: { status: "loading" }, takes: [], records: [], storyDirectory: null, serverDecisions: null,
   decisions: { settings: DEFAULT_SETTINGS, shots: {} }, editVersion: 0, savedVersion: 0, saveNonce: 0, save: { status: "saved" },
   manual: {}, timingPast: [], timingFuture: [], timingEditVersion: 0, timingSavedVersion: 0, selection: null, wordDrag: null, alignReport: null,
   working: { enabled: false, inSample: null, outSample: null }, loop: false, follow: true, playhead: 0, playing: false, drag: null, error: null,
@@ -63,6 +65,7 @@ export type Action =
   | { type: "story-loaded"; story: StoryResponse }
   | { type: "timeline-loaded"; timeline: TimelineResponse }
   | { type: "map-loaded"; map: StoryMapResponse } | { type: "map-absent" } | { type: "map-failed"; message: string }
+  | { type: "descriptions-loaded"; takes: ReadonlyArray<SceneDescriptionTake> }
   | { type: "record-added"; record: ShotRecord }
   | { type: "save-started"; version: number }
   | { type: "save-succeeded"; version: number; timeline: TimelineResponse }
@@ -98,6 +101,7 @@ export function reduce(state: EditorState, action: Action): EditorState {
     case "map-loaded": return { ...state, map: { status: "loaded", map: action.map } };
     case "map-absent": return { ...state, map: { status: "absent" } };
     case "map-failed": return { ...state, map: { status: "error", message: action.message } };
+    case "descriptions-loaded": return { ...state, takes: action.takes };
     case "record-added":
       return state.records.some(r => r.id === action.record.id) ? state : { ...state, records: [...state.records, action.record] };
     case "save-started": return { ...state, save: { status: "saving" } };

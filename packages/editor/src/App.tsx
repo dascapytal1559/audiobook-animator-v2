@@ -136,23 +136,29 @@ export function App({ storyId, stories, onSelectStory }: Props) {
     try { dispatch({ type: "map-loaded", map: await api.getMap() }); }
     catch (e) { dispatch(e instanceof ApiError && e.status === 404 ? { type: "map-absent" } : { type: "map-failed", message: describe(e) }); }
   }, [api]);
+  /** The description takes (A63) sit beside the map; a failure is reported in the header like the timeline, since the pane shows only what is there. */
+  const loadDescriptions = useCallback(async () => {
+    try { dispatch({ type: "descriptions-loaded", takes: (await api.getSceneDescriptions()).takes }); }
+    catch (e) { dispatch({ type: "error", message: `Scene descriptions load failed. ${describe(e)}` }); }
+  }, [api]);
   useEffect(() => {
     void (async () => {
       if (!(await loadStory())) return;
       await loadTimeline();
       await loadMap();
+      await loadDescriptions();
       try { setPeaks(await api.getPeaks()); }
       catch (e) { dispatch({ type: "error", message: `Peaks load failed. ${describe(e)}` }); }
       // A server without the speech route yet (404) just means no shading; anything else is reported.
       try { setSpeech(await api.getSpeech()); }
       catch (e) { if (!(e instanceof ApiError && e.status === 404)) dispatch({ type: "error", message: `Speech regions load failed. ${describe(e)}` }); }
     })();
-  }, [api, loadStory, loadTimeline, loadMap]);
+  }, [api, loadStory, loadTimeline, loadMap, loadDescriptions]);
   useEffect(() => { document.title = state.story === null ? "Story editor" : `${state.story.story.title} · Story editor`; }, [state.story]);
 
   // Live updates: a refetch never touches the audio element or an in-progress drag (the reducer keeps the drag and local edits).
   // The planning directory holds the timing overlays too, so the story is refetched with the timeline.
-  const onTimelineChanged = useCallback(() => { void loadTimeline(); void loadStory(); void loadMap(); }, [loadTimeline, loadStory, loadMap]);
+  const onTimelineChanged = useCallback(() => { void loadTimeline(); void loadStory(); void loadMap(); void loadDescriptions(); }, [loadTimeline, loadStory, loadMap, loadDescriptions]);
   const onStatus = useCallback((ok: boolean) => setConnected(ok), []);
   useServerEvents(api.eventsUrl, { onTimelineChanged, onStatus });
 
@@ -366,7 +372,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
             <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} subtitles={subtitles} />
           </Panel>
           <Panel id="scenes" title="Scenes" open={panels.scenes} onToggle={() => togglePanel("scenes")} height={heights.scenes} onResize={h => resizePanel("scenes", h)}>
-            {state.story && <Scenes view={mapView} words={words} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} selectedSubjectId={selectedSubjectId} onSelectSubject={selectSubject} onSeek={onSeek} />}
+            {state.story && <Scenes view={mapView} words={words} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} stitched={merged.stitched} tolerance={tolerance} takes={state.takes} selectedSubjectId={selectedSubjectId} onSelectSubject={selectSubject} onSeek={onSeek} />}
           </Panel>
           <Panel id="cast" title="Cast & world" open={panels.cast} onToggle={() => togglePanel("cast")} height={heights.cast} onResize={h => resizePanel("cast", h)}>
             {state.story && <Cast view={mapView} playhead={state.playhead} sampleRateHz={sampleRateHz} selectedId={selectedSubjectId} onSelect={selectSubject} onSeek={onSeek} />}

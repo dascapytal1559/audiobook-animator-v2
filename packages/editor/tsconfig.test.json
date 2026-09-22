@@ -29,6 +29,8 @@
     "src/preferences.ts",
     "src/preferences.test.ts",
     "src/view.ts",
-    "src/view.test.ts"
+    "src/view.test.ts",
+    "src/story-map-view.ts",
+    "src/story-map-view.test.ts"
   ]
 }

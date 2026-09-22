@@ -1,5 +1,5 @@
-import { currentSections, resolveStoryMap } from "@animator/domain";
-import type { ResolvedSection, ResolvedStoryMap, SectionKind, ServedSubject, Word } from "./api.js";
+import { currentSections, entryAt, resolveStoryMap } from "@animator/domain";
+import type { ResolvedSection, ResolvedStoryMap, SectionKind, ServedSubject, StitchedEntry, Word } from "./api.js";
 import type { MapState } from "./state.js";
 
 export type Resolved = ResolvedStoryMap<ServedSubject>;
@@ -40,6 +40,22 @@ export const sceneToShow = (sections: ReadonlyArray<ResolvedSection>, selectedId
   }
   return chain[chain.length - 1] ?? null;
 };
+
+/** One image take of a scene (A63): the shot an image track shows at the scene's start, with the track it came from. */
+export type ImageTake = { readonly trackId: string; readonly shot: Extract<StitchedEntry, { kind: "shot" }> & { readonly imageUrl: string } };
+
+/**
+ * The image takes at a sample: for every image track, in the order the tracks first appear, the shot that track holds at the sample by the
+ * same rule the preview uses (`entryAt`), when it is a shot with an image. A track in a gap there, or holding a shot without an image, has
+ * no take. The shot may have started before the scene; `shot.startSample` says where.
+ */
+export function imageTakesAt(stitched: ReadonlyArray<StitchedEntry>, sample: number, toleranceSamples: number): ReadonlyArray<ImageTake> {
+  const trackIds = [...new Set(stitched.map(entry => entry.trackId))];
+  return trackIds.flatMap(trackId => {
+    const entry = entryAt(stitched.filter(e => e.trackId === trackId), sample, toleranceSamples);
+    return entry !== null && entry.kind === "shot" && entry.imageUrl !== undefined ? [{ trackId, shot: { ...entry, imageUrl: entry.imageUrl } }] : [];
+  });
+}
 
 export const SECTION_LABELS: Readonly<Record<SectionKind, string>> = { act: "Act", chapter: "Chapter", scene: "Scene", beat: "Beat" };
 
