@@ -65,7 +65,8 @@ Use these words in code, documents, and conversation; a schema comment defers to
 | subject | A character, location, object, or motif that recurs in a story, with a stable id, its mentions, and optional reference images. |
 | mention | An inclusive run of words where the narration names or clearly refers to a subject. |
 | section | A run of the narration with a structural role: act, chapter, scene, or beat. Sections nest by containment. |
-| Scenes | The editor section that shows the story map as scenes: structure on the left, one scene's detail (heading, summary, subjects, description and image places, transcript passage) on the right, seeking the shared playhead (A63). |
+| Scenes | The editor section that shows the story map as scenes: structure on the left, one scene's detail (heading, summary, subjects, its image and description takes, transcript passage) on the right, seeking the shared playhead (A63). |
+| take | One source's output for a scene, shown beside the others and never picked by the editor: an image track's shot at the scene's start, or one model's description of it recorded in `scene-descriptions.json` (A63). |
 | Cast & world | The editor section that shows the story map as subjects: the cast grouped by kind on the left, the selected subject's detail on the right, seeking the shared playhead (A63). |
 | speech region | A span the energy detector calls speech; the snap targets and the align pass use them. |
 | run | One invocation of a tool: its effective settings are the code defaults with an optional run file laid over them, and its outputs record them. |
