@@ -162,7 +162,7 @@ input:read-only, textarea:read-only { color: var(--muted); }
 /* Alone, a grow factor below 1 claims only that fraction of the free space; the sole child must take it all. */
 .scenes h2 { font-size: 14px; margin: 0 0 8px; }
 .map-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.map-heading-actions { display: inline-flex; gap: 4px; }
+.map-heading-actions { display: inline-flex; gap: 4px; margin-left: auto; }
 .map-heading-actions button { font-size: 11px; padding: 2px 8px; }
 .section-row { display: flex; align-items: baseline; gap: 4px; }
 .section-toggle { flex-shrink: 0; width: 18px; padding: 0; background: none; border: 0; color: var(--muted); cursor: pointer; font: inherit; line-height: 1; }

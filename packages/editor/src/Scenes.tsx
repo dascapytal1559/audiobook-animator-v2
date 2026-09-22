@@ -80,13 +80,12 @@ export function Scenes({ view, words, elements, playhead, sampleRateHz, selected
   return (
     <section className={`scenes${dragging ? " dragging-x" : ""}`} style={{ "--column-split": columnSplit } as React.CSSProperties} data-testid="scenes">
       <div className="scenes-structure">
-        <div className="map-heading">
-          <h2>Structure</h2>
-          {parents.size > 0 && <span className="map-heading-actions">
+        {parents.size > 0 && <div className="map-heading">
+          <span className="map-heading-actions">
             <button type="button" onClick={() => setExpanded(new Set(parents))} data-testid="expand-all">Expand all</button>
             <button type="button" onClick={() => setExpanded(new Set())} data-testid="collapse-all">Collapse all</button>
-          </span>}
-        </div>
+          </span>
+        </div>}
         {resolved.sections.length === 0 && <p className="muted">The map names no sections.</p>}
         <ol className="sections">
           {resolved.sections.filter(visible).map(section => (
