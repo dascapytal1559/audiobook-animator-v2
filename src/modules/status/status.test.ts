@@ -11,7 +11,7 @@ const run = <A, E>(effect: Effect.Effect<A, E, NodeServices.NodeServices>) => Ef
 const encode = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
 const settings = (story: Awaited<ReturnType<typeof fixture>>["settings"]) => ({ story, timeline: { limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } },
   editor: { ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 }, speech: { frameMs: 100, thresholdDbfs: -50, minSilenceMs: 200, minSpeechMs: 100 }, alignment: { leadMs: 200, boundaryPauseMs: 300 },
-    watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576, maxStoryMapBytes: 65536 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } } });
+    watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576, maxStoryMapBytes: 65536, maxSceneDescriptionsBytes: 65536 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } } });
 
 test("status reports facts for a verified story: no overlays, no records, absent caches, its documents, and a server that is not listening", async t => {
   const f = await fixture(t);

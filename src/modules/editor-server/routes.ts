@@ -8,7 +8,8 @@ import { decodeJson, imageContentType, readBounded } from "../../core/io.js";
 import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotRecord, type VisualTimelineSettings, writeDecisions, type DecisionsBody } from "../visual-timeline/index.js";
 import { type TimingEntries } from "../word-timing/index.js";
 import { type LoadedStoryMap, loadStoryMap } from "../story-map/index.js";
-import { type ChunkElement, type StoriesResponse, type StoryMapResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
+import { addSceneDescriptionTake, loadSceneDescriptions, SceneDescriptionTakeBody } from "../scene-descriptions/index.js";
+import { type ChunkElement, type SceneDescriptionsResponse, type StoriesResponse, type StoryMapResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
 export type { StorySummary };
 import { type EditorSettings, editorError, type EditorCode } from "./contracts.js";
 import type { PeaksIdentity, SpeechIdentity } from "./peaks.js";
@@ -114,6 +115,7 @@ function errorResponse(error: unknown, options: { readonly decisionsFromClient?:
       timing: { InvalidRequest: 400, InvalidTiming: 500, IdentityMismatch: 409, IoFailed: 500 },
       timeline: { InvalidConfig: 500, InvalidRequest: 400, InvalidRecord: 500, InvalidDecisions: options.decisionsFromClient ? 400 : 500, IdentityMismatch: 409, RecordExists: 409, IoFailed: 500 },
       map: { NotFound: 404, InvalidMap: 500, IdentityMismatch: 409, IoFailed: 500 },
+      descriptions: { InvalidRequest: 400, InvalidDescriptions: 500, IdentityMismatch: 409, TakeExists: 409, IoFailed: 500 },
     };
     return errorJson(byModule[error.module]?.[error.code] ?? 500, error.code, error.message);
   }
@@ -173,6 +175,10 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
   const sse = (event: string) => Sse.encoder.write({ _tag: "Event", event, id: undefined, data: JSON.stringify({ at: new Date().toISOString() }) });
   const ignoredChange = (ctx: EditorContext, path: string) => basename(path).startsWith(".") || path === ctx.cacheDirectory || path.startsWith(ctx.cacheDirectory + "/");
   const at = <P extends `/${string}`>(path: P) => `/api/stories/:storyId${path}` as const;
+  const descriptions = (ctx: EditorContext) => loadSceneDescriptions({ story: ctx.story, maxBytes: ctx.settings.editor.limits.maxSceneDescriptionsBytes });
+  /** One writer at a time per story appends a take (A63): each append rereads the file, so two at once would drop one. */
+  const takeLocks = new Map<string, Semaphore.Semaphore>();
+  const takeLock = (storyId: string) => { const hit = takeLocks.get(storyId); if (hit !== undefined) return hit; const made = Semaphore.makeUnsafe(1); takeLocks.set(storyId, made); return made; };
   const storyMap = (ctx: EditorContext) => loadStoryMap({ story: ctx.story, wordIds: ctx.words.map(w => w.id), maxBytes: ctx.settings.editor.limits.maxStoryMapBytes });
   /** The map as written, with each image given the URL of the route below (A62). */
   const servedMap = (storyId: string, loaded: LoadedStoryMap): StoryMapResponse => ({ ...loaded.map, subjects: loaded.map.subjects.map(({ images, ...subject }) => images === undefined ? subject
@@ -272,9 +278,18 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     if (image === undefined) return yield* Effect.fail(notFound);
     return yield* HttpServerResponse.file(image.path, { headers: { "content-type": image.contentType, "cache-control": "no-cache" } }).pipe(Effect.mapError(() => notFound));
   }))));
+  const sceneDescriptions = HttpRouter.add("GET", at("/scene-descriptions"), handle(withStory(({ ctx }) => Effect.map(descriptions(ctx), takes => json({ takes } satisfies SceneDescriptionsResponse)))));
+  /** A writer records one description take for a beat (A63): the body is the take's fields, the server adds id, words, time, and producer, and answers 201 with the take as recorded. */
+  const sceneDescriptionTake = HttpRouter.add("POST", at("/scene-descriptions"), request => handle(withStory(({ ctx }) => takeLock(ctx.clip.storyId).withPermits(1)(Effect.gen(function* () {
+    const body = yield* readJsonObject(request, ctx.settings.editor.limits.maxSceneDescriptionsBytes);
+    const take = yield* Schema.decodeUnknownEffect(SceneDescriptionTakeBody, { onExcessProperty: "error" })(body).pipe(Effect.mapError(e => editorError({ code: "InvalidRequest", message: `Body must be a take with sectionId, model, text, and optional prompt and notes. ${e.message.replace(/\s+/g, " ")}` })));
+    const loaded = yield* storyMap(ctx);
+    const recorded = yield* addSceneDescriptionTake({ story: ctx.story, maxBytes: ctx.settings.editor.limits.maxSceneDescriptionsBytes, take, sections: loaded.map.sections, producer: options.producer });
+    return json(recorded, 201);
+  })))));
   const apiFallback = HttpRouter.add("*", "/api/*", errorJson(404, "NotFound", "No such API route."));
   const root = options.staticDirectory === undefined
-    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`animator-v2 editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /map /map/subjects/:subjectId/images/:index /audio /peaks /speech /events\n`))
+    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`animator-v2 editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /map /map/subjects/:subjectId/images/:index /scene-descriptions /audio /peaks /speech /events\n`))
     : HttpStaticServer.layer({ root: resolve(options.staticDirectory), index: "index.html", spa: true, cacheControl: "no-cache" });
-  return Layer.mergeAll(stories, story, timelineRoute, decisions, wordTiming, align, speech, shots, image, map, mapImage, audio, peaks, events, apiFallback, root);
+  return Layer.mergeAll(stories, story, timelineRoute, decisions, wordTiming, align, speech, shots, image, map, mapImage, sceneDescriptions, sceneDescriptionTake, audio, peaks, events, apiFallback, root);
 }

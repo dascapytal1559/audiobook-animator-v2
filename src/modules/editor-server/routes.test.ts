@@ -6,7 +6,7 @@ import test, { type TestContext } from "node:test";
 import { NodeHttpServer, NodeServices } from "@effect/platform-node";
 import { Effect, Layer, Stream } from "effect";
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http";
-import { decodeStrict, StoryMapResponse, TimelineResponse } from "@animator/domain";
+import { decodeStrict, SceneDescriptionsResponse, SceneDescriptionTake, StoryMapResponse, TimelineResponse } from "@animator/domain";
 import { fixture, type FixtureWord } from "../story/context.fixture.js";
 import { loadEditorLibrary, makeEditorRoutes } from "./index.js";
 const encode = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
@@ -27,7 +27,7 @@ async function serve(t: TestContext, options: { readonly staticDirectory?: strin
   // At 10 Hz a 100 ms frame is one sample; the lead is 2 samples.
   const settings = { story: story.settings, timeline: { limits: { maxRecordBytes: 65536, maxDecisionsBytes: 65536, maxRecords: 100, maxImageBytes: 1024 } },
     editor: { ffmpegPath: "ffmpeg", peaks: { samplesPerBucket: 16, maxCacheBytes: 65536 }, speech: { frameMs: 100, thresholdDbfs: -50, minSilenceMs: 200, minSpeechMs: 100 }, alignment: { leadMs: 200, boundaryPauseMs: 300 },
-      watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576, maxStoryMapBytes: 65536 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } } };
+      watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576, maxStoryMapBytes: 65536, maxSceneDescriptionsBytes: 65536 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } } };
   const library = await Effect.runPromise(loadEditorLibrary({ storiesDirectory: story.root, settings }).pipe(Effect.provide(NodeServices.layer)));
   const { ctx } = await Effect.runPromise(library.open("pilot").pipe(Effect.provide(NodeServices.layer)));
   const layer = HttpRouter.serve(makeEditorRoutes(library, { producer: { name: "editor", version: "test" }, ...(options.staticDirectory !== undefined ? { staticDirectory: options.staticDirectory } : {}) }), { disableLogger: true, disableListenLog: true })
@@ -64,6 +64,43 @@ test("/api/story carries the verified clip, titles, the book-clock start, the el
     chunks: [{ id: "c0", startSample: 13, endSample: 23, text: "Uncorrected.", wordIds: ["m2:e0"], breakReason: "end" }],
     chunking: { minSentenceBreakMs: 0, pauseBreakMs: 600, mergedSentenceBreaks: [] }, timing: { inversions: 0, autoRuns: [], manualCount: 0, autoCount: 0 } });
   assert.deepEqual([s.clip.bookId, s.clip.storyId, s.clip.sampleRateHz, s.clip.sampleCount], ["book", "pilot", 10, 100]);
+});
+
+test("/api/scene-descriptions reads as no takes, then POST appends one take per call with the section's words and answers 201; a repeat is 409, an unknown section or unshaped body 400, and a story without a map 404", async t => {
+  const s = await serve(t, { words: MORE_WORDS });
+  const base = { schemaVersion: 1, kind: "story-map", clip: s.clip, createdAt: "2026-09-18T00:00:00.000Z", producer: { name: "test", version: "1" } };
+  const sections = [{ id: "act-1", kind: "act", title: "All", startWordId: "m2:e0", endWordId: "m2:e6" }, { id: "beat-1", kind: "beat", title: "Later", startWordId: "m2:e2", endWordId: "m2:e6" }];
+  const take = { sectionId: "beat-1", model: "anthropic/claude-fable-5.1", text: "Beneath a ceiling of ice.", notes: "seeded by the route test" };
+  await s.run(Effect.gen(function* () {
+    const empty = yield* get("/api/stories/pilot/scene-descriptions");
+    assert.equal(empty.status, 200);
+    assert.deepEqual(decodeStrict(SceneDescriptionsResponse, yield* bodyJson(empty)), { takes: [] });
+    const unmapped = yield* postJson("/api/stories/pilot/scene-descriptions", take);
+    assert.equal(unmapped.status, 404);
+    yield* Effect.promise(() => writeFile(join(s.planningDirectory, "story-map.json"), encode({ ...base, subjects: [], sections })));
+    const created = yield* postJson("/api/stories/pilot/scene-descriptions", take);
+    assert.equal(created.status, 201);
+    const recorded = decodeStrict(SceneDescriptionTake, yield* bodyJson(created));
+    assert.deepEqual({ ...recorded, id: "x", createdAt: "t" }, { ...take, id: "x", startWordId: "m2:e2", endWordId: "m2:e6", createdAt: "t", producer: { name: "editor", version: "test" } });
+    const second = yield* postJson("/api/stories/pilot/scene-descriptions", { sectionId: "beat-1", model: "openai/gpt-6-astra", text: "Under the ice." });
+    assert.equal(second.status, 201);
+    const repeat = yield* postJson("/api/stories/pilot/scene-descriptions", take);
+    assert.equal(repeat.status, 409);
+    assert.equal((yield* bodyJson(repeat))["code"], "TakeExists");
+    const unknown = yield* postJson("/api/stories/pilot/scene-descriptions", { ...take, sectionId: "beat-9" });
+    assert.equal(unknown.status, 400);
+    assert.match((yield* bodyJson(unknown))["message"], /no section beat-9/);
+    const unshaped = yield* postJson("/api/stories/pilot/scene-descriptions", { ...take, picked: true });
+    assert.equal(unshaped.status, 400);
+    assert.equal((yield* bodyJson(unshaped))["code"], "InvalidRequest");
+    const listed = decodeStrict(SceneDescriptionsResponse, yield* bodyJson(yield* get("/api/stories/pilot/scene-descriptions")));
+    assert.deepEqual(listed.takes.map(t => [t.model, t.text]), [["anthropic/claude-fable-5.1", "Beneath a ceiling of ice."], ["openai/gpt-6-astra", "Under the ice."]]);
+    assert.equal(listed.takes[0]!.id, recorded.id);
+    const file = yield* readJson(join(s.planningDirectory, "scene-descriptions.json"));
+    assert.equal(file["kind"], "scene-descriptions");
+    assert.deepEqual(file["clip"], s.clip);
+    assert.deepEqual(file["takes"], listed.takes);
+  }));
 });
 
 test("/api/map is 404 until story-map.json exists, then serves the map with image URLs the image route answers; a foreign clip is 409 and a map off the transcript is 500 naming the rule", async t => {

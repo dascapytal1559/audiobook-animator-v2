@@ -4,6 +4,7 @@ import { Chunk } from "./chunks.js";
 import { ClipIdentity } from "./identity.js";
 import { Id, NonNegative, Positive, PositiveSeconds, Text } from "./schema.js";
 import { CandidateGroup, Decisions, ServedShotRecord, ShotId, StitchedEntry } from "./shots.js";
+import { SceneDescriptionTake } from "./scene-descriptions.js";
 import { StoryMap, Subject, SubjectImage } from "./story-map.js";
 import { AlignReport, AlignRun, TimingEntries, TimingEntry } from "./timing.js";
 
@@ -55,6 +56,10 @@ export const ServedSubject = Schema.Struct({ ...Subject.fields, images: Schema.o
 export type ServedSubject = typeof ServedSubject.Type;
 export const StoryMapResponse = Schema.Struct({ ...StoryMap.fields, subjects: Schema.Array(ServedSubject) });
 export type StoryMapResponse = typeof StoryMapResponse.Type;
+
+/** `GET .../scene-descriptions`: every take recorded for the story (A63); an absent file is an empty list. `POST` answers with the one take it appended. */
+export const SceneDescriptionsResponse = Schema.Struct({ takes: Schema.Array(SceneDescriptionTake) });
+export type SceneDescriptionsResponse = typeof SceneDescriptionsResponse.Type;
 
 /** `PUT .../word-timing`: the complete manual overlay, keyed by word id (A36). Replaces the file wholesale, like decisions. */
 export const WordTimingBody = Schema.Struct({ words: TimingEntries });

@@ -14,8 +14,8 @@ export const EditorSettings = Schema.Struct({
   /** The automatic align pass (A47, A48): words are shifted later by `leadMs` before snapping; a gap of at least `boundaryPauseMs` marks a phrase boundary in the report. */
   alignment: Schema.Struct({ leadMs: Schema.Int, boundaryPauseMs: Positive }),
   watch: Schema.Struct({ debounceMs: Positive }),
-  /** `maxStoryMapBytes` bounds `<story>/story-map.json` (A62), which the server reads for the explorer. */
-  limits: Schema.Struct({ maxUploadBytes: Positive, requestTimeoutMs: Positive, maxWordTimingBytes: Positive, maxStoryMapBytes: Positive }),
+  /** `maxStoryMapBytes` bounds `<story>/story-map.json` (A62) and `maxSceneDescriptionsBytes` bounds `<story>/scene-descriptions.json` (A63), both read for the Scenes section. */
+  limits: Schema.Struct({ maxUploadBytes: Positive, requestTimeoutMs: Positive, maxWordTimingBytes: Positive, maxStoryMapBytes: Positive, maxSceneDescriptionsBytes: Positive }),
   /** A gap between consecutive words at least this long ends a chunk in the editor's chunk lane; a story's manifest may override `minSentenceBreakMs` (A54). */
   chunking: Schema.Struct({ pauseBreakMs: Positive, minSentenceBreakMs: NonNegative }),
 });
@@ -26,7 +26,7 @@ export const editorDefaults: EditorSettings = {
   speech: { frameMs: 10, thresholdDbfs: -50, minSilenceMs: 150, minSpeechMs: 50 },
   alignment: { leadMs: 150, boundaryPauseMs: 300 },
   watch: { debounceMs: 200 },
-  limits: { maxUploadBytes: 52_428_800, requestTimeoutMs: 30_000, maxWordTimingBytes: 16_777_216, maxStoryMapBytes: 4_194_304 },
+  limits: { maxUploadBytes: 52_428_800, requestTimeoutMs: 30_000, maxWordTimingBytes: 16_777_216, maxStoryMapBytes: 4_194_304, maxSceneDescriptionsBytes: 4_194_304 },
   chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 },
 };
 

@@ -13,3 +13,4 @@ export * from "./time.js";
 export * from "./timing.js";
 export * from "./ulid.js";
 export * from "./story-map.js";
+export * from "./scene-descriptions.js";
