@@ -65,8 +65,9 @@ Use these words in code, documents, and conversation; a schema comment defers to
 | subject | A character, location, object, or motif that recurs in a story, with a stable id, its mentions, and optional reference images. |
 | mention | An inclusive run of words where the narration names or clearly refers to a subject. |
 | section | A run of the narration with a structural role: act, chapter, scene, or beat. Sections nest by containment. |
-| Scenes | The editor section that shows the story map as scenes: structure on the left, one scene's detail (heading, summary, subjects, its image and description takes, transcript passage) on the right, seeking the shared playhead (A63). |
-| take | One source's output for a scene, shown beside the others and never picked by the editor: an image track's shot at the scene's start, or one model's description of it recorded in `scene-descriptions.json` (A63). |
+| Scenes | The editor section that shows the story map as scenes: structure on the left, one scene's detail (heading, summary, subjects, its shots with their image and description takes, transcript passage) on the right, seeking the shared playhead (A63, A65). |
+| declared shot | A place where a new shot begins, declared by anchoring a shot on the visual timeline to a transcript word; the word is its identity. Nothing automatic declares one, and the story map declares none (A65). |
+| take | One source's output for a declared shot, shown beside the others and never picked by the editor: the image an image track starts with it, or one model's description of it recorded in `scene-descriptions.json` under the shot's anchor word (A63, A65). |
 | Cast & world | The editor section that shows the story map as subjects: the cast grouped by kind on the left, the selected subject's detail on the right, seeking the shared playhead (A63). |
 | speech region | A span the energy detector calls speech; the snap targets and the align pass use them. |
 | run | One invocation of a tool: its effective settings are the code defaults with an optional run file laid over them, and its outputs record them. |
@@ -115,6 +116,7 @@ Audiobook -> movie
 │           ├── Old prototype player discarded [A17]; behaviours from demo viewer carried [A24]
 │           ├── Preview subtitles: whole sentences or automatic phrases, optional word highlighting; export and manual subtitle editing later [A61]
 │           ├── Story map: subjects and sections as word ranges, read-only in the browser [A62]
+│           ├── Takes belong to declared shots, word anchors the user names; the map only navigates [A65]
 │           ├── One editor page of collapsible sections: Video, Scenes, Cast & world, transport, lanes [A63]
 │           └── Word timing alignment against the audio [Q21–Q25 confirmed 2026-09-09]
 │               ├── Overlay files, transcript untouched; script and editor own separate files [A36, A42]
@@ -215,7 +217,8 @@ One file per decision under [docs/decisions](docs/decisions/), each with its sta
 | A61 | [Preview subtitles derive sentences and phrases from the working transcript, independently of timeline chunks.](docs/decisions/A61-derived-preview-subtitles.md) | standing |
 | A62 | [A story map names a story's subjects and structure as word ranges; the editor explores it read-only.](docs/decisions/A62-story-map-and-explorer.md) | standing |
 | A63 | [The editor is one page of collapsible sections; the story map is the Scenes and Cast & world sections.](docs/decisions/A63-single-page-of-collapsible-sections.md) | standing |
-| A64 | [Scene images are rendered by hosted GPT-5.4 Image 2; local Qwen Image 2.1 is the free fallback. What follows Understand's waking shot is open.](docs/decisions/A64-hosted-scene-image-renderer.md) | standing |
+| A64 | [Scene images are rendered by hosted GPT-5.4 Image 2; local Qwen Image 2.1 is the free fallback.](docs/decisions/A64-hosted-scene-image-renderer.md) | standing |
+| A65 | [Takes belong to declared shots; a shot is declared by anchoring it to a word, and the story map only navigates.](docs/decisions/A65-takes-belong-to-declared-shots.md) | standing |
 
 ## When a new book arrives
 
