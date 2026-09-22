@@ -3,11 +3,15 @@ import { useCallback, useState } from "react";
 /**
  * Browser view preferences, never part of the saved timeline: read once from localStorage under `key`, written back as JSON on every
  * change. `parse` turns whatever was stored into a valid value; a missing or unreadable entry yields the fallback. The setter takes a value
- * or an updater of the latest value, like React's, so two toggles in one tick both land.
+ * or an updater of the latest value, like React's, so two toggles in one tick both land. A preference that moved from `legacyKey` is read
+ * from there until the first write lands under `key`; the old entry is left alone.
  */
-export function useViewPreference<T>(key: string, fallback: T, parse: (stored: unknown) => T): [T, (next: T | ((previous: T) => T)) => void] {
+export function useViewPreference<T>(key: string, fallback: T, parse: (stored: unknown) => T, legacyKey?: string): [T, (next: T | ((previous: T) => T)) => void] {
   const [value, setValue] = useState<T>(() => {
-    try { const raw = window.localStorage.getItem(key); return raw === null ? fallback : parse(JSON.parse(raw)); } catch { return fallback; }
+    try {
+      const raw = window.localStorage.getItem(key) ?? (legacyKey === undefined ? null : window.localStorage.getItem(legacyKey));
+      return raw === null ? fallback : parse(JSON.parse(raw));
+    } catch { return fallback; }
   });
   const set = useCallback((next: T | ((previous: T) => T)) => setValue(previous => {
     const resolved = typeof next === "function" ? (next as (previous: T) => T)(previous) : next;
@@ -16,6 +20,13 @@ export function useViewPreference<T>(key: string, fallback: T, parse: (stored: u
   }), [key]);
   return [value, set];
 }
+
+/** A stored record in which the field `from` was renamed `to`: the old field is carried across when the new one is absent, so a saved layout survives the rename. */
+export const renamedField = (from: string, to: string) => (stored: unknown): unknown => {
+  if (typeof stored !== "object" || stored === null) return stored;
+  const record = stored as Record<string, unknown>;
+  return to in record || !(from in record) ? record : { ...record, [to]: record[from] };
+};
 
 /** A stored record of booleans; a key that is missing or not a boolean keeps its default. */
 export const booleanFlags = <T extends Record<string, boolean>>(defaults: T) => (stored: unknown): T => {
@@ -35,10 +46,11 @@ const LANES_FLOOR = 320;
 /** The tallest a resizable section may be in a window of `viewportHeight` pixels: it always leaves the lanes' floor, and never less than the minimum. */
 export const sectionMaxHeight = (viewportHeight: number): number => Math.max(SECTION_MIN_HEIGHT, Math.floor(viewportHeight - LANES_FLOOR));
 
-/** The heights the Video and World map sections open at before anyone drags them: shares of the window, held within the same bounds. */
+/** The heights the Video, Scenes, and Cast & world sections open at before anyone drags them: shares of the window, held within the same bounds. */
 export const defaultSectionHeights = (viewportHeight: number) => {
   const max = sectionMaxHeight(viewportHeight);
-  return { video: clampSectionHeight(viewportHeight * 0.42, max), worldMap: clampSectionHeight(viewportHeight * 0.38, max) };
+  const share = (fraction: number) => clampSectionHeight(viewportHeight * fraction, max);
+  return { video: share(0.42), scenes: share(0.38), cast: share(0.38) };
 };
 
 /** A section height in whole pixels held within [SECTION_MIN_HEIGHT, max]. */

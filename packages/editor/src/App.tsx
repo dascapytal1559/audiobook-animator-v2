@@ -5,12 +5,14 @@ import { referenceChunks } from "./rows.js";
 import { planTick } from "./playback.js";
 import { selectItem, selectedRange, type SelectionItem } from "./selection.js";
 import type { SnapTarget } from "./snap.js";
-import { Explorer } from "./Explorer.js";
+import { Cast } from "./Cast.js";
 import { Panel } from "./Panel.js";
 import { Preview } from "./Preview.js";
+import { Scenes } from "./Scenes.js";
 import { StoryPicker } from "./StoryPicker.js";
 import { decisionsForView, initialState, isDecisionsDirty, isDirty, isTimingDirty, reduce, wordsForView, workingBounds } from "./state.js";
-import { booleanFlags, clampSectionHeight, defaultSectionHeights, sectionHeights, sectionMaxHeight, useViewPreference } from "./preferences.js";
+import { booleanFlags, clampSectionHeight, defaultSectionHeights, renamedField, sectionHeights, sectionMaxHeight, useViewPreference } from "./preferences.js";
+import { resolveMapView } from "./story-map-view.js";
 import { Timeline, type SubtitleToggles, type TimingRowData } from "./Timeline.js";
 import { effectiveWords, wordStartMap } from "./timing.js";
 import { Transport } from "./Transport.js";
@@ -20,10 +22,12 @@ import { viewFromSearch } from "./view.js";
 const SUBTITLES_KEY = "editor.subtitles";
 const SUBTITLE_TOGGLE_DEFAULTS: SubtitleToggles = { visible: subtitleDefaults.visible, highlight: subtitleDefaults.highlight };
 const parseSubtitles = booleanFlags(SUBTITLE_TOGGLE_DEFAULTS);
-/** Which of the page's collapsible sections are open (A63): a browser view preference like the subtitle toggles. */
+/** Which of the page's collapsible sections are open (A63): a browser view preference like the subtitle toggles. Cast & world starts minimized: it is there to be tucked away. */
 const PANELS_KEY = "editor.panels";
-const PANEL_DEFAULTS = { video: true, worldMap: true };
-const parsePanels = booleanFlags(PANEL_DEFAULTS);
+const PANEL_DEFAULTS = { video: true, scenes: true, cast: false };
+/** A layout saved while the Scenes section was still called World map keeps its place under the new name. */
+const fromWorldMap = renamedField("worldMap", "scenes");
+const parsePanels = (stored: unknown) => booleanFlags(PANEL_DEFAULTS)(fromWorldMap(stored));
 /** How tall each section's body is, in pixels: dragged by its bottom-edge handle and remembered per browser. The defaults are shares of the window at first open; the ceiling is what leaves the lanes their floor. */
 const HEIGHTS_KEY = "editor.sectionHeights";
 const sectionCeiling = () => sectionMaxHeight(window.innerHeight);
@@ -83,9 +87,17 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const [panels, setPanels] = useViewPreference(PANELS_KEY, PANEL_DEFAULTS, parsePanels);
   const togglePanel = useCallback((key: keyof typeof PANEL_DEFAULTS) => setPanels(previous => ({ ...previous, [key]: !previous[key] })), [setPanels]);
   const heightDefaults = defaultSectionHeights(window.innerHeight);
-  const [heights, setHeights] = useViewPreference(HEIGHTS_KEY, heightDefaults, sectionHeights(heightDefaults, sectionCeiling()));
+  const parseHeights = sectionHeights(heightDefaults, sectionCeiling());
+  const [heights, setHeights] = useViewPreference(HEIGHTS_KEY, heightDefaults, stored => parseHeights(fromWorldMap(stored)));
   const resizePanel = useCallback((key: keyof typeof heightDefaults, next: number | ((previous: number) => number)) =>
     setHeights(previous => ({ ...previous, [key]: clampSectionHeight(typeof next === "function" ? next(previous[key]) : next, sectionCeiling()) })), [setHeights]);
+  // The story map (A62) is resolved once for both of its sections. The subject open in Cast & world is kept here because a chip in Scenes can open it, expanding that section if it is minimized.
+  const mapView = useMemo(() => resolveMapView(state.map, words), [state.map, words]);
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
+  const selectSubject = useCallback((id: string | null) => {
+    setSelectedSubjectId(id);
+    if (id !== null) setPanels(previous => (previous.cast ? previous : { ...previous, cast: true }));
+  }, [setPanels]);
   const selectTrack = useCallback((trackId: string) => {
     setRequestedTrack(trackId);
     loopAnchorRef.current = null;
@@ -119,7 +131,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
     try { dispatch({ type: "story-loaded", story: await api.getStory() }); return true; }
     catch (e) { dispatch({ type: "error", message: `Story load failed. ${describe(e)}` }); return false; }
   }, [api]);
-  // The story map is optional (A62): a 404 is the normal "not written yet"; anything else is shown in the explorer, not the header.
+  // The story map is optional (A62): a 404 is the normal "not written yet"; anything else is shown in the story map sections, not the header.
   const loadMap = useCallback(async () => {
     try { dispatch({ type: "map-loaded", map: await api.getMap() }); }
     catch (e) { dispatch(e instanceof ApiError && e.status === 404 ? { type: "map-absent" } : { type: "map-failed", message: describe(e) }); }
@@ -353,8 +365,11 @@ export function App({ storyId, stories, onSelectStory }: Props) {
           <Panel id="video" title="Video" open={panels.video} onToggle={() => togglePanel("video")} height={heights.video} onResize={h => resizePanel("video", h)}>
             <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} subtitles={subtitles} />
           </Panel>
-          <Panel id="world-map" title="World map" open={panels.worldMap} onToggle={() => togglePanel("worldMap")} height={heights.worldMap} onResize={h => resizePanel("worldMap", h)}>
-            {state.story && <Explorer map={state.map} words={words} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} onSeek={onSeek} />}
+          <Panel id="scenes" title="Scenes" open={panels.scenes} onToggle={() => togglePanel("scenes")} height={heights.scenes} onResize={h => resizePanel("scenes", h)}>
+            {state.story && <Scenes view={mapView} words={words} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} selectedSubjectId={selectedSubjectId} onSelectSubject={selectSubject} onSeek={onSeek} />}
+          </Panel>
+          <Panel id="cast" title="Cast & world" open={panels.cast} onToggle={() => togglePanel("cast")} height={heights.cast} onResize={h => resizePanel("cast", h)}>
+            {state.story && <Cast view={mapView} playhead={state.playhead} sampleRateHz={sampleRateHz} selectedId={selectedSubjectId} onSelect={selectSubject} onSeek={onSeek} />}
           </Panel>
           <Transport
             playing={state.playing} playhead={state.playhead} sampleRateHz={Math.max(1, sampleRateHz)} sourceStartSample={state.story?.sourceStartSample ?? 0}

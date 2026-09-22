@@ -145,7 +145,7 @@ function parseMultipart(body, contentType) {
   return { fields, files };
 }
 
-// Story map (A62): the second story has none, so the explorer's empty state is reachable; the first has two acts, three beats, and three subjects.
+// Story map (A62): the second story has none, so the story map sections' empty state is reachable; the first has two acts, three beats, and three subjects.
 const mapImages = { "narrator": { type: "image/svg+xml", bytes: Buffer.from(svg("#2f6b3a", "Narrator")) }, "arecibo": { type: "image/svg+xml", bytes: Buffer.from(svg("#3a4d6b", "Arecibo")) } };
 const storyMap = {
   schemaVersion: 1, kind: "story-map", clip, createdAt: "2026-09-18T00:00:00.000Z", producer: { name: "mock", version: "1" },
