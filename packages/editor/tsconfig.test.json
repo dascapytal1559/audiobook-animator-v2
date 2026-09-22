@@ -26,6 +26,8 @@
     "src/timing.ts",
     "src/timing.test.ts",
     "src/api.ts",
+    "src/preferences.ts",
+    "src/preferences.test.ts",
     "src/view.ts",
     "src/view.test.ts"
   ]

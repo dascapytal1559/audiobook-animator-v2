@@ -38,12 +38,15 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .panel-toggle .chevron.open { transform: rotate(90deg); }
 .panel-title { font-size: 13px; font-weight: 600; }
 .panel-hint { font-size: 11px; margin-left: auto; }
-.panel-body { display: flex; flex-direction: column; min-height: 0; }
-/* The World map section keeps a fixed share of the window so the lanes below always have room; its columns scroll inside it. */
-.panel-world-map .panel-body { height: 38vh; }
+/* The body's height is the remembered section height, set inline; the handle under it drags that height, bounded so the lanes keep their floor. */
+.panel-body { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.panel.dragging { user-select: none; cursor: row-resize; }
+.panel .divider-y { height: 6px; }
+.panel.dragging .divider-y, .divider:focus-visible { background: var(--accent); outline: none; }
 
-.preview { width: 100%; flex-shrink: 0; margin: 0 auto; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; }
-.preview-frame { width: 100%; position: relative; container-type: inline-size; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.preview { width: 100%; height: 100%; flex-shrink: 0; background: #000; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+/* The frame is as tall as the section and as wide as its aspect allows; when the section is wider than that, black bars fill the sides. */
+.preview-frame { height: 100%; max-width: 100%; position: relative; container-type: inline-size; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .preview-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
 .preview-subtitles { position: absolute; bottom: 5%; left: 50%; transform: translateX(-50%); width: max-content; max-width: 92%; padding: 0.18em 0.45em; border-radius: 0.2em; background: rgb(0 0 0 / 72%); color: #fff; line-height: 1.25; text-align: center; pointer-events: none; text-shadow: 0 1px 2px #000; }
 .subtitle-line { white-space: pre; }
@@ -146,6 +149,7 @@ input:read-only, textarea:read-only { color: var(--muted); }
 /* World map (A62, A63): structure left, cast right, inside its own section of the page. */
 .explorer { --column-split: 0.6; --cast-split: 0.5; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(240px, calc(var(--column-split) * 100%)) auto minmax(280px, 1fr); overflow: hidden; }
 .explorer.dragging-x, .explorer.dragging-y { user-select: none; }
+.explorer .divider:focus-visible { background: var(--accent); }
 .explorer.dragging-x { cursor: col-resize; }
 .explorer.dragging-y { cursor: row-resize; }
 .divider { flex-shrink: 0; background: var(--line); touch-action: none; transition: background 120ms; }

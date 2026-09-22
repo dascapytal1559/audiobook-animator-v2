@@ -10,7 +10,7 @@ import { Panel } from "./Panel.js";
 import { Preview } from "./Preview.js";
 import { StoryPicker } from "./StoryPicker.js";
 import { decisionsForView, initialState, isDecisionsDirty, isDirty, isTimingDirty, reduce, wordsForView, workingBounds } from "./state.js";
-import { booleanFlags, useViewPreference } from "./preferences.js";
+import { booleanFlags, clampSectionHeight, defaultSectionHeights, sectionHeights, sectionMaxHeight, useViewPreference } from "./preferences.js";
 import { Timeline, type SubtitleToggles, type TimingRowData } from "./Timeline.js";
 import { effectiveWords, wordStartMap } from "./timing.js";
 import { Transport } from "./Transport.js";
@@ -24,6 +24,9 @@ const parseSubtitles = booleanFlags(SUBTITLE_TOGGLE_DEFAULTS);
 const PANELS_KEY = "editor.panels";
 const PANEL_DEFAULTS = { video: true, worldMap: true };
 const parsePanels = booleanFlags(PANEL_DEFAULTS);
+/** How tall each section's body is, in pixels: dragged by its bottom-edge handle and remembered per browser. The defaults are shares of the window at first open; the ceiling is what leaves the lanes their floor. */
+const HEIGHTS_KEY = "editor.sectionHeights";
+const sectionCeiling = () => sectionMaxHeight(window.innerHeight);
 
 const SAVE_DEBOUNCE_MS = 300;
 const SEEK_TOLERANCE_MS = 1;
@@ -79,6 +82,10 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const [subtitles, setSubtitles] = useViewPreference(SUBTITLES_KEY, SUBTITLE_TOGGLE_DEFAULTS, parseSubtitles);
   const [panels, setPanels] = useViewPreference(PANELS_KEY, PANEL_DEFAULTS, parsePanels);
   const togglePanel = useCallback((key: keyof typeof PANEL_DEFAULTS) => setPanels(previous => ({ ...previous, [key]: !previous[key] })), [setPanels]);
+  const heightDefaults = defaultSectionHeights(window.innerHeight);
+  const [heights, setHeights] = useViewPreference(HEIGHTS_KEY, heightDefaults, sectionHeights(heightDefaults, sectionCeiling()));
+  const resizePanel = useCallback((key: keyof typeof heightDefaults, next: number | ((previous: number) => number)) =>
+    setHeights(previous => ({ ...previous, [key]: clampSectionHeight(typeof next === "function" ? next(previous[key]) : next, sectionCeiling()) })), [setHeights]);
   const selectTrack = useCallback((trackId: string) => {
     setRequestedTrack(trackId);
     loopAnchorRef.current = null;
@@ -343,10 +350,10 @@ export function App({ storyId, stories, onSelectStory }: Props) {
       </header>
       <main className="main">
         <section className="stage">
-          <Panel id="video" title="Video" open={panels.video} onToggle={() => togglePanel("video")}>
+          <Panel id="video" title="Video" open={panels.video} onToggle={() => togglePanel("video")} height={heights.video} onResize={h => resizePanel("video", h)}>
             <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} subtitles={subtitles} />
           </Panel>
-          <Panel id="world-map" title="World map" open={panels.worldMap} onToggle={() => togglePanel("worldMap")}>
+          <Panel id="world-map" title="World map" open={panels.worldMap} onToggle={() => togglePanel("worldMap")} height={heights.worldMap} onResize={h => resizePanel("worldMap", h)}>
             {state.story && <Explorer map={state.map} words={words} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} onSeek={onSeek} />}
           </Panel>
           <Transport

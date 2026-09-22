@@ -10,9 +10,9 @@ type Props = {
   subtitles: { visible: boolean; highlight: boolean };
 };
 
-/** A true aspect-ratio frame contains the shot (A31) and optional subtitles (A61). */
+/** A true aspect-ratio frame contains the shot (A31) and optional subtitles (A61). The frame fills the section's height and letterboxes when the width runs out. */
 export function Preview({ entry, aspect, story, words, sample, currentWordId, subtitles: { visible, highlight } }: Props) {
-  const style = { aspectRatio: `${aspect.width} / ${aspect.height}`, maxWidth: `${42 * aspect.width / aspect.height}vh` };
+  const style = { aspectRatio: `${aspect.width} / ${aspect.height}` };
   return (
       <div className="preview" data-testid="preview">
         <div className="preview-frame" style={style} data-testid="preview-frame">

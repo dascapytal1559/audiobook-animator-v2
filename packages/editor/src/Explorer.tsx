@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { currentSections, resolveStoryMap } from "@animator/domain";
 import type { ResolvedSection, ResolvedStoryMap, ResolvedSubject, SectionKind, ServedSubject, StoryResponse, SubjectKind, Word } from "./api.js";
+import { Divider } from "./Divider.js";
 import { splitRatio, useViewPreference } from "./preferences.js";
 import type { MapState } from "./state.js";
 
@@ -9,6 +10,8 @@ type Resolved = ResolvedStoryMap<ServedSubject>;
 type Subject = ResolvedSubject<ServedSubject>;
 
 const SUBJECT_GROUPS: ReadonlyArray<readonly [SubjectKind, string]> = [["character", "Characters"], ["location", "Locations"], ["object", "Objects"], ["motif", "Motifs"]];
+/** How much of the pane one arrow-key press on a divider moves it. */
+const SPLIT_STEP = 0.02;
 const SECTION_LABELS: Readonly<Record<SectionKind, string>> = { act: "Act", chapter: "Chapter", scene: "Scene", beat: "Beat" };
 
 /**
@@ -105,7 +108,7 @@ export function Explorer({ map, words, elements, playhead, sampleRateHz, onSeek 
           ))}
         </ol>
       </div>
-      <Divider axis="x" label="Resize structure and cast" onResize={setColumnSplit} onDragging={setDragging} />
+      <Divider axis="x" label="Resize structure and cast" onDragging={setDragging} onDrag={(p, box) => setColumnSplit(splitRatio(columnSplit)((p.x - box.left) / box.width))} onStep={d => setColumnSplit(previous => splitRatio(previous)(previous + d * SPLIT_STEP))} />
       <div className="explorer-cast">
         <div className="cast-list">
         <h2>Cast</h2>
@@ -131,7 +134,7 @@ export function Explorer({ map, words, elements, playhead, sampleRateHz, onSeek 
         })}
         </div>
         {selected !== null && <>
-          <Divider axis="y" label="Resize cast list and detail" onResize={setCastSplit} onDragging={setDragging} />
+          <Divider axis="y" label="Resize cast list and detail" onDragging={setDragging} onDrag={(p, box) => setCastSplit(splitRatio(castSplit)((p.y - box.top) / box.height))} onStep={d => setCastSplit(previous => splitRatio(previous)(previous + d * SPLIT_STEP))} />
           <div className="subject-detail" data-testid="subject-detail">
             <div className="explorer-heading">
               <h3>{selected.name} <span className="muted">· {selected.kind}</span></h3>
@@ -168,27 +171,6 @@ export function Explorer({ map, words, elements, playhead, sampleRateHz, onSeek 
       </div>
     </section>
   );
-}
-
-type DividerProps = { axis: "x" | "y"; label: string; onResize: (ratio: number) => void; onDragging: (axis: "x" | "y" | null) => void };
-/** A drag handle between two panes. From press to release it reports the pointer's position as a fraction of the parent along `axis`, clamped so neither pane vanishes. */
-function Divider({ axis, label, onResize, onDragging }: DividerProps) {
-  const start = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const parent = e.currentTarget.parentElement!;
-    const move = (ev: PointerEvent) => {
-      const box = parent.getBoundingClientRect();
-      const ratio = axis === "x" ? (ev.clientX - box.left) / box.width : (ev.clientY - box.top) / box.height;
-      onResize(Math.min(0.85, Math.max(0.15, ratio)));
-    };
-    const stop = () => {
-      window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); window.removeEventListener("pointercancel", stop);
-      onDragging(null);
-    };
-    window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); window.addEventListener("pointercancel", stop);
-    onDragging(axis);
-  };
-  return <div className={`divider divider-${axis}`} role="separator" aria-label={label} aria-orientation={axis === "x" ? "vertical" : "horizontal"} data-testid={`divider-${axis}`} onPointerDown={start} />;
 }
 
 type RowProps = {
