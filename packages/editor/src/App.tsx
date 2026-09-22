@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { ApiError, storyApi, useServerEvents, type PeaksResponse, type ShotMode, type SpeechResponse, type StitchedEntry, type StorySummary, type Word } from "./api.js";
+import { ApiError, storyApi, useServerEvents, type PeaksResponse, type SpeechResponse, type StitchedEntry, type StorySummary, type Word } from "./api.js";
 import { clampSample, entryAt, mergeTimeline, millisecondsToSamples, retimeChunks, secondsToSamples, subtitleDefaults, timelineForTrack } from "@animator/domain";
 import { referenceChunks } from "./rows.js";
 import { planTick } from "./playback.js";
@@ -7,7 +7,6 @@ import { selectItem, selectedRange, type SelectionItem } from "./selection.js";
 import type { SnapTarget } from "./snap.js";
 import { Explorer } from "./Explorer.js";
 import { Preview } from "./Preview.js";
-import { ShotPanel } from "./ShotPanel.js";
 import { StoryPicker } from "./StoryPicker.js";
 import { decisionsForView, initialState, isDecisionsDirty, isDirty, isTimingDirty, reduce, wordsForView, workingBounds } from "./state.js";
 import { booleanFlags, useViewPreference } from "./preferences.js";
@@ -27,7 +26,6 @@ const NUDGE_MS = 100;
 const BIG_NUDGE_MS = 1000;
 /** Comma and period move the selected words by this much (A39). */
 const TIMING_NUDGE_MS = 10;
-const DEFAULT_MODE: ShotMode = "graphic-illustration";
 const EMPTY_ROW: TimingRowData = { words: [], chunks: [] };
 
 const describe = (e: unknown) => (e instanceof ApiError ? `${e.code}: ${e.message}` : e instanceof Error ? e.message : String(e));
@@ -41,7 +39,6 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const [peaks, setPeaks] = useState<PeaksResponse | null>(null);
   const [speech, setSpeech] = useState<SpeechResponse | null>(null);
   const [connected, setConnected] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [alignBusy, setAlignBusy] = useState(false);
   const [openingView, setOpeningView] = useState(() => viewFromSearch(window.location.search));
   const [requestedTrack, setRequestedTrack] = useState(openingView.trackId);
@@ -97,7 +94,6 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const tolerance = sampleRateHz > 0 ? millisecondsToSamples(SEEK_TOLERANCE_MS, sampleRateHz) : 0;
   const currentEntry = useMemo(() => entryAt(activeTimeline.stitched, state.playhead, tolerance), [activeTimeline.stitched, state.playhead, tolerance]);
   const currentShot = currentEntry?.kind === "shot" ? currentEntry : null;
-  const currentGroup = useMemo(() => (currentShot ? activeTimeline.candidates.find(g => g.startSample === currentShot.startSample) ?? null : null), [activeTimeline.candidates, currentShot]);
   const previousShot = useMemo(() => activeTimeline.stitched.slice(0, currentEntry === null ? 0 : activeTimeline.stitched.indexOf(currentEntry))
     .findLast((entry): entry is Extract<StitchedEntry, { kind: "shot" }> => entry.kind === "shot") ?? null, [activeTimeline.stitched, currentEntry]);
   const nextShot = useMemo(() => {
@@ -107,15 +103,8 @@ export function App({ storyId, stories, onSelectStory }: Props) {
     return next ?? null;
   }, [activeTimeline.stitched, currentEntry]);
   const currentWordId = useMemo(() => wordAt(sortedWords, state.playhead)?.id ?? null, [sortedWords, state.playhead]);
-  const anchorWord = useMemo(() => {
-    const id = currentShot?.anchorWordId;
-    const word = id === undefined ? undefined : words.find(w => w.id === id);
-    return word === undefined ? null : { id: word.id, value: word.value };
-  }, [currentShot, words]);
   const mergedRef = useRef(activeTimeline);
   mergedRef.current = activeTimeline;
-  const allMergedRef = useRef(merged);
-  allMergedRef.current = merged;
 
   // Initial load.
   const loadTimeline = useCallback(async () => {
@@ -308,44 +297,10 @@ export function App({ storyId, stories, onSelectStory }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [togglePlay, seek]);
 
-  // Record-creating actions.
-  const createShot = useCallback(async (request: Parameters<typeof api.postShot>[0], selectInGroup: boolean) => {
-    setBusy(true);
-    try {
-      const record = await api.postShot(request);
-      dispatch({ type: "record-added", record });
-      if (selectInGroup) {
-        const group = allMergedRef.current.candidates.find(g => g.trackId === (request.trackId ?? "main") && g.startSample === request.startSample);
-        dispatch({ type: "shot-selected", id: record.id, groupIds: [...(group?.shots.map(s => s.id) ?? []), record.id] });
-      }
-    } catch (e) {
-      dispatch({ type: "error", message: `Creating the shot failed. ${describe(e)}` });
-    } finally { setBusy(false); }
-  }, [api]);
-  const onNewShot = useCallback(() => {
-    const s = stateRef.current;
-    const mode = currentShot?.mode ?? DEFAULT_MODE;
-    void createShot({ startSample: s.playhead, mode, trackId: activeTrackId }, false);
-  }, [createShot, currentShot, activeTrackId]);
-  const onAttachImage = useCallback((file: File) => {
-    if (currentShot === null) return;
-    void createShot({ startSample: currentShot.startSample, mode: currentShot.mode, trackId: currentShot.trackId, image: file, ...(currentShot.label !== undefined ? { label: currentShot.label } : {}) }, true);
-  }, [createShot, currentShot]);
-  const onMergeNext = useCallback(() => {
-    if (nextShot === null) return;
-    const group = activeTimeline.candidates.find(g => g.startSample === nextShot.startSample);
-    dispatch({ type: "shots-hidden", ids: group ? group.shots.filter(s => !s.hidden).map(s => s.id) : [nextShot.id] });
-  }, [activeTimeline.candidates, nextShot]);
-
   const onDragStart = useCallback((id: string, startSample: number) => dispatch({ type: "drag-start", id, startSample }), []);
   const onDragMove = useCallback((startSample: number, snap: SnapTarget | null) => dispatch({ type: "drag-move", startSample, snap }), []);
   const onDragEnd = useCallback(() => dispatch({ type: "drag-end" }), []);
   const onDragCancel = useCallback(() => dispatch({ type: "drag-cancel" }), []);
-  /** Detaching keeps the shot where it is as a plain sample position (A51). */
-  const onDetach = useCallback((id: string) => {
-    const shot = mergedRef.current.stitched.find((e): e is Extract<StitchedEntry, { kind: "shot" }> => e.kind === "shot" && e.id === id);
-    if (shot !== undefined) dispatch({ type: "shot-moved", id, startSample: shot.startSample });
-  }, []);
 
   // Word timing (A38–A41).
   const onSelect = useCallback((item: SelectionItem, extend: boolean) => dispatch({ type: "selection-set", selection: selectItem(stateRef.current.selection, item, extend) }), []);
@@ -393,7 +348,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
         {state.story && <span className="muted">{state.story.story.bookTitle} · {state.story.clip.storyId} · {state.story.clip.sampleRateHz} Hz · {state.story.story.transcriptProvider === "openai" ? "GPT transcript" : "Rev split text — awaiting GPT"}</span>}
         {state.error && <button type="button" className="error" onClick={() => dispatch({ type: "error-clear" })} title="Dismiss" data-testid="error">{state.error}</button>}
       </header>
-      <main className={`main${view === "explorer" ? " explorer-view" : ""}`}>
+      <main className="main">
         <section className="stage">
           {view === "timeline" && <>
           <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} subtitles={subtitles} />
@@ -421,16 +376,6 @@ export function App({ storyId, stories, onSelectStory }: Props) {
             />
           )}
         </section>
-        {view === "timeline" && <ShotPanel
-          entry={currentEntry} group={currentGroup} next={nextShot} sampleRateHz={Math.max(1, sampleRateHz)} playhead={state.playhead}
-          aspect={state.decisions.settings.frameAspect} busy={busy} anchorWord={anchorWord} onDetach={onDetach}
-          onSelect={id => { if (currentGroup) dispatch({ type: "shot-selected", id, groupIds: currentGroup.shots.map(s => s.id) }); }}
-          onMode={(id, mode) => dispatch({ type: "shot-edited", id, patch: { mode } })}
-          onNotes={(id, notes) => dispatch({ type: "shot-edited", id, patch: { notes } })}
-          onHide={id => dispatch({ type: "shots-hidden", ids: [id] })}
-          onAttachImage={onAttachImage} onNewShot={onNewShot} onMergeNext={onMergeNext}
-          onAspect={(width, height) => dispatch({ type: "aspect-set", width, height })}
-        />}
       </main>
     </div>
   );

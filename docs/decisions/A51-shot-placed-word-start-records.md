@@ -6,6 +6,6 @@
 
 **Why.** Q22: shots follow words by default but move independently.
 
-**Cited by.** `packages/domain/src/shots.ts`, `packages/editor/src/App.tsx`, `packages/editor/src/ShotLane.tsx`, `packages/editor/src/ShotPanel.tsx`, `packages/editor/src/state.test.ts`, `packages/editor/src/state.ts`, `packages/editor/src/timing.ts`
+**Cited by.** `packages/domain/src/shots.ts`, `packages/editor/src/App.tsx`, `packages/editor/src/ShotLane.tsx`, `packages/editor/src/state.test.ts`, `packages/editor/src/state.ts`, `packages/editor/src/timing.ts`
 
 Recorded in the decision index of [CONTEXT.md](../../CONTEXT.md); earlier rounds and evidence are in [docs/history](../history/).
