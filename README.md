@@ -1,8 +1,47 @@
 # Animator v2
 
-Animator turns audiobooks into movies while keeping their original narration. The first visual milestone is a moodboard film over one selected story; the final direction is animation. Two Ted Chiang collections are split into 17 stories under `data/stories/`, The Great Silence carries the pilot's storyboard, and Tower of Babylon has a GPT working transcript. Movie production is still to be built.
+Animator turns audiobooks into movies while keeping their original narration. The first visual milestone is a moodboard film over one selected story; the final direction is animation. The pilot material is two Ted Chiang collections split into 17 stories: The Great Silence carries the pilot's storyboard, and Tower of Babylon has a GPT working transcript. Movie production is still to be built.
 
-This file is the map and the how-tos. The target, the words we use, every decision with its reason, and the backlog are in [CONTEXT.md](CONTEXT.md); agent directives are in `AGENTS.md`; the human roadmap is `HUMAN.md`. `data/` is local-only and not in git, so every evidence file named below exists only on this machine. The `animator` symlink points at the legacy project and is reference only.
+## What this repository is
+
+A pnpm workspace of TypeScript on Effect v4, plus a few Python scripts, that takes an audiobook from a single MP3 to a per-story editor:
+
+1. **Intake** (`src/intake/`): inspect the book's audio and chapter metadata, import a whole-book timed transcript, find the story boundaries from the spoken words, verify them against the audio, and split the transcript and audio into one directory per story with an inventory of durations and synopses.
+2. **Story transcription** (`scripts/*.py`, `src/modules/story-transcription/`): re-transcribe one story's audio with GPT in overlapping chunks, stitch the chunks, and promote the result to the story's working transcript.
+3. **Word timing** (`src/modules/word-timing/`): measure and align each word against the waveform, with manual corrections kept in a separate file.
+4. **Storyboard** (`src/modules/visual-timeline/`, `src/modules/story-map/`): scripts and agents write shot records and a story map at sample positions on the clip clock; decisions about them are kept apart from the records.
+5. **Editor** (`src/modules/editor-server/`, `packages/editor/`): a loopback-only HTTP server and a React client that play the narration under the shots, with waveform, word timing, subtitles, and the story map.
+
+`packages/domain` holds every shape and pure rule the server, the CLIs, and the browser share. `src/commands/` is the one `animator` command tree. `docs/` is the design record. An earlier prototype of the same idea, the legacy `animator` project, is not part of this repository; `docs/history/` refers to it where evidence came from it.
+
+### What is not here
+
+`data/` is ignored and private. It holds the audiobook recordings, the transcripts, every story directory, the shot images, and the agent-written documents about them. Every evidence path under `data/` that a document in this repository cites exists only on the author's machine, and the numbers quoted from that evidence cannot be re-derived from this repository alone. The `.env` file that supplies `OPENAI_API_KEY` for GPT transcription is ignored too.
+
+### What it needs
+
+- Node `24.20.0` and pnpm `11.25.0`, both pinned exactly (`.node-version`, `packageManager`, and `engineStrict` in `pnpm-workspace.yaml`). TypeScript `7.0.2` and Effect `4.0.0-rc.112` come from the lockfile.
+- FFmpeg and ffprobe on the path, for audio decoding, peaks, and speech detection. The pilot ran on `9.0.1`.
+- Python 3 with only its standard library, for the transcription scripts, and an `OPENAI_API_KEY` in the environment or `.env` when they call the API.
+
+```sh
+pnpm install --frozen-lockfile
+pnpm check                      # domain tests, root build and tests, editor tests and typecheck, in order
+pnpm run cli --help             # the whole command tree
+scripts/editor-dev.sh start     # API on 127.0.0.1:63620 and Vite on 127.0.0.1:5173, detached, logs under .dev/
+```
+
+Without a `data/stories/` directory there is nothing to open: `pnpm --silent run cli status` stops with `IoFailed: Cannot list <checkout>/data/stories`, and the editor server has no story to serve. A story directory is produced by intake from a book, or by copying one made elsewhere.
+
+### Where the design record lives
+
+- [CONTEXT.md](CONTEXT.md): the target, the words we use, every decision with its reason, and the backlog.
+- [docs/decisions](docs/decisions/): one file per decision, cited from the code by its ID, for example `(A51)`.
+- [HUMAN.md](HUMAN.md): the human roadmap, edited only by the human.
+- [AGENTS.md](AGENTS.md): directives for agents working in this repository. `CLAUDE.md` is a symlink to it.
+- [docs/history](docs/history/), [docs/research](docs/research/), [docs/reviews](docs/reviews/), [docs/prompts](docs/prompts/): earlier rounds and evidence, provider and tooling surveys, the architecture review this layout came from, and the pilot's run brief.
+
+The rest of this file is the map and the how-tos.
 
 ## Map
 
@@ -60,16 +99,7 @@ Who writes what inside a story directory:
 
 ## Setup and checks
 
-Pinned: Node `24.20.0`, pnpm `11.25.0`, TypeScript `7.0.2`, Effect `4.0.0-rc.112`. FFmpeg and ffprobe are external; the host has `9.0.1`.
-
-```sh
-pnpm install --frozen-lockfile
-pnpm check                      # domain tests, root build and tests, editor tests and typecheck, in order
-pnpm run cli --help
-scripts/editor-dev.sh start     # API on 127.0.0.1:63620 and Vite on 127.0.0.1:5173, detached, logs under .dev/
-```
-
-`pnpm test` alone builds the root and runs its colocated tests from `dist/`. The dev launcher starts `animator server serve` with the code defaults and manages only processes it started from this checkout; stop and restart through it. One known flaky test: the `/api/events` watcher test fails on alternate runs on this machine and predates the current layout.
+Versions, external tools, and the install and check commands are under [What it needs](#what-it-needs) above. `pnpm test` alone builds the root and runs its colocated tests from `dist/`. The dev launcher starts `animator server serve` with the code defaults and manages only processes it started from this checkout; stop and restart through it. One known flaky test: the `/api/events` watcher test fails on alternate runs on the author's machine and predates the current layout.
 
 ## Runs and settings
 
