@@ -168,6 +168,7 @@ const takes = [
   { id: ulid(9001), anchorWordId: "w3", model: "openai/gpt-6-astra", text: "A parrot on a branch, seen from below, the Arecibo dish a pale bowl behind the canopy.", createdAt: "2026-09-22T10:00:00.000Z", producer: { name: "mock", version: "1" } },
   { id: ulid(9002), anchorWordId: "w3", model: "anthropic/claude-fable-5.1", text: "Green leaves fill the frame. One grey parrot turns its head toward the listening dish, which glints through a gap in the trees.", createdAt: "2026-09-22T10:01:00.000Z", producer: { name: "mock", version: "1" } },
 ];
+const storyboardJobs = [];
 const servedMap = (storyId) => ({ ...storyMap, clip: { ...clip, storyId }, subjects: storyMap.subjects.map(({ images, ...subject }) => images === undefined ? subject
   : { ...subject, images: images.map((image, index) => ({ ...image, url: `/api/stories/${storyId}/map/subjects/${subject.id}/images/${index}` })) }) });
 
@@ -231,6 +232,23 @@ const server = createServer(async (req, res) => {
       json(res, 201, take);
       return broadcast("timeline-changed");
     }
+    // Storyboard (A66): a canned draft, and drawings that run for a moment and then fail, since the mock draws nothing.
+    if (req.method === "GET" && path === "/api/storyboard/jobs") return json(res, 200, { jobs: storyboardJobs.filter(job => job.storyId === storyId).map(({ storyId: _, ...job }) => job) });
+    if (req.method === "POST" && path === "/api/storyboard/draft") {
+      const body = JSON.parse((await readBody(req)).toString());
+      if (!original.some(w => w.id === body?.anchorWordId)) return fail(res, 400, "InvalidRequest", `anchorWordId ${body?.anchorWordId} is not a word of the transcript.`);
+      return json(res, 200, { anchorWordId: body.anchorWordId, text: "A wide shot of the rainforest canopy at dawn, a single grey parrot on a branch in the foreground.", model: "mock/drafter", prompt: "mock draft prompt", seconds: 0.1 });
+    }
+    if (req.method === "POST" && path === "/api/storyboard/draw") {
+      const body = JSON.parse((await readBody(req)).toString());
+      const startedAt = new Date().toISOString();
+      const job = { storyId, id: ulid(8000 + storyboardJobs.length + 1), anchorWordId: body?.anchorWordId, status: "running", startedAt, attempts: [{ renderer: "codex-chatgpt", startedAt }] };
+      storyboardJobs.push(job);
+      setTimeout(() => { const at = new Date().toISOString(); Object.assign(job.attempts[0], { finishedAt: at, error: "The mock server draws nothing." }); Object.assign(job, { status: "failed", finishedAt: at, error: "The mock server draws nothing." }); }, 1500);
+      posts.push({ at: startedAt, route: "/api/storyboard/draw", body });
+      const { storyId: _, ...served } = job;
+      return json(res, 202, { jobs: [served] });
+    }
     if (req.method === "PUT" && path === "/api/decisions") {
       const body = JSON.parse((await readBody(req)).toString());
       if (typeof body?.settings?.frameAspect?.width !== "number" || typeof body?.shots !== "object") return fail(res, 400, "InvalidDecisions", "Body must have settings.frameAspect and shots.");
@@ -276,7 +294,10 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "POST" && path === "/api/shots") {
       const { fields, files } = parseMultipart(await readBody(req), req.headers["content-type"] ?? "");
-      const startSample = Number(fields.startSample);
+      // A shot placed at a word (A66) records the anchor and starts at the word's effective start.
+      const anchor = fields.anchorWordId === undefined ? undefined : effective().find(w => w.id === fields.anchorWordId);
+      if (fields.anchorWordId !== undefined && anchor === undefined) return fail(res, 400, "InvalidRequest", `anchorWordId ${fields.anchorWordId} is not a word of the transcript.`);
+      const startSample = fields.startSample === undefined && anchor !== undefined ? anchor.startSample : Number(fields.startSample);
       if (!Number.isInteger(startSample) || startSample < 0 || startSample >= COUNT) return fail(res, 400, "InvalidRequest", "startSample out of range.");
       if (!SHOT_MODES.includes(fields.mode)) return fail(res, 400, "InvalidRequest", "mode invalid.");
       const extra = {};
@@ -284,7 +305,7 @@ const server = createServer(async (req, res) => {
         try { extra.trackId = decodeStrict(ImageTrackId, fields.trackId); }
         catch { return fail(res, 400, "InvalidRequest", "trackId invalid."); }
       }
-      for (const key of ["label", "prompt", "notes"]) if (fields[key] !== undefined && fields[key].trim() !== "") extra[key] = fields[key];
+      for (const key of ["label", "prompt", "notes", "anchorWordId", "renderer"]) if (fields[key] !== undefined && fields[key].trim() !== "") extra[key] = fields[key];
       const created = addRecord(startSample, fields.mode, extra, files.image);
       posts.push({ at: new Date().toISOString(), fields, image: files.image ? { name: files.image.name, bytes: files.image.bytes.length } : null });
       console.error(`POST /api/shots #${posts.length}: ${JSON.stringify(posts[posts.length - 1])}`);

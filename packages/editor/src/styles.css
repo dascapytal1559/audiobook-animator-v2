@@ -246,3 +246,25 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .passage-word { cursor: pointer; border-radius: 2px; }
 .passage-word:hover { background: var(--bg-3); }
 .passage-word.current { color: var(--accent); }
+
+/* Storyboard (A66): the frame at the cursor, its drawing beside its description, and a strip of every frame underneath. */
+.storyboard { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.storyboard-main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 3fr) minmax(260px, 2fr); gap: 10px; padding: 8px 14px; }
+.storyboard-drawing { min-height: 0; min-width: 0; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, #000 30%, var(--bg-2)); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.storyboard-drawing img { max-width: 100%; max-height: 100%; aspect-ratio: 16 / 9; object-fit: contain; display: block; }
+.storyboard-drawing.empty { border-style: dashed; aspect-ratio: 16 / 9; max-height: 100%; }
+.storyboard-side { min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
+.storyboard-heading { margin: 0; font-size: 13px; font-weight: 600; }
+.storyboard-heading .link, .storyboard-new { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-align: left; }
+.storyboard-heading .link:hover { text-decoration: underline; }
+.storyboard-text { min-height: 84px; line-height: 1.4; }
+.storyboard-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.storyboard-status { margin: 0; font-size: 12px; }
+.storyboard-message { margin: 0; font-size: 12px; color: #ffb4b0; }
+.storyboard-new { align-self: flex-start; font-size: 12px; }
+.storyboard-strip { flex-shrink: 0; display: flex; gap: 6px; margin: 0; padding: 4px 14px 8px; list-style: none; overflow-x: auto; }
+.storyboard-strip li { flex-shrink: 0; }
+.storyboard-strip button { display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 112px; padding: 2px; background: var(--bg-2); }
+.storyboard-strip li.current button { border-color: var(--accent); }
+.storyboard-strip img, .storyboard-blank { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: flex; align-items: center; justify-content: center; border-radius: 3px; background: color-mix(in srgb, #000 30%, var(--bg-2)); font-size: 11px; color: var(--muted); }
+.storyboard-strip-label { font-size: 11px; text-align: left; }

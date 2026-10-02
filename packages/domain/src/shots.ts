@@ -19,14 +19,23 @@ const shotFields = {
   label: Schema.optionalKey(Text), prompt: Schema.optionalKey(Text), imagePath: Schema.optionalKey(ImagePath), notes: Schema.optionalKey(Text),
   createdAt: IsoUtc, producer: Producer,
 };
-/** Immutable generation record at `<story>/shots/<id>/record.json`. `startSample` is on the clip's own clock; its upper bound is checked against the clip. */
-export const ShotRecord = Schema.Struct({ schemaVersion: Schema.Literal(1), kind: Schema.Literal("visual-shot-generation"), clip: ClipIdentity, ...shotFields });
+/**
+ * Immutable generation record at `<story>/shots/<id>/record.json`. `startSample` is on the clip's own clock; its upper bound is checked against the clip.
+ * A writer that places the shot at a word records that word as `anchorWordId` (A66), so the shot follows the word like a decision anchor (A51)
+ * without anyone writing `decisions.json`; `startSample` is then the word's start when the record was written. `renderer` names what drew the
+ * image when it was generated rather than uploaded, such as `codex-chatgpt` (A66).
+ */
+export const ShotRecord = Schema.Struct({ schemaVersion: Schema.Literal(1), kind: Schema.Literal("visual-shot-generation"), clip: ClipIdentity, ...shotFields,
+  anchorWordId: Schema.optionalKey(Text), renderer: Schema.optionalKey(Text) });
 export type ShotRecord = typeof ShotRecord.Type;
 /** A record as the editor server serves it: `imageUrl` is added when the record has an image. */
 export const ServedShotRecord = Schema.Struct({ ...ShotRecord.fields, imageUrl: Schema.optionalKey(Text) });
 export type ServedShotRecord = typeof ServedShotRecord.Type;
 
-/** `anchorWordId` (A51) pins the shot to a transcript word: the effective start follows that word's effective start and beats `startSample`. */
+/**
+ * `anchorWordId` (A51) pins the shot to a transcript word: the effective start follows that word's effective start and beats `startSample`.
+ * A `startSample` without an anchor detaches a shot whose record carries its own anchor (A66).
+ */
 export const ShotDecision = Schema.Struct({
   startSample: Schema.optionalKey(NonNegative), anchorWordId: Schema.optionalKey(Text), mode: Schema.optionalKey(ShotMode),
   selected: Schema.optionalKey(Schema.Boolean), hidden: Schema.optionalKey(Schema.Boolean), notes: Schema.optionalKey(Text),
@@ -47,7 +56,7 @@ export const DEFAULT_SETTINGS: TimelineSettings = { frameAspect: { width: 16, he
 const SelectionSource = Schema.Literals(["decision", "default"]);
 /** A record after its decision: overrides applied, anchor reported, selection resolved within its candidate group. */
 export const EffectiveShot = Schema.Struct({
-  ...shotFields, trackId: ImageTrackId, imageUrl: Schema.optionalKey(Text), anchorWordId: Schema.optionalKey(Text),
+  ...shotFields, trackId: ImageTrackId, imageUrl: Schema.optionalKey(Text), anchorWordId: Schema.optionalKey(Text), renderer: Schema.optionalKey(Text),
   hidden: Schema.Boolean, selected: Schema.Boolean, selectionSource: Schema.optionalKey(SelectionSource),
 });
 export type EffectiveShot = typeof EffectiveShot.Type;
@@ -63,7 +72,10 @@ export type StitchedEntry = typeof StitchedEntry.Type;
 export type MergedTimeline = {
   readonly candidates: ReadonlyArray<CandidateGroup>;
   readonly stitched: ReadonlyArray<StitchedEntry>;
-  /** Shots whose anchor names a word that is not in `wordStarts` while `wordStarts` is empty: the words are unknown, so the anchor merely falls back. */
+  /**
+   * Shots whose anchor names a word that is not in `wordStarts`, so the anchor merely falls back: a decision anchor while `wordStarts` is
+   * empty (the words are unknown), or a record's own anchor at any time, since an immutable record cannot be refused after it is written.
+   */
   readonly unresolvedAnchors: ReadonlyArray<string>;
   /** Every rule the decisions break, in order found; empty when they are valid. A writer must refuse decisions with problems; a viewer may ignore them. */
   readonly problems: ReadonlyArray<string>;
@@ -71,12 +83,13 @@ export type MergedTimeline = {
 type MutableShot = { -readonly [K in keyof EffectiveShot]: EffectiveShot[K] };
 
 /**
- * The one timeline rule (A19, A25, A30 to A32, A51, A60). Decision overrides are applied over record fields, shots in the same track with the same effective start
+ * The one timeline rule (A19, A25, A30 to A32, A51, A60, A66). Decision overrides are applied over record fields, shots in the same track with the same effective start
  * form a candidate group, one candidate is selected per group (the explicitly selected one, else the newest by `createdAt`, never a hidden
  * one), and the selected shots are stitched so each holds until the next start and the last until the clip end; an opening gap is explicit.
  * `wordStarts` maps word id to effective start sample: an anchored shot starts at its word. When `wordStarts` is empty the words are unknown
  * and an anchor falls back to the override or record and is listed in `unresolvedAnchors`; when words are known, an anchor to a missing word
- * is a problem. Records that carry `imageUrl` keep it on their shots.
+ * is a problem. A record's own anchor applies unless its decision anchors or places the shot; it falls back to the record's `startSample`
+ * when its word is not in `wordStarts`. Records that carry `imageUrl` keep it on their shots.
  */
 export function mergeTimeline(records: ReadonlyArray<ServedShotRecord>, decisions: DecisionsBody, sampleCount: number, wordStarts: ReadonlyMap<string, number>): MergedTimeline {
   const byId = new Map(records.map(r => [r.id, r] as const));
@@ -95,9 +108,12 @@ export function mergeTimeline(records: ReadonlyArray<ServedShotRecord>, decision
   if (records.length === 0) tracks.set(DEFAULT_IMAGE_TRACK, new Map());
   for (const record of records) {
     const d = decisions.shots[record.id] ?? {};
-    const { schemaVersion: _v, kind: _k, clip: _c, ...fields } = record;
-    const anchored = d.anchorWordId !== undefined ? wordStarts.get(d.anchorWordId) : undefined;
-    const shot: MutableShot = { ...fields, trackId: imageTrackOf(record), startSample: anchored ?? d.startSample ?? record.startSample, ...(d.anchorWordId !== undefined ? { anchorWordId: d.anchorWordId } : {}),
+    const { schemaVersion: _v, kind: _k, clip: _c, anchorWordId: placedAt, ...fields } = record;
+    // The decision's anchor, else the record's own unless a decision placed the shot elsewhere (A51, A66).
+    const anchorWordId = d.anchorWordId ?? (d.startSample === undefined ? placedAt : undefined);
+    const anchored = anchorWordId !== undefined ? wordStarts.get(anchorWordId) : undefined;
+    if (anchorWordId !== undefined && anchored === undefined && d.anchorWordId === undefined) unresolvedAnchors.push(record.id);
+    const shot: MutableShot = { ...fields, trackId: imageTrackOf(record), startSample: anchored ?? d.startSample ?? record.startSample, ...(anchorWordId !== undefined ? { anchorWordId } : {}),
       mode: d.mode ?? record.mode, ...(d.notes !== undefined ? { notes: d.notes } : {}),
       hidden: d.hidden === true, selected: false, ...(d.selected === true ? { selectionSource: "decision" as const } : {}) };
     const groups = tracks.get(shot.trackId) ?? new Map<number, MutableShot[]>();

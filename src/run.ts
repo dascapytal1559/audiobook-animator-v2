@@ -13,15 +13,16 @@ import { StoryInventorySettings, storyInventoryDefaults } from "./modules/story-
 import { TranscriptionSettings, transcriptionDefaults } from "./modules/story-transcription/contracts.js";
 import { DEFAULT_BOOKS_DIRECTORY, DEFAULT_STORIES_DIRECTORY, requireStory, StorySettings, storyDefaults } from "./modules/story/index.js";
 import { VisualTimelineSettings, visualTimelineDefaults } from "./modules/visual-timeline/index.js";
+import { StoryboardSettings, storyboardDefaults } from "./modules/storyboard/contracts.js";
 
 export const RunSettings = Schema.Struct({
   storiesDirectory: Path, booksDirectory: Path,
-  story: StorySettings, timeline: VisualTimelineSettings, editor: EditorSettings, inventory: StoryInventorySettings, transcription: TranscriptionSettings,
+  story: StorySettings, timeline: VisualTimelineSettings, editor: EditorSettings, storyboard: StoryboardSettings, inventory: StoryInventorySettings, transcription: TranscriptionSettings,
 });
 export type RunSettings = typeof RunSettings.Type;
 export const runDefaults: RunSettings = {
   storiesDirectory: DEFAULT_STORIES_DIRECTORY, booksDirectory: DEFAULT_BOOKS_DIRECTORY,
-  story: storyDefaults, timeline: visualTimelineDefaults, editor: editorDefaults, inventory: storyInventoryDefaults, transcription: transcriptionDefaults,
+  story: storyDefaults, timeline: visualTimelineDefaults, editor: editorDefaults, storyboard: storyboardDefaults, inventory: storyInventoryDefaults, transcription: transcriptionDefaults,
 };
 export type RunCode = "InvalidRun" | "IoFailed";
 const errors = errorsOf<"run", RunCode>("run");

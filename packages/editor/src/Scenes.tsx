@@ -3,6 +3,7 @@ import type { ResolvedSection, SceneDescriptionTake, StitchedEntry, StoryRespons
 import { Divider } from "./Divider.js";
 import { MapNotice } from "./MapNotice.js";
 import { splitRatio, useViewPreference } from "./preferences.js";
+import { openingWords } from "./storyboard-view.js";
 import { SECTION_LABELS, clock as clipClock, currentChain, sceneShots, sceneToShow, type ImageTake, type MapView, type Resolved, type SceneShot } from "./story-map-view.js";
 
 type Props = {
@@ -78,13 +79,7 @@ export function Scenes({ view, words, elements, playhead, sampleRateHz, stitched
     });
   };
   /** The first words spoken from a shot's anchor word, so a shot reads by where it begins. */
-  const opening = (anchorWordId: string): string => {
-    const from = elementIndex.get(anchorWordId);
-    if (from === undefined) return anchorWordId;
-    const said: string[] = [];
-    for (let i = from; i < elements.length && said.length < OPENING_WORDS; i++) { const element = elements[i]!; if (element.kind === "word") said.push(wordById.get(element.id)?.value ?? element.id); }
-    return said.join(" ");
-  };
+  const opening = (anchorWordId: string): string => openingWords(elements, wordById, anchorWordId, OPENING_WORDS);
   const chip = (id: string) => {
     const subject = byId.get(id);
     return subject === undefined ? [] : [

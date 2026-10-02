@@ -9,7 +9,8 @@ import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotR
 import { type TimingEntries } from "../word-timing/index.js";
 import { type LoadedStoryMap, loadStoryMap } from "../story-map/index.js";
 import { addSceneDescriptionTake, loadSceneDescriptions, SceneDescriptionTakeBody } from "../scene-descriptions/index.js";
-import { type ChunkElement, declaredShots, type SceneDescriptionsResponse, type StoriesResponse, type StoryMapResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
+import { codexDraft, draftPrompt, drawFrame, excerpt, sketchPrompt, StoryboardDraftRequest, StoryboardDrawRequest, StoryboardJobBook, storyboardError, type StoryboardSettings } from "../storyboard/index.js";
+import { type ChunkElement, declaredShots, type SceneDescriptionsResponse, type StoriesResponse, type StoryboardDraft, type StoryboardJobsResponse, storyboardFrames, type StoryMapResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
 export type { StorySummary };
 import { type EditorSettings, editorError, type EditorCode } from "./contracts.js";
 import type { PeaksIdentity, SpeechIdentity } from "./peaks.js";
@@ -45,7 +46,11 @@ export type EditorLibrary = EditorShared & {
   /** The listed story, verified on first open and kept for the process lifetime; a failed verification is retried on the next open. Unknown ids are `NotFound`. */
   readonly open: (storyId: string | undefined) => Effect.Effect<OpenStory, AnimatorError | AnimatorError, FileSystem.FileSystem>;
 };
-export type EditorRouteOptions = { readonly producer: { readonly name: string; readonly version: string }; readonly staticDirectory?: string };
+export type EditorRouteOptions = {
+  readonly producer: { readonly name: string; readonly version: string }; readonly staticDirectory?: string;
+  /** How storyboard frames are drafted and drawn (A66). */
+  readonly storyboard: StoryboardSettings;
+};
 
 const read = (path: string, limit: number) => readBounded(path, limit).pipe(Effect.mapError(e => editorError({ code: "IoFailed", message: e.message })));
 const decode = <S extends Schema.Top>(schema: S, bytes: Uint8Array, code: Code, path: string) => decodeJson(schema, bytes, path, true).pipe(Effect.mapError(e => editorError({ code, message: e.message })));
@@ -116,6 +121,7 @@ function errorResponse(error: unknown, options: { readonly decisionsFromClient?:
       timeline: { InvalidConfig: 500, InvalidRequest: 400, InvalidRecord: 500, InvalidDecisions: options.decisionsFromClient ? 400 : 500, IdentityMismatch: 409, RecordExists: 409, IoFailed: 500 },
       map: { NotFound: 404, InvalidMap: 500, IdentityMismatch: 409, IoFailed: 500 },
       descriptions: { InvalidRequest: 400, InvalidDescriptions: 500, IdentityMismatch: 409, TakeExists: 409, IoFailed: 500 },
+      storyboard: { InvalidRequest: 400, JobRunning: 409, DraftFailed: 502, RendererFailed: 502, IoFailed: 500 },
     };
     return errorJson(byModule[error.module]?.[error.code] ?? 500, error.code, error.message);
   }
@@ -228,10 +234,14 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     const mode = yield* text("mode");
     if (!Schema.is(ShotMode)(mode)) return yield* fail("InvalidRequest", `mode must be one of ${ShotMode.literals.join(", ")}.`);
     const trackId = yield* text("trackId");
-    const [startSample, startSeconds, label, prompt, notes] = [yield* number("startSample", yield* text("startSample")), yield* number("startSeconds", yield* text("startSeconds")), yield* text("label"), yield* text("prompt"), yield* text("notes")];
+    const [startSample, startSeconds, label, prompt, notes, anchorWordId, renderer] = [yield* number("startSample", yield* text("startSample")), yield* number("startSeconds", yield* text("startSeconds")), yield* text("label"), yield* text("prompt"), yield* text("notes"), yield* text("anchorWordId"), yield* text("renderer")];
+    // A shot placed at a word records it (A66) and starts at the word's effective start unless a start is given.
+    const anchorStart = anchorWordId === undefined ? undefined : (yield* loadTiming(ctx)).wordStarts.get(anchorWordId);
+    if (anchorWordId !== undefined && anchorStart === undefined) return yield* fail("InvalidRequest", `anchorWordId ${anchorWordId} is not a word of the transcript.`);
+    const placed = startSample === undefined && startSeconds === undefined && anchorStart !== undefined ? anchorStart : startSample;
     const record = yield* addShot({ story: ctx.story, settings: ctx.settings.timeline, mode, producer: options.producer,
-      ...(trackId !== undefined ? { trackId } : {}),
-      ...(startSample !== undefined ? { startSample } : {}), ...(startSeconds !== undefined ? { startSeconds } : {}),
+      ...(trackId !== undefined ? { trackId } : {}), ...(anchorWordId !== undefined ? { anchorWordId } : {}), ...(renderer !== undefined ? { renderer } : {}),
+      ...(placed !== undefined ? { startSample: placed } : {}), ...(startSeconds !== undefined ? { startSeconds } : {}),
       ...(label !== undefined ? { label } : {}), ...(prompt !== undefined ? { prompt } : {}), ...(notes !== undefined ? { notes } : {}),
       ...(imageSourcePath !== undefined ? { imageSourcePath } : {}) });
     return json(imageUrl(ctx.clip.storyId)(record), 201);
@@ -287,9 +297,40 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     const recorded = yield* addSceneDescriptionTake({ story: ctx.story, maxBytes: ctx.settings.editor.limits.maxSceneDescriptionsBytes, take, shots: declaredShots(stitched), producer: options.producer });
     return json(recorded, 201);
   })))));
+  /** Storyboard frames (A66): drafts answer in the request; drawings run in the background and are reported by the jobs route. */
+  const jobs = new StoryboardJobBook();
+  const decodeBody = <S extends typeof StoryboardDraftRequest | typeof StoryboardDrawRequest>(schema: S, body: unknown) =>
+    Schema.decodeUnknownEffect(schema, { onExcessProperty: "error" })(body).pipe(Effect.mapError(e => editorError({ code: "InvalidRequest", message: `Body must be { anchorWordId }. ${e.message.replace(/\s+/g, " ")}` })));
+  const storyboardJobs = HttpRouter.add("GET", at("/storyboard/jobs"), handle(withStory(({ ctx }) => Effect.succeed(json({ jobs: jobs.list(ctx.clip.storyId) } satisfies StoryboardJobsResponse)))));
+  const storyboardDraft = HttpRouter.add("POST", at("/storyboard/draft"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
+    const { anchorWordId } = yield* decodeBody(StoryboardDraftRequest, yield* readJsonObject(request, 4096));
+    const { draftWordsBefore, draftWordsAfter } = options.storyboard.excerpt;
+    const passage = excerpt(ctx.elements, anchorWordId, draftWordsBefore, draftWordsAfter, true);
+    if (passage === null) return yield* fail("InvalidRequest", `anchorWordId ${anchorWordId} is not a word of the transcript.`);
+    const prompt = draftPrompt({ title: ctx.story.story.title, excerpt: passage });
+    const draft = yield* codexDraft(options.storyboard, prompt);
+    return json({ anchorWordId, ...draft, prompt } satisfies StoryboardDraft);
+  }))));
+  const storyboardDraw = HttpRouter.add("POST", at("/storyboard/draw"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
+    const { anchorWordId } = yield* decodeBody(StoryboardDrawRequest, yield* readJsonObject(request, 4096));
+    const storyId = ctx.clip.storyId;
+    const frame = storyboardFrames((yield* timeline(ctx)).stitched, yield* descriptions(ctx)).find(f => f.anchorWordId === anchorWordId);
+    if (frame === undefined) return yield* fail("InvalidRequest", `No storyboard frame starts at ${anchorWordId}: describe a shot there first.`);
+    if (frame.description === null) return yield* fail("InvalidRequest", `The storyboard frame at ${anchorWordId} has no description to draw from.`);
+    if (jobs.running(storyId, anchorWordId)) return yield* Effect.fail(storyboardError({ code: "JobRunning", message: `The storyboard frame at ${anchorWordId} is already being drawn.` }));
+    const sketch = sketchPrompt({ title: ctx.story.story.title, description: frame.description.text, excerpt: excerpt(ctx.elements, anchorWordId, 0, options.storyboard.excerpt.drawWords, false) });
+    const job = jobs.begin(storyId, anchorWordId);
+    const startSample = Effect.map(loadTiming(ctx), ({ wordStarts }) => wordStarts.get(anchorWordId) ?? frame.startSample);
+    yield* drawFrame({ settings: options.storyboard, story: ctx.story, timeline: ctx.settings.timeline, producer: options.producer, anchorWordId, sketch, startSample,
+      onAttempt: renderer => jobs.attempt(storyId, job.id, renderer), onAttemptFailed: (_, message) => jobs.attemptFailed(storyId, job.id, message) }).pipe(
+      Effect.matchEffect({ onSuccess: record => Effect.sync(() => jobs.finish(storyId, job.id, { recordId: record.id })), onFailure: e => Effect.sync(() => jobs.finish(storyId, job.id, { error: e.message })) }),
+      Effect.catchDefect(defect => Effect.sync(() => jobs.finish(storyId, job.id, { error: `The drawing stopped unexpectedly: ${String(defect)}` }))),
+      Effect.forkDetach);
+    return json({ jobs: jobs.list(storyId).filter(j => j.id === job.id) } satisfies StoryboardJobsResponse, 202);
+  }))));
   const apiFallback = HttpRouter.add("*", "/api/*", errorJson(404, "NotFound", "No such API route."));
   const root = options.staticDirectory === undefined
-    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`animator-v2 editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /map /map/subjects/:subjectId/images/:index /scene-descriptions /audio /peaks /speech /events\n`))
+    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`animator-v2 editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /map /map/subjects/:subjectId/images/:index /scene-descriptions /storyboard/jobs /storyboard/draft /storyboard/draw /audio /peaks /speech /events\n`))
     : HttpStaticServer.layer({ root: resolve(options.staticDirectory), index: "index.html", spa: true, cacheControl: "no-cache" });
-  return Layer.mergeAll(stories, story, timelineRoute, decisions, wordTiming, align, speech, shots, image, map, mapImage, sceneDescriptions, sceneDescriptionTake, audio, peaks, events, apiFallback, root);
+  return Layer.mergeAll(stories, story, timelineRoute, decisions, wordTiming, align, speech, shots, image, map, mapImage, sceneDescriptions, sceneDescriptionTake, storyboardJobs, storyboardDraft, storyboardDraw, audio, peaks, events, apiFallback, root);
 }

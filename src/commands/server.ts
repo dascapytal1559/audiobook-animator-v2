@@ -11,7 +11,7 @@ const serve = Command.make("serve", {
 }, handle(({ port, static: staticDirectory, run: runPath }) => Effect.gen(function* () {
   if (port < 1 || port > 65_535) return yield* Effect.fail(new Error("Supply --port between 1 and 65535."));
   const settings = yield* run(runPath);
-  return yield* Layer.launch(makeEditorServer({ storiesDirectory: settings.storiesDirectory, settings: { story: settings.story, timeline: settings.timeline, editor: settings.editor }, port,
+  return yield* Layer.launch(makeEditorServer({ storiesDirectory: settings.storiesDirectory, settings: { story: settings.story, timeline: settings.timeline, editor: settings.editor }, storyboard: settings.storyboard, port,
     producer: { name: "editor", version: packageJson.version }, ...(Option.isSome(staticDirectory) ? { staticDirectory: staticDirectory.value } : {}) }));
 }))).pipe(Command.withDescription("Serve every story under the stories directory on 127.0.0.1 with no authentication and no default story. The listening URL and the effective settings go to stderr. Ctrl-C stops it."));
 

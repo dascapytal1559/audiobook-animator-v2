@@ -221,3 +221,15 @@ test("a shot drag that ends on a word or sentence start anchors the shot; ending
   state = reduce(state, { type: "shot-moved", id: "bbb", startSample: 48000 });
   assert.equal(state.decisions.shots["bbb"], undefined, "back on the record start: no override at all");
 });
+
+test("a shot placed at a word by its record is detached by a drag off it, even back to its record start, and returns to its own word with no override", () => {
+  const placed = [record("aaa", 0, "2026-01-01T00:00:00Z"), record("sb", 2100, "2026-01-02T00:00:00Z", { trackId: "storyboard", anchorWordId: "w2" })];
+  let state = reduce(initialState, { type: "timeline-loaded", timeline: timeline(placed) });
+  state = reduce(state, { type: "shot-moved", id: "sb", startSample: 2100 });
+  assert.deepEqual(state.decisions.shots["sb"], { startSample: 2100 }, "a written start detaches the record's anchor");
+  assert.equal(mergeTimeline(state.records, state.decisions, clip.sampleCount, new Map([["w2", 2600]])).stitched.find(e => e.trackId === "storyboard" && e.kind === "shot")?.startSample, 2100);
+  state = reduce(state, { type: "shot-moved", id: "sb", startSample: 2600, anchorWordId: "w2" });
+  assert.equal(state.decisions.shots["sb"], undefined, "back on its own word: the record's anchor applies again");
+  state = reduce(state, { type: "shot-moved", id: "sb", startSample: 900, anchorWordId: "w1" });
+  assert.deepEqual(state.decisions.shots["sb"], { anchorWordId: "w1" });
+});

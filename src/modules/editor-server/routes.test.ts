@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { type TestContext } from "node:test";
+import test, { after, type TestContext } from "node:test";
 import { NodeHttpServer, NodeServices } from "@effect/platform-node";
 import { Effect, Layer, Stream } from "effect";
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http";
-import { decodeStrict, SceneDescriptionsResponse, SceneDescriptionTake, StoryMapResponse, TimelineResponse } from "@animator/domain";
+import { decodeStrict, SceneDescriptionsResponse, SceneDescriptionTake, StoryboardDraft, StoryboardJobsResponse, StoryMapResponse, TimelineResponse } from "@animator/domain";
 import { fixture, type FixtureWord } from "../story/context.fixture.js";
+import { storyboardDefaults, type StoryboardSettings } from "../storyboard/index.js";
 import { loadEditorLibrary, makeEditorRoutes } from "./index.js";
 const encode = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
 /** A 1x1 transparent PNG. */
@@ -15,7 +16,7 @@ const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR
 const VALID_ULID = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 /** The synthetic verified story (10 Hz, 100 samples, 12-byte "audio"), the only story under the fixture root, behind an ephemeral loopback server with a fetch client pointed at it. */
-async function serve(t: TestContext, options: { readonly staticDirectory?: string; readonly words?: ReadonlyArray<FixtureWord>; readonly manifestPatch?: Record<string, unknown> } = {}) {
+async function serve(t: TestContext, options: { readonly staticDirectory?: string; readonly words?: ReadonlyArray<FixtureWord>; readonly manifestPatch?: Record<string, unknown>; readonly storyboard?: StoryboardSettings } = {}) {
   const story = await fixture(t, options.words ? { words: options.words } : {});
   const planningDirectory = story.dir;
   if (options.manifestPatch) {
@@ -30,7 +31,7 @@ async function serve(t: TestContext, options: { readonly staticDirectory?: strin
       watch: { debounceMs: 50 }, limits: { maxUploadBytes: 8192, requestTimeoutMs: 5000, maxWordTimingBytes: 1048576, maxStoryMapBytes: 65536, maxSceneDescriptionsBytes: 65536 }, chunking: { pauseBreakMs: 600, minSentenceBreakMs: 0 } } };
   const library = await Effect.runPromise(loadEditorLibrary({ storiesDirectory: story.root, settings }).pipe(Effect.provide(NodeServices.layer)));
   const { ctx } = await Effect.runPromise(library.open("pilot").pipe(Effect.provide(NodeServices.layer)));
-  const layer = HttpRouter.serve(makeEditorRoutes(library, { producer: { name: "editor", version: "test" }, ...(options.staticDirectory !== undefined ? { staticDirectory: options.staticDirectory } : {}) }), { disableLogger: true, disableListenLog: true })
+  const layer = HttpRouter.serve(makeEditorRoutes(library, { producer: { name: "editor", version: "test" }, storyboard: options.storyboard ?? storyboardDefaults, ...(options.staticDirectory !== undefined ? { staticDirectory: options.staticDirectory } : {}) }), { disableLogger: true, disableListenLog: true })
     .pipe(Layer.provideMerge(NodeHttpServer.layerTest), Layer.provideMerge(NodeServices.layer));
   const run = <A, E>(effect: Effect.Effect<A, E, Layer.Success<typeof layer>>) => Effect.runPromise(effect.pipe(Effect.provide(layer)));
   const clip = ctx.clip;
@@ -500,4 +501,195 @@ test("a story manifest's chunking.minSentenceBreakMs overrides the config defaul
   const s = await serve(t, { manifestPatch: { chunking: { minSentenceBreakMs: 150 } } });
   const body = await s.run(Effect.gen(function* () { return yield* bodyJson(yield* get("/api/stories/pilot/story")); }));
   assert.equal(body["chunking"].minSentenceBreakMs, 150);
+});
+
+/**
+ * The fake renderers: one executable Node script made once for this file, since macOS scans every new executable on its first run (about a
+ * second each, one at a time), which would slow every other test file's subprocesses. It plays codex when its first argument is `exec`, and
+ * the fallback otherwise. Each call appends its argv, stdin, and working directory to `<role>.calls.jsonl`, then runs the body the current
+ * test wrote to `<role>.js`, which sees `argv`, `stdin`, `home` ($CODEX_HOME), `fs`, `path`, and `PNG` (base64). Tests in one file run one
+ * at a time, so each test owns the fakes while it runs.
+ */
+let fakes: Promise<string> | undefined;
+after(async () => { if (fakes !== undefined) await rm(await fakes, { recursive: true, force: true }); });
+const fakeDirectory = () => fakes ??= (async () => {
+  const directory = await mkdtemp(join(tmpdir(), "storyboard-fake-"));
+  await writeFile(join(directory, "fake"), `#!/usr/bin/env node
+const fs = require("node:fs"); const path = require("node:path");
+const argv = process.argv.slice(2); const home = process.env.CODEX_HOME; const PNG = ${JSON.stringify(PNG.toString("base64"))};
+const role = argv[0] === "exec" ? "codex" : "qwen";
+let stdin = ""; process.stdin.on("data", d => { stdin += d; }); process.stdin.on("end", async () => {
+  fs.appendFileSync(path.join(__dirname, role + ".calls.jsonl"), JSON.stringify({ argv, stdin, cwd: process.cwd() }) + "\\n");
+  eval(fs.readFileSync(path.join(__dirname, role + ".js"), "utf8"));
+});
+`, { mode: 0o755 });
+  return directory;
+})();
+async function fakeCommand(role: "codex" | "qwen", body: string) {
+  const directory = await fakeDirectory();
+  await writeFile(join(directory, `${role}.js`), body);
+  await writeFile(join(directory, `${role}.calls.jsonl`), "");
+  const calls = async () => (await readFile(join(directory, `${role}.calls.jsonl`), "utf8")).split("\n").filter(Boolean).map(line => JSON.parse(line) as { argv: string[]; stdin: string; cwd: string });
+  return { path: join(directory, "fake"), calls };
+}
+/** codex exec that opens a thread, saves a PNG where Codex keeps generated images, and says done. */
+const CODEX_DRAWS = `console.log(JSON.stringify({ type: "thread.started", thread_id: "thread-1" }));
+  fs.mkdirSync(path.join(home, "generated_images", "thread-1"), { recursive: true });
+  fs.writeFileSync(path.join(home, "generated_images", "thread-1", "exec-1.png"), Buffer.from(PNG, "base64"));
+  console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "done" } }));`;
+const CODEX_FAILS = `process.stderr.write("Error: not logged in. Run codex login.\\n"); process.exit(1);`;
+/** The fallback: writes the PNG named after --output. */
+const QWEN_DRAWS = `fs.writeFileSync(argv[argv.indexOf("--output") + 1], Buffer.from(PNG, "base64"));`;
+const storyboardSettings = (codex: string, fallback: string, home: string): StoryboardSettings => ({ ...storyboardDefaults,
+  codex: { ...storyboardDefaults.codex, executable: codex, home, drawTimeoutMs: 20_000, draftTimeoutMs: 20_000 },
+  fallback: { argv: [fallback, "--prompt-file", "{promptFile}", "--output", "{output}"], timeoutMs: 20_000 } });
+const DRAW_WORDS: ReadonlyArray<FixtureWord> = [{ value: "I", startSeconds: 3, endSeconds: 3.5, punctuation: " " }, { value: "wake", startSeconds: 3.5, endSeconds: 4, punctuation: " " }, { value: "up", startSeconds: 6, endSeconds: 7, punctuation: "." }];
+
+/** Declare a storyboard frame at a word the way the Storyboard section does: an image-less storyboard shot placed at the word, then the user's description. */
+const declareFrame = (anchorWordId: string, text: string) => Effect.gen(function* () {
+  const form = new FormData();
+  for (const [k, v] of Object.entries({ anchorWordId, trackId: "storyboard", mode: "graphic-illustration", label: "Storyboard frame" })) form.append(k, v);
+  const created = yield* HttpClient.execute(HttpClientRequest.post("/api/stories/pilot/shots").pipe(HttpClientRequest.bodyFormData(form)));
+  assert.equal(created.status, 201);
+  const take = yield* postJson("/api/stories/pilot/scene-descriptions", { anchorWordId, model: "user", text });
+  assert.equal(take.status, 201);
+  return yield* bodyJson(created);
+});
+const waitForJob = (id: string) => Effect.gen(function* () {
+  for (let i = 0; i < 200; i++) {
+    const { jobs } = decodeStrict(StoryboardJobsResponse, yield* bodyJson(yield* get("/api/stories/pilot/storyboard/jobs")));
+    const job = jobs.find(j => j.id === id);
+    if (job !== undefined && job.status !== "running") return job;
+    yield* Effect.sleep("50 millis");
+  }
+  throw new Error(`job ${id} never finished`);
+});
+
+test("a shot placed at a word records the anchor and starts at the word's effective start; an unknown word is a 400", async t => {
+  const s = await serve(t, { words: DRAW_WORDS });
+  await s.run(Effect.gen(function* () {
+    const record = yield* declareFrame("m2:e4", "A man wakes.");
+    assert.deepEqual([record["anchorWordId"], record["trackId"], record["startSample"]], ["m2:e4", "storyboard", 35]);
+    const form = new FormData();
+    for (const [k, v] of Object.entries({ anchorWordId: "nope", mode: "graphic-illustration" })) form.append(k, v);
+    const bad = yield* HttpClient.execute(HttpClientRequest.post("/api/stories/pilot/shots").pipe(HttpClientRequest.bodyFormData(form)));
+    assert.equal(bad.status, 400);
+    const timeline = decodeStrict(TimelineResponse, yield* bodyJson(yield* get("/api/stories/pilot/timeline")));
+    assert.deepEqual(timeline.stitched.filter(e => e.kind === "shot").map(e => [e.trackId, e.startSample, e.kind === "shot" ? e.anchorWordId : null]), [["storyboard", 35, "m2:e4"]]);
+  }));
+});
+
+test("POST /storyboard/draft asks codex for a description of the shot at a word, in an empty read-only turn without the user's config, and answers with the text, model, and prompt; a failure is 502 naming why", async t => {
+  const home = await mkdtemp(join(tmpdir(), "codex-home-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const codex = await fakeCommand("codex", `console.log(JSON.stringify({ type: "thread.started", thread_id: "t" })); console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "“A man jolts awake in a dark room.”" } }));`);
+  const s = await serve(t, { words: DRAW_WORDS, storyboard: storyboardSettings(codex.path, "/nonexistent/qwen", home) });
+  await s.run(Effect.gen(function* () {
+    const answered = yield* postJson("/api/stories/pilot/storyboard/draft", { anchorWordId: "m2:e4" });
+    assert.equal(answered.status, 200);
+    const draft = decodeStrict(StoryboardDraft, yield* bodyJson(answered));
+    assert.deepEqual([draft.anchorWordId, draft.text, draft.model], ["m2:e4", "A man jolts awake in a dark room.", "openai/gpt-6-astra"]);
+    assert.match(draft.prompt, /Story: Pilot\nPassage:\nUncorrected\. I \[\[wake\]\] up\.$/);
+    const [call] = yield* Effect.promise(codex.calls);
+    assert.equal(call?.stdin, draft.prompt);
+    for (const flag of ["exec", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "read-only", "--disable", "image_generation", "shell_tool", "browser_use", "computer_use", 'web_search="disabled"', "--json", "gpt-6-astra", "-"]) assert.ok(call?.argv.includes(flag), flag);
+    const workDirectory = call!.argv[call!.argv.indexOf("--cd") + 1]!;
+    assert.match(workDirectory, /animator-storyboard-draft-/);
+    assert.ok(call!.cwd.endsWith(workDirectory.replace(/^\/private/, "")), "codex runs in its own empty working directory");
+    assert.equal((yield* postJson("/api/stories/pilot/storyboard/draft", { anchorWordId: "gone" })).status, 400);
+    assert.equal((yield* postJson("/api/stories/pilot/storyboard/draft", { anchorWordId: "m2:e4", extra: 1 })).status, 400);
+  }));
+  const failing = await fakeCommand("codex", CODEX_FAILS);
+  const f = await serve(t, { words: DRAW_WORDS, storyboard: storyboardSettings(failing.path, "/nonexistent/qwen", home) });
+  await f.run(Effect.gen(function* () {
+    const failed = yield* postJson("/api/stories/pilot/storyboard/draft", { anchorWordId: "m2:e4" });
+    assert.equal(failed.status, 502);
+    const body = yield* bodyJson(failed);
+    assert.equal(body["code"], "DraftFailed");
+    assert.match(body["message"], /exited with code 1\)\. The Codex CLI is not logged in to ChatGPT; run `codex login`\. Error: not logged in/);
+  }));
+});
+
+test("POST /storyboard/draw draws the frame's newest description in the background through codex, and publishes a storyboard record at the word naming its renderer and prompt", async t => {
+  const home = await mkdtemp(join(tmpdir(), "codex-home-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const codex = await fakeCommand("codex", CODEX_DRAWS);
+  const qwen = await fakeCommand("qwen", QWEN_DRAWS);
+  const s = await serve(t, { words: DRAW_WORDS, storyboard: storyboardSettings(codex.path, qwen.path, home) });
+  await s.run(Effect.gen(function* () {
+    const undeclared = yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e4" });
+    assert.equal(undeclared.status, 400);
+    assert.match((yield* bodyJson(undeclared))["message"], /No storyboard frame starts at m2:e4/);
+    yield* declareFrame("m2:e4", "A man wakes in the dark.");
+    assert.equal((yield* postJson("/api/stories/pilot/scene-descriptions", { anchorWordId: "m2:e4", model: "user", text: "A man sits up in bed, gasping." })).status, 201);
+    const started = yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e4" });
+    assert.equal(started.status, 202);
+    const [job] = decodeStrict(StoryboardJobsResponse, yield* bodyJson(started)).jobs;
+    assert.equal(job?.anchorWordId, "m2:e4");
+    const done = yield* waitForJob(job!.id);
+    assert.equal(done.status, "done", done.error);
+    assert.deepEqual(done.attempts.map(a => [a.renderer, a.error ?? null]), [["codex-chatgpt", null]]);
+    const timeline = decodeStrict(TimelineResponse, yield* bodyJson(yield* get("/api/stories/pilot/timeline")));
+    const drawn = timeline.records.find(r => r.id === done.recordId)!;
+    assert.deepEqual([drawn.trackId, drawn.anchorWordId, drawn.startSample, drawn.renderer, drawn.label, drawn.imagePath], ["storyboard", "m2:e4", 35, "codex-chatgpt", "Storyboard frame", "image.png"]);
+    assert.match(drawn.prompt ?? "", /^Use your image generation tool[\s\S]*The frame shows: A man sits up in bed, gasping\.[\s\S]*from "Pilot" \(context only; do not write it in the picture\): wake up\.$/);
+    assert.match(drawn.notes ?? "", /through the Codex CLI under the ChatGPT login \(model gpt-6-astra, thread thread-1\)\. \d+\.\d s, 1x1\.$/);
+    const shown = timeline.stitched.find(e => e.kind === "shot" && e.trackId === "storyboard");
+    assert.equal(shown?.kind === "shot" ? shown.id : null, drawn.id, "the newest drawing is the frame's shot");
+    const [call] = yield* Effect.promise(codex.calls);
+    assert.equal(call?.stdin, drawn.prompt);
+    assert.ok(call?.argv.includes("--enable") && call.argv.includes("image_generation"));
+    assert.deepEqual(yield* Effect.promise(qwen.calls), [], "the fallback is not tried when the primary draws");
+  }));
+});
+
+test("POST /storyboard/draw falls back to local Qwen when codex fails, records which renderer drew it and why, and reports both failing as a failed job; a frame being drawn refuses a second draw", async t => {
+  const home = await mkdtemp(join(tmpdir(), "codex-home-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const codex = await fakeCommand("codex", CODEX_FAILS);
+  const qwen = await fakeCommand("qwen", `setTimeout(() => { ${QWEN_DRAWS} }, 300);`);
+  const s = await serve(t, { words: DRAW_WORDS, storyboard: storyboardSettings(codex.path, qwen.path, home) });
+  await s.run(Effect.gen(function* () {
+    yield* declareFrame("m2:e2", "A man lies still.");
+    const started = decodeStrict(StoryboardJobsResponse, yield* bodyJson(yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e2" }))).jobs[0]!;
+    const again = yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e2" });
+    assert.equal(again.status, 409);
+    assert.equal((yield* bodyJson(again))["code"], "JobRunning");
+    const done = yield* waitForJob(started.id);
+    assert.equal(done.status, "done", done.error);
+    assert.deepEqual(done.attempts.map(a => [a.renderer, /not logged in/.test(a.error ?? "")]), [["codex-chatgpt", true], ["qwen-image-2.1", false]]);
+    const record = decodeStrict(TimelineResponse, yield* bodyJson(yield* get("/api/stories/pilot/timeline"))).records.find(r => r.id === done.recordId)!;
+    assert.equal(record.renderer, "qwen-image-2.1");
+    assert.match(record.prompt ?? "", /^A single storyboard frame for an animated film, drawn by hand/);
+    assert.match(record.notes ?? "", /Drawn by local Qwen Image 2\.1: .*\. \d+\.\d s, 1x1\. Drawn after the primary renderer failed: .*not logged in/);
+    const [call] = yield* Effect.promise(qwen.calls);
+    const promptFile = call!.argv[call!.argv.indexOf("--prompt-file") + 1]!;
+    assert.match(promptFile, /prompt\.txt$/);
+  }));
+  const broken = await serve(t, { words: DRAW_WORDS, storyboard: storyboardSettings(codex.path, "/nonexistent/mflux-generate-qwen-2.1", home) });
+  await broken.run(Effect.gen(function* () {
+    yield* declareFrame("m2:e2", "A man lies still.");
+    const started = decodeStrict(StoryboardJobsResponse, yield* bodyJson(yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e2" }))).jobs[0]!;
+    const failed = yield* waitForJob(started.id);
+    assert.equal(failed.status, "failed");
+    assert.match(failed.error ?? "", /Local Qwen Image 2\.1 could not start \/nonexistent\/mflux-generate-qwen-2\.1; is it installed\?/);
+    assert.equal(failed.recordId, undefined);
+    assert.equal(decodeStrict(TimelineResponse, yield* bodyJson(yield* get("/api/stories/pilot/timeline"))).records.filter(r => r.imagePath !== undefined).length, 0);
+  }));
+});
+
+test("a codex turn that outlives its timeout is stopped and the frame falls back", async t => {
+  const home = await mkdtemp(join(tmpdir(), "codex-home-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const codex = await fakeCommand("codex", `setTimeout(() => {}, 60_000);`);
+  const qwen = await fakeCommand("qwen", QWEN_DRAWS);
+  const settings = storyboardSettings(codex.path, qwen.path, home);
+  const s = await serve(t, { words: DRAW_WORDS, storyboard: { ...settings, codex: { ...settings.codex, drawTimeoutMs: 500 } } });
+  await s.run(Effect.gen(function* () {
+    yield* declareFrame("m2:e2", "A man lies still.");
+    const started = decodeStrict(StoryboardJobsResponse, yield* bodyJson(yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e2" }))).jobs[0]!;
+    const done = yield* waitForJob(started.id);
+    assert.equal(done.status, "done", done.error);
+    assert.deepEqual(done.attempts.map(a => [a.renderer, a.error ?? null]), [["codex-chatgpt", "ChatGPT through the Codex CLI timed out after 1 s."], ["qwen-image-2.1", null]]);
+  }));
 });

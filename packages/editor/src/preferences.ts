@@ -46,11 +46,11 @@ const LANES_FLOOR = 320;
 /** The tallest a resizable section may be in a window of `viewportHeight` pixels: it always leaves the lanes' floor, and never less than the minimum. */
 export const sectionMaxHeight = (viewportHeight: number): number => Math.max(SECTION_MIN_HEIGHT, Math.floor(viewportHeight - LANES_FLOOR));
 
-/** The heights the Video, Scenes, and Cast & world sections open at before anyone drags them: shares of the window, held within the same bounds. */
+/** The heights the Video, Storyboard, Scenes, and Cast & world sections open at before anyone drags them: shares of the window, held within the same bounds. */
 export const defaultSectionHeights = (viewportHeight: number) => {
   const max = sectionMaxHeight(viewportHeight);
   const share = (fraction: number) => clampSectionHeight(viewportHeight * fraction, max);
-  return { video: share(0.42), scenes: share(0.38), cast: share(0.38) };
+  return { video: share(0.42), storyboard: share(0.42), scenes: share(0.38), cast: share(0.38) };
 };
 
 /** A section height in whole pixels held within [SECTION_MIN_HEIGHT, max]. */

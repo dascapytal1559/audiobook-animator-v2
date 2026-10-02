@@ -105,3 +105,22 @@ test("declared shots are the distinct anchor words of the shown shots across tra
   assert.deepEqual(declaredShots(stitched), [{ anchorWordId: "w0", startSample: 100 }, { anchorWordId: "w5", startSample: 30000 }, { anchorWordId: "w12", startSample: 70000 }]);
   assert.deepEqual(declaredShots([]), []);
 });
+
+test("a record's own anchor places its shot at the word's effective start until a decision anchors it elsewhere or places it by sample; a word the transcript lacks falls back and is reported unresolved", () => {
+  const at = "2026-01-01T00:00:00Z";
+  const placed: ShotRecord = { ...record("aaa", 20000, at), anchorWordId: "w3", renderer: "codex-chatgpt" };
+  const starts = new Map([["w3", 24000], ["w9", 60000]]);
+  const own = mergeTimeline([placed], { settings, shots: {} }, clip.sampleCount, starts);
+  assert.deepEqual(own.stitched.map(e => [e.kind, e.startSample]), [["gap", 0], ["shot", 24000]]);
+  assert.equal(own.candidates[0]?.shots[0]?.anchorWordId, "w3");
+  assert.equal(own.candidates[0]?.shots[0]?.renderer, "codex-chatgpt");
+  assert.deepEqual([own.unresolvedAnchors, own.problems], [[], []]);
+  assert.deepEqual(declaredShots(own.stitched), [{ anchorWordId: "w3", startSample: 24000 }]);
+  const moved = mergeTimeline([placed], { settings, shots: { aaa: { anchorWordId: "w9" } } }, clip.sampleCount, starts);
+  assert.deepEqual([moved.stitched[1]?.startSample, moved.candidates[0]?.shots[0]?.anchorWordId], [60000, "w9"]);
+  const detached = mergeTimeline([placed], { settings, shots: { aaa: { startSample: 20000 } } }, clip.sampleCount, starts);
+  assert.deepEqual([detached.stitched[1]?.startSample, detached.candidates[0]?.shots[0]?.anchorWordId], [20000, undefined]);
+  assert.deepEqual(declaredShots(detached.stitched), []);
+  const lost = mergeTimeline([{ ...placed, anchorWordId: "gone" }], { settings, shots: {} }, clip.sampleCount, starts);
+  assert.deepEqual([lost.stitched[1]?.startSample, lost.unresolvedAnchors, lost.problems], [20000, ["aaa"], []]);
+});

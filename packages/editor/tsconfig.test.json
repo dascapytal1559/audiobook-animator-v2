@@ -31,6 +31,8 @@
     "src/view.ts",
     "src/view.test.ts",
     "src/story-map-view.ts",
-    "src/story-map-view.test.ts"
+    "src/story-map-view.test.ts",
+    "src/storyboard-view.ts",
+    "src/storyboard-view.test.ts"
   ]
 }

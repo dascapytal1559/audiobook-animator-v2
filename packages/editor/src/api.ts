@@ -1,15 +1,17 @@
 /** Typed wrappers over the editor server API. Every response is decoded with the shared domain schema before the client trusts it (Q9). */
 import { useEffect } from "react";
-import { AlignResponse, ApiErrorBody, decodeStrict, PeaksFile, SceneDescriptionsResponse, ServedShotRecord, SpeechFile, StoriesResponse, StoryMapResponse, StoryResponse, TimelineResponse, type AlignRequest, type DecisionsBody, type ShotMode, type WordTimingBody } from "@animator/domain";
+import { AlignResponse, ApiErrorBody, decodeStrict, PeaksFile, SceneDescriptionsResponse, SceneDescriptionTake, ServedShotRecord, SpeechFile, StoriesResponse, StoryboardDraft, StoryboardJobsResponse, StoryMapResponse, StoryResponse, TimelineResponse, type AlignRequest, type DecisionsBody, type SceneDescriptionTakeBody, type ShotMode, type WordTimingBody } from "@animator/domain";
 export type {
   AlignReport, AlignRequest, AlignResponse, AlignRun, CandidateGroup, Chunk, ClipIdentity, Decisions, DecisionsBody, EffectiveShot, ShotDecision, ShotMode,
   StitchedEntry, StoriesResponse, StoryChunking, StoryResponse, StorySummary, TimelineResponse, TimelineSettings, TimingMeasure, TimingSummary, WordTimingBody,
   ResolvedSection, ResolvedStoryMap, ResolvedSubject, SectionKind, ServedSubject, StoryMapResponse, SubjectKind, SceneDescriptionsResponse, SceneDescriptionTake,
   ServedShotRecord as ShotRecord, TimingEntry as Span, StoryWord as Word, PeaksFile as PeaksResponse, SpeechFile as SpeechResponse,
+  SceneDescriptionTakeBody, StoryboardDraft, StoryboardFrame, StoryboardJob, StoryboardJobsResponse, StoryboardRenderer,
 } from "@animator/domain";
 export { SHOT_MODES } from "@animator/domain";
 
-export type NewShotRequest = { startSample: number; mode: ShotMode; trackId?: string; label?: string; prompt?: string; notes?: string; image?: File };
+/** A new shot starts at `startSample`, or at `anchorWordId`'s effective start, recording the word as its anchor (A66). */
+export type NewShotRequest = { startSample?: number; anchorWordId?: string; mode: ShotMode; trackId?: string; label?: string; prompt?: string; notes?: string; image?: File };
 
 export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); this.name = "ApiError"; }
@@ -46,14 +48,23 @@ export function storyApi(storyId: string) {
     getPeaks: () => request(PeaksFile, `${base}/peaks`),
     getSpeech: () => request(SpeechFile, `${base}/speech`),
     getMap: () => request(StoryMapResponse, `${base}/map`),
-    /** Every description take recorded for the story (A63, A65); the Scenes section shows those of the shots on screen in the shown scene. Writers append through POST on the same path; the browser never does. */
+    /** Every description take recorded for the story (A63, A65); the Scenes section shows those of the shots on screen in the shown scene. */
     getSceneDescriptions: () => request(SceneDescriptionsResponse, `${base}/scene-descriptions`),
+    /** Append one description take; the Storyboard section records the user's description of a frame this way (A66). */
+    postSceneDescription: (body: SceneDescriptionTakeBody) => request(SceneDescriptionTake, `${base}/scene-descriptions`, jsonInit("POST", body)),
+    /** The storyboard's drawings in the background (A66), oldest first. */
+    getStoryboardJobs: () => request(StoryboardJobsResponse, `${base}/storyboard/jobs`),
+    /** A model's proposed description for a shot beginning at the word; nothing is recorded. */
+    postStoryboardDraft: (anchorWordId: string) => request(StoryboardDraft, `${base}/storyboard/draft`, jsonInit("POST", { anchorWordId })),
+    /** Start drawing the frame at the word from its newest description; answers with the one job started. */
+    postStoryboardDraw: (anchorWordId: string) => request(StoryboardJobsResponse, `${base}/storyboard/draw`, jsonInit("POST", { anchorWordId })),
     putWordTiming: (body: WordTimingBody) => request(StoryResponse, `${base}/word-timing`, jsonInit("PUT", body)),
     postAlign: (body: AlignRequest) => request(AlignResponse, `${base}/word-timing/align`, jsonInit("POST", body)),
     putDecisions: (body: DecisionsBody) => request(TimelineResponse, `${base}/decisions`, jsonInit("PUT", body)),
     postShot(shot: NewShotRequest) {
       const form = new FormData();
-      form.set("startSample", String(shot.startSample));
+      if (shot.startSample !== undefined) form.set("startSample", String(shot.startSample));
+      if (shot.anchorWordId !== undefined) form.set("anchorWordId", shot.anchorWordId);
       form.set("mode", shot.mode);
       if (shot.trackId !== undefined) form.set("trackId", shot.trackId);
       if (shot.label !== undefined) form.set("label", shot.label);

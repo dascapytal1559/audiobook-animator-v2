@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ApiError, storyApi, useServerEvents, type PeaksResponse, type SpeechResponse, type StitchedEntry, type StorySummary, type Word } from "./api.js";
-import { clampSample, entryAt, mergeTimeline, millisecondsToSamples, retimeChunks, secondsToSamples, subtitleDefaults, timelineForTrack } from "@animator/domain";
+import { clampSample, entryAt, mergeTimeline, millisecondsToSamples, retimeChunks, secondsToSamples, storyboardFrames, subtitleDefaults, timelineForTrack } from "@animator/domain";
 import { referenceChunks } from "./rows.js";
 import { planTick } from "./playback.js";
 import { selectItem, selectedRange, type SelectionItem } from "./selection.js";
@@ -9,6 +9,7 @@ import { Cast } from "./Cast.js";
 import { Panel } from "./Panel.js";
 import { Preview } from "./Preview.js";
 import { Scenes } from "./Scenes.js";
+import { Storyboard } from "./Storyboard.js";
 import { StoryPicker } from "./StoryPicker.js";
 import { decisionsForView, initialState, isDecisionsDirty, isDirty, isTimingDirty, reduce, wordsForView, workingBounds } from "./state.js";
 import { booleanFlags, clampSectionHeight, defaultSectionHeights, renamedField, sectionHeights, sectionMaxHeight, useViewPreference } from "./preferences.js";
@@ -22,9 +23,9 @@ import { viewFromSearch } from "./view.js";
 const SUBTITLES_KEY = "editor.subtitles";
 const SUBTITLE_TOGGLE_DEFAULTS: SubtitleToggles = { visible: subtitleDefaults.visible, highlight: subtitleDefaults.highlight };
 const parseSubtitles = booleanFlags(SUBTITLE_TOGGLE_DEFAULTS);
-/** Which of the page's collapsible sections are open (A63): a browser view preference like the subtitle toggles. Cast & world starts minimized: it is there to be tucked away. */
+/** Which of the page's collapsible sections are open (A63, A66): a browser view preference like the subtitle toggles. Cast & world starts minimized: it is there to be tucked away. */
 const PANELS_KEY = "editor.panels";
-const PANEL_DEFAULTS = { video: true, scenes: true, cast: false };
+const PANEL_DEFAULTS = { video: true, storyboard: true, scenes: true, cast: false };
 /** A layout saved while the Scenes section was still called World map keeps its place under the new name. */
 const fromWorldMap = renamedField("worldMap", "scenes");
 const parsePanels = (stored: unknown) => booleanFlags(PANEL_DEFAULTS)(fromWorldMap(stored));
@@ -119,6 +120,8 @@ export function App({ storyId, stories, onSelectStory }: Props) {
     return next ?? null;
   }, [activeTimeline.stitched, currentEntry]);
   const currentWordId = useMemo(() => wordAt(sortedWords, state.playhead)?.id ?? null, [sortedWords, state.playhead]);
+  // The storyboard (A66) reads every track's timeline as the lanes show it, pending decisions included.
+  const frames = useMemo(() => storyboardFrames(merged.stitched, state.takes), [merged.stitched, state.takes]);
   const mergedRef = useRef(activeTimeline);
   mergedRef.current = activeTimeline;
 
@@ -159,6 +162,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   // Live updates: a refetch never touches the audio element or an in-progress drag (the reducer keeps the drag and local edits).
   // The planning directory holds the timing overlays too, so the story is refetched with the timeline.
   const onTimelineChanged = useCallback(() => { void loadTimeline(); void loadStory(); void loadMap(); void loadDescriptions(); }, [loadTimeline, loadStory, loadMap, loadDescriptions]);
+  const onStoryboardChanged = useCallback(() => { void loadTimeline(); void loadDescriptions(); }, [loadTimeline, loadDescriptions]);
   const onStatus = useCallback((ok: boolean) => setConnected(ok), []);
   useServerEvents(api.eventsUrl, { onTimelineChanged, onStatus });
 
@@ -370,6 +374,9 @@ export function App({ storyId, stories, onSelectStory }: Props) {
         <section className="stage">
           <Panel id="video" title="Video" open={panels.video} onToggle={() => togglePanel("video")} height={heights.video} onResize={h => resizePanel("video", h)}>
             <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} subtitles={subtitles} />
+          </Panel>
+          <Panel id="storyboard" title="Storyboard" open={panels.storyboard} onToggle={() => togglePanel("storyboard")} height={heights.storyboard} onResize={h => resizePanel("storyboard", h)}>
+            {state.story && <Storyboard api={api} frames={frames} words={sortedWords} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} tolerance={tolerance} onSeek={onSeek} onChanged={onStoryboardChanged} />}
           </Panel>
           <Panel id="scenes" title="Scenes" open={panels.scenes} onToggle={() => togglePanel("scenes")} height={heights.scenes} onResize={h => resizePanel("scenes", h)}>
             {state.story && <Scenes view={mapView} words={words} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} stitched={merged.stitched} tolerance={tolerance} takes={state.takes} selectedSubjectId={selectedSubjectId} onSelectSubject={selectSubject} onSeek={onSeek} />}

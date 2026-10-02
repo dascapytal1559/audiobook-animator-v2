@@ -9,8 +9,8 @@ test("a section's ceiling leaves the lanes their floor and never drops under the
 });
 
 test("the opening heights are shares of the window, held under the ceiling on a short window", () => {
-  assert.deepEqual(defaultSectionHeights(1000), { video: 420, scenes: 380, cast: 380 });
-  assert.deepEqual(defaultSectionHeights(500), { video: 180, scenes: 180, cast: 180 });
+  assert.deepEqual(defaultSectionHeights(1000), { video: 420, storyboard: 420, scenes: 380, cast: 380 });
+  assert.deepEqual(defaultSectionHeights(500), { video: 180, storyboard: 180, scenes: 180, cast: 180 });
 });
 
 test("a dragged height is held between the minimum and the ceiling, in whole pixels", () => {

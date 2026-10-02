@@ -173,11 +173,12 @@ export function reduce(state: EditorState, action: Action): EditorState {
       return edit(state, shots);
     }
     case "shot-moved": {
-      // Landing on a word anchors the shot to it (A51); landing anywhere else writes a plain sample position and drops any anchor.
+      // Landing on a word anchors the shot to it (A51); landing anywhere else writes a plain sample position and drops any anchor, the
+      // record's own included (A66), so a shot placed at a word keeps a written start when it is dragged off it.
       const record = state.records.find(r => r.id === action.id);
       const patch: DecisionPatch = action.anchorWordId !== undefined
-        ? { anchorWordId: action.anchorWordId, startSample: undefined }
-        : { anchorWordId: undefined, startSample: record !== undefined && record.startSample === action.startSample ? undefined : action.startSample };
+        ? { anchorWordId: action.anchorWordId === record?.anchorWordId ? undefined : action.anchorWordId, startSample: undefined }
+        : { anchorWordId: undefined, startSample: record !== undefined && record.startSample === action.startSample && record.anchorWordId === undefined ? undefined : action.startSample };
       return edit(state, { [action.id]: applyPatch(state.decisions.shots[action.id] ?? {}, patch) });
     }
     case "aspect-set": {
