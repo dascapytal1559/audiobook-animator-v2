@@ -330,7 +330,7 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
   }))));
   const apiFallback = HttpRouter.add("*", "/api/*", errorJson(404, "NotFound", "No such API route."));
   const root = options.staticDirectory === undefined
-    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`animator-v2 editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /map /map/subjects/:subjectId/images/:index /scene-descriptions /storyboard/jobs /storyboard/draft /storyboard/draw /audio /peaks /speech /events\n`))
+    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`Audiobook Animator editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /map /map/subjects/:subjectId/images/:index /scene-descriptions /storyboard/jobs /storyboard/draft /storyboard/draw /audio /peaks /speech /events\n`))
     : HttpStaticServer.layer({ root: resolve(options.staticDirectory), index: "index.html", spa: true, cacheControl: "no-cache" });
   return Layer.mergeAll(stories, story, timelineRoute, decisions, wordTiming, align, speech, shots, image, map, mapImage, sceneDescriptions, sceneDescriptionTake, storyboardJobs, storyboardDraft, storyboardDraw, audio, peaks, events, apiFallback, root);
 }

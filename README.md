@@ -1,6 +1,6 @@
-# Animator v2
+# Audiobook Animator
 
-Animator turns audiobooks into movies while keeping their original narration. The first visual milestone is a moodboard film over one selected story; the final direction is animation. The pilot material is two Ted Chiang collections split into 17 stories: The Great Silence carries the pilot's storyboard, and Tower of Babylon has a GPT working transcript. Movie production is still to be built.
+Audiobook Animator turns audiobooks into movies while keeping their original narration. The first visual milestone is a moodboard film over one selected story; the final direction is animation. The pilot material is two Ted Chiang collections split into 17 stories: The Great Silence carries the pilot's storyboard, and Tower of Babylon has a GPT working transcript. Movie production is still to be built.
 
 ## What this repository is
 
@@ -264,3 +264,7 @@ Edit a story's synopsis in its `story.json`, then `animator inventory publish` r
 ## Known dependency details
 
 Effect v4 is a release candidate. Its CLI declaration files contain a broken reference to an internal declaration, so `skipLibCheck` is explicitly enabled while application code remains strictly checked. No dependency patch is applied. The pinned Redis client satisfies a required peer dependency of `@effect/platform-node`; nothing here uses Redis. Boolean CLI flags carry an explicit default because this CLI version otherwise treats them as required.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

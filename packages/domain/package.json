@@ -2,7 +2,7 @@
   "name": "@animator/domain",
   "version": "0.1.0",
   "private": true,
-  "description": "Shapes and pure rules shared by the animator-v2 server, CLIs, and browser editor. No Node APIs, no I/O.",
+  "description": "Shapes and pure rules shared by the Audiobook Animator server, CLIs, and browser editor. No Node APIs, no I/O.",
   "type": "module",
   "engines": {
     "node": "24.20.0",

@@ -1,7 +1,8 @@
 {
-  "name": "animator-v2",
+  "name": "audiobook-animator",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "An audiobook-to-movie pipeline.",
   "type": "module",
   "packageManager": "pnpm@11.25.0",
