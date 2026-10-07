@@ -1,19 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ChunkElement } from "@animator/domain";
-import { Effect } from "effect";
-import { codexDrawInstruction, codexReason, draftPrompt, excerpt, placeShots, planPrompt, pngSize, readCodexEvents, readPlanReply, sketchPrompt, StoryboardJobBook } from "./index.js";
+import { mkdtemp, mkdir, readdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { ChunkElement, ClipIdentity } from "@animator/domain";
+import { NodeServices } from "@effect/platform-node";
+import { Effect, type FileSystem } from "effect";
+import { codexDrawInstruction, codexReason, draftPrompt, excerpt, listDraftDrawings, placeShots, planPrompt, pngSize, readCodexEvents, readDraftDrawing, readPlanReply, removeDraftDrawings, sketchPrompt, StoryboardJobBook, writeDraftDrawing } from "./index.js";
 
 const word = (id: string, value: string): ChunkElement => ({ kind: "word", id, value, startSample: 0, endSample: 1 });
 const space = (value = " "): ChunkElement => ({ kind: "punctuation", value });
 const elements: ReadonlyArray<ChunkElement> = [word("w0", "I"), space(), word("w1", "wake"), space(), word("w2", "up"), space(", "), word("w3", "screaming"), space(". "), word("w4", "My"), space(), word("w5", "heart"), space(".")];
 
-test("an excerpt quotes the narration as written around a word, marking it when asked, and is null for a word the transcript lacks", () => {
-  assert.equal(excerpt(elements, "w3", 2, 3, true), "wake up, [[screaming]]. My heart");
-  assert.equal(excerpt(elements, "w3", 0, 2, false), "screaming. My");
-  assert.equal(excerpt(elements, "w0", 5, 1, true), "[[I]]");
-  assert.equal(excerpt(elements, "w5", 1, 9, false), "My heart.");
-  assert.equal(excerpt(elements, "gone", 1, 1, true), null);
+test("an excerpt quotes the narration as written around a word, marking it or a span from it when asked, and is null for a word the transcript lacks", () => {
+  assert.equal(excerpt(elements, "w3", 2, 3, "w3"), "wake up, [[screaming]]. My heart");
+  assert.equal(excerpt(elements, "w3", 0, 2, null), "screaming. My");
+  assert.equal(excerpt(elements, "w0", 5, 1, "w0"), "[[I]]");
+  assert.equal(excerpt(elements, "w5", 1, 9, null), "My heart.");
+  assert.equal(excerpt(elements, "w1", 1, 4, "w3"), "I [[wake up, screaming]]. My", "a span is marked from its first word through its last");
+  assert.equal(excerpt(elements, "w3", 0, 2, "w1"), "screaming. My", "an end before the word marks nothing");
+  assert.equal(excerpt(elements, "gone", 1, 1, "gone"), null);
+});
+
+test("a draft in the drafting space revises the current description and follows the director's request, quoting the shot's narration", () => {
+  const plain = draftPrompt({ title: "Understand", excerpt: "I [[wake up]]." });
+  assert.match(plain, /the frame that covers the narration marked \[\[like this\]\]/);
+  assert.doesNotMatch(plain, /described now|director/);
+  const revised = draftPrompt({ title: "Understand", excerpt: "I [[wake up]].", current: "A man in bed.", request: " make it a close-up on his hands " });
+  assert.match(revised, /The shot is described now as: "A man in bed\."\nThe director asks for this: "make it a close-up on his hands"\. Follow it, and keep what it does not change from the description now\./);
+  assert.match(draftPrompt({ title: "U", excerpt: "x", request: "she's older" }), /The director asks for this: "she's older"\. Follow it\.\n/);
+  assert.match(draftPrompt({ title: "U", excerpt: "x", current: "  ", request: "" }), /marked \[\[like this\]\] in the passage below, for as long as the narration stays on that moment\.\nWrite 30 to 60 words/);
 });
 
 test("the prompts carry the story, the description, and the excerpt, ask for a plain black line drawing in 16:9 with no colour, shading, or lettering, and forbid commands and text in the picture", () => {
@@ -90,17 +106,18 @@ test("pngSize reads the header and refuses anything else", () => {
 test("the job book queues each drawing, runs a few at a time, and records each renderer's try, then the record or the reason, per story", async () => {
   const book = new StoryboardJobBook(1);
   const gate: Array<() => void> = [];
-  const first = book.queue("s", "w3", report => Effect.gen(function* () {
+  const first = book.queue("s", "frame", "w3", report => Effect.gen(function* () {
     report.onAttempt("codex-chatgpt");
     report.onAttemptFailed("codex-chatgpt", "not logged in");
     report.onAttempt("qwen-image-2.1");
     yield* Effect.promise(() => new Promise<void>(resolve => gate.push(resolve)));
     return { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV" };
   }), "01ARZ3NDEKTSV4RRFFQ69G5FAW");
-  const second = book.queue("s", "w5", () => Effect.fail({ message: "both failed" }));
+  const second = book.queue("s", "draft", "w5", () => Effect.fail({ message: "both failed" }));
   assert.deepEqual([first.job.status, second.job.status, first.job.firstPassId, second.job.firstPassId], ["queued", "queued", "01ARZ3NDEKTSV4RRFFQ69G5FAW", undefined]);
-  assert.equal(book.pending("s", "w3"), true);
-  assert.equal(book.pending("other", "w3"), false);
+  assert.equal(book.pending("s", "w3", "frame"), true);
+  assert.equal(book.pending("s", "w3", "draft"), false, "a frame drawing and a draft drawing of one shot are pending apart");
+  assert.equal(book.pending("other", "w3", "frame"), false);
   const runs = Effect.runPromise(Effect.all([first.run, second.run], { concurrency: "unbounded" }));
   while (gate.length === 0) await new Promise(resolve => setTimeout(resolve, 5));
   assert.deepEqual(book.list("s").map(j => j.status), ["running", "queued"], "one turn: the second waits while the first draws");
@@ -111,8 +128,10 @@ test("the job book queues each drawing, runs a few at a time, and records each r
   assert.deepEqual(done.attempts.map(a => [a.renderer, a.error ?? null, a.finishedAt !== undefined]), [["codex-chatgpt", "not logged in", true], ["qwen-image-2.1", null, true]]);
   assert.deepEqual([failed.status, failed.error], ["failed", "both failed"]);
   assert.deepEqual(book.list("s").map(j => j.status), ["done", "failed"]);
-  assert.equal(book.pending("s", "w3"), false);
-  const defect = await Effect.runPromise(book.queue("s", "w7", () => Effect.die("boom")).run);
+  assert.equal(book.pending("s", "w3", "frame"), false);
+  const draft = await Effect.runPromise(book.queue("s", "draft", "w9", () => Effect.succeed({ id: "01ARZ3NDEKTSV4RRFFQ69G5FAX" })).run);
+  assert.deepEqual([draft.kind, draft.draftId, draft.recordId], ["draft", "01ARZ3NDEKTSV4RRFFQ69G5FAX", undefined], "a draft drawing names the draft it wrote, not a record");
+  const defect = await Effect.runPromise(book.queue("s", "frame", "w7", () => Effect.die("boom")).run);
   assert.match(defect.error ?? "", /^The drawing stopped unexpectedly: boom/);
   assert.deepEqual(book.list("nobody"), []);
 });
@@ -122,4 +141,28 @@ test("a failed codex turn is reported in its own words, led by the fix when it i
   assert.equal(codexReason(""), "It gave no reason.");
   assert.match(codexReason("ERROR codex_api: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses"), /^The Codex CLI is not logged in to ChatGPT; run `codex login`\. ERROR codex_api/);
   assert.match(codexReason("x".repeat(2000)), /^…x{600}$/);
+});
+
+const clip: ClipIdentity = { bookId: "b", storyId: "s", audioSha256: "a".repeat(64), transcriptSha256: "b".repeat(64), sampleRateHz: 48000, sampleCount: 96000 };
+test("a draft drawing is published with a copy of its image, replaces the shot's earlier one, is read back by id, and is removed on discard; a draft of another clip fails the listing", async () => {
+  const story = await mkdtemp(join(tmpdir(), "storyboard-drafts-"));
+  const image = join(story, "..", `${story.split("/").at(-1)}-drawn.png`);
+  await writeFile(image, Buffer.from("png bytes"));
+  const target = { storyDirectory: story, clip, maxImageBytes: 1024 };
+  const run = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) => Effect.runPromise(effect.pipe(Effect.provide(NodeServices.layer)));
+  const fields = { startWordId: "w3", description: "A man in bed.", renderer: "codex-chatgpt" as const, prompt: "p", notes: "n", imageSourcePath: image, producer: { name: "t", version: "1" } };
+  assert.deepEqual(await run(listDraftDrawings(target)), []);
+  const first = await run(writeDraftDrawing(target, { ...fields, anchorWordId: "w3" }));
+  const other = await run(writeDraftDrawing(target, { ...fields, anchorWordId: "w9" }));
+  const second = await run(writeDraftDrawing(target, { ...fields, anchorWordId: "w3", description: "Closer." }));
+  assert.deepEqual((await run(listDraftDrawings(target))).map(d => [d.anchorWordId, d.description]), [["w9", "A man in bed."], ["w3", "Closer."]], "the newer drawing replaced the shot's earlier one");
+  assert.deepEqual([second.kind, second.imagePath, second.clip.storyId], ["storyboard-draft-drawing", "image.png", "s"]);
+  assert.deepEqual((await readdir(join(story, "storyboard-drafts"))).sort(), [other.id, second.id].sort());
+  assert.equal((await run(readDraftDrawing(target, second.id))).id, second.id);
+  await assert.rejects(run(readDraftDrawing(target, first.id)), /No draft drawing .* saved or discarded already/);
+  assert.deepEqual(await run(removeDraftDrawings(target, "w3")), [second.id]);
+  assert.deepEqual((await run(listDraftDrawings(target))).map(d => d.anchorWordId), ["w9"]);
+  await mkdir(join(story, "storyboard-drafts", "01ARZ3NDEKTSV4RRFFQ69G5FAZ"));
+  await writeFile(join(story, "storyboard-drafts", "01ARZ3NDEKTSV4RRFFQ69G5FAZ", "draft.json"), JSON.stringify({ ...other, id: "01ARZ3NDEKTSV4RRFFQ69G5FAZ", clip: { ...clip, storyId: "elsewhere" } }));
+  await assert.rejects(run(listDraftDrawings(target)), /draft\.json belongs to another clip than s's/);
 });

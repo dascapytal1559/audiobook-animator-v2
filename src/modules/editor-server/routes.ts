@@ -9,13 +9,13 @@ import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotR
 import { type TimingEntries } from "../word-timing/index.js";
 import { type LoadedStoryMap, loadStoryMap } from "../story-map/index.js";
 import { addSceneDescriptionTake, loadSceneDescriptions, SceneDescriptionTakeBody } from "../scene-descriptions/index.js";
-import { codexDraft, draftPrompt, excerpt, StoryboardDraftRequest, StoryboardDrawRequest, StoryboardFirstPassApply, StoryboardFirstPassPlanRequest, StoryboardJobBook, type StoryboardSettings } from "../storyboard/index.js";
-import { type ChunkElement, declaredShots, type SceneDescriptionsResponse, type StoriesResponse, type StoryboardDraft, type StoryboardFirstPassPlan, type StoryboardFirstPassResult, type StoryboardJobsResponse, type StoryMapResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
+import { codexDraft, draftImagePath, draftPrompt, excerpt, listDraftDrawings, removeDraftDrawings, StoryboardDiscardRequest, StoryboardDraftRequest, StoryboardDrawRequest, StoryboardFirstPassApply, StoryboardFirstPassPlanRequest, StoryboardJobBook, type StoryboardSettings, StoryboardSnapshotRequest } from "../storyboard/index.js";
+import { type ChunkElement, declaredShots, type SceneDescriptionsResponse, type StoriesResponse, type StoryboardDraft, type StoryboardDraftDrawing, type StoryboardDraftsResponse, type StoryboardFirstPassPlan, type StoryboardFirstPassResult, type StoryboardJobsResponse, type StoryboardSnapshotResult, type StoryMapResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
 export type { StorySummary };
 import { type EditorSettings, editorError, type EditorCode } from "./contracts.js";
 import type { PeaksIdentity, SpeechIdentity } from "./peaks.js";
 import { parseRange } from "./range.js";
-import { applyFirstPass, checkDrawable, planFirstPass, queueDraw, type StoryboardRun } from "./storyboard.js";
+import { applyFirstPass, draftTarget, planFirstPass, queueDraftDrawing, saveSnapshot, type StoryboardRun } from "./storyboard.js";
 import { alignTiming, type Caches, loadTiming, makeCaches, storyPayload, writeManualTiming } from "./timing.js";
 type Code = EditorCode;
 const fail = (code: Code, message: string) => Effect.fail(editorError({ code, message }));
@@ -122,7 +122,7 @@ function errorResponse(error: unknown, options: { readonly decisionsFromClient?:
       timeline: { InvalidConfig: 500, InvalidRequest: 400, InvalidRecord: 500, InvalidDecisions: options.decisionsFromClient ? 400 : 500, IdentityMismatch: 409, RecordExists: 409, IoFailed: 500 },
       map: { NotFound: 404, InvalidMap: 500, IdentityMismatch: 409, IoFailed: 500 },
       descriptions: { InvalidRequest: 400, InvalidDescriptions: 500, IdentityMismatch: 409, TakeExists: 409, IoFailed: 500 },
-      storyboard: { InvalidRequest: 400, JobRunning: 409, DraftFailed: 502, PlanFailed: 502, RendererFailed: 502, IoFailed: 500 },
+      storyboard: { InvalidRequest: 400, JobRunning: 409, DraftFailed: 502, PlanFailed: 502, RendererFailed: 502, InvalidDraft: 500, IoFailed: 500 },
     };
     return errorJson(byModule[error.module]?.[error.code] ?? 500, error.code, error.message);
   }
@@ -299,29 +299,57 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     return json(recorded, 201);
   })))));
   /**
-   * Storyboard frames (A66) and first passes (A67): drafts and plans answer in the request; drawings are queued in the background, a few
-   * at a time, and reported by the jobs route.
+   * Storyboard frames (A66), first passes (A67), and the drafting space (A68): drafts and plans answer in the request; drawings are queued
+   * in the background, a few at a time, and reported by the jobs route. A drafting-space drawing lands as the shot's draft drawing.
    */
   const jobs = new StoryboardJobBook(options.storyboard.concurrentDraws);
   const storyboardRun: StoryboardRun = { settings: options.storyboard, producer: options.producer, jobs };
   const decodeBody = <S extends Schema.Top>(schema: S, body: unknown, shape: string) =>
     Schema.decodeUnknownEffect(schema, { onExcessProperty: "error" })(body).pipe(Effect.mapError(e => editorError({ code: "InvalidRequest", message: `Body must be ${shape}. ${e.message.replace(/\s+/g, " ")}` })));
+  const servedDraft = (storyId: string) => (draft: StoryboardDraftDrawing) => ({ ...draft, imageUrl: `/api/stories/${storyId}/storyboard/drafts/${draft.id}/image` });
   const storyboardJobs = HttpRouter.add("GET", at("/storyboard/jobs"), handle(withStory(({ ctx }) => Effect.succeed(json({ jobs: jobs.list(ctx.clip.storyId) } satisfies StoryboardJobsResponse)))));
+  /** A draft of the shot beginning at a word; with an end word the excerpt marks the whole span, and runs on past it (A68). */
   const storyboardDraft = HttpRouter.add("POST", at("/storyboard/draft"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
-    const { anchorWordId } = yield* decodeBody(StoryboardDraftRequest, yield* readJsonObject(request, 4096), "{ anchorWordId }");
+    const body = yield* decodeBody(StoryboardDraftRequest, yield* readJsonObject(request, 16_384), "{ anchorWordId, endWordId?, current?, request? }");
+    const { anchorWordId } = body;
+    const endWordId = body.endWordId ?? anchorWordId;
+    const from = ctx.words.findIndex(w => w.id === anchorWordId);
+    const to = ctx.words.findIndex(w => w.id === endWordId);
+    if (from < 0) return yield* fail("InvalidRequest", `anchorWordId ${anchorWordId} is not a word of the transcript.`);
+    if (to < from) return yield* fail("InvalidRequest", `endWordId ${endWordId} is not a word of the transcript at or after ${anchorWordId}.`);
     const { draftWordsBefore, draftWordsAfter } = options.storyboard.excerpt;
-    const passage = excerpt(ctx.elements, anchorWordId, draftWordsBefore, draftWordsAfter, true);
-    if (passage === null) return yield* fail("InvalidRequest", `anchorWordId ${anchorWordId} is not a word of the transcript.`);
-    const prompt = draftPrompt({ title: ctx.story.story.title, excerpt: passage });
+    const passage = excerpt(ctx.elements, anchorWordId, draftWordsBefore, Math.max(draftWordsAfter, to - from + 1), endWordId)!;
+    const prompt = draftPrompt({ title: ctx.story.story.title, excerpt: passage, ...(body.current !== undefined ? { current: body.current } : {}), ...(body.request !== undefined ? { request: body.request } : {}) });
     const draft = yield* codexDraft(options.storyboard, prompt);
     return json({ anchorWordId, ...draft, prompt } satisfies StoryboardDraft);
   }))));
   const storyboardDraw = HttpRouter.add("POST", at("/storyboard/draw"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
-    const { anchorWordId } = yield* decodeBody(StoryboardDrawRequest, yield* readJsonObject(request, 4096), "{ anchorWordId }");
-    yield* checkDrawable(ctx, jobs, anchorWordId);
-    const { job, run } = queueDraw(ctx, storyboardRun, anchorWordId);
+    const body = yield* decodeBody(StoryboardDrawRequest, yield* readJsonObject(request, 16_384), "{ anchorWordId, startWordId, text }");
+    const { job, run } = yield* queueDraftDrawing(ctx, storyboardRun, body);
     yield* Effect.forkDetach(run);
     return json({ jobs: [job] } satisfies StoryboardJobsResponse, 202);
+  }))));
+  const storyboardDrafts = HttpRouter.add("GET", at("/storyboard/drafts"), handle(withStory(({ ctx }) =>
+    Effect.map(listDraftDrawings(draftTarget(ctx)), drafts => json({ drafts: drafts.map(servedDraft(ctx.clip.storyId)) } satisfies StoryboardDraftsResponse)))));
+  const storyboardDraftImage = HttpRouter.add("GET", at("/storyboard/drafts/:draftId/image"), handle(withStory(({ ctx }) => Effect.gen(function* () {
+    const notFound = editorError({ code: "NotFound", message: "No such draft drawing." });
+    const { draftId } = yield* HttpRouter.params;
+    const draft = (yield* listDraftDrawings(draftTarget(ctx))).find(d => d.id === draftId);
+    const type = draft === undefined ? undefined : imageContentType(draft.imagePath);
+    if (draft === undefined || type === undefined) return yield* Effect.fail(notFound);
+    return yield* HttpServerResponse.file(draftImagePath(ctx.storyDirectory, draft), { headers: { "content-type": type, "cache-control": "no-cache" } }).pipe(Effect.mapError(() => notFound));
+  }))));
+  const storyboardDiscard = HttpRouter.add("POST", at("/storyboard/drafts/discard"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
+    const { anchorWordId } = yield* decodeBody(StoryboardDiscardRequest, yield* readJsonObject(request, 4096), "{ anchorWordId }");
+    yield* removeDraftDrawings(draftTarget(ctx), anchorWordId);
+    return json({ drafts: (yield* listDraftDrawings(draftTarget(ctx))).map(servedDraft(ctx.clip.storyId)) } satisfies StoryboardDraftsResponse);
+  }))));
+  /** A snapshot writes records and a take, so it holds the story's take lock while it does (A68). */
+  const storyboardSnapshot = HttpRouter.add("POST", at("/storyboard/snapshot"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
+    const body = yield* decodeBody(StoryboardSnapshotRequest, yield* readJsonObject(request, ctx.settings.editor.limits.maxSceneDescriptionsBytes), "{ frameWordId, startWordId, endWordId, description, draftId }");
+    const saved = yield* takeLock(ctx.clip.storyId).withPermits(1)(saveSnapshot(ctx, storyboardRun, body));
+    const served = (record: ShotRecord | null) => (record === null ? null : imageUrl(ctx.clip.storyId)(record));
+    return json({ ...saved, record: served(saved.record), split: served(saved.split) } satisfies StoryboardSnapshotResult, 201);
   }))));
   const storyboardFirstPassPlan = HttpRouter.add("POST", at("/storyboard/first-pass/plan"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
     const { sectionId } = yield* decodeBody(StoryboardFirstPassPlanRequest, yield* readJsonObject(request, 4096), "{ sectionId }");
@@ -336,7 +364,7 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
   }))));
   const apiFallback = HttpRouter.add("*", "/api/*", errorJson(404, "NotFound", "No such API route."));
   const root = options.staticDirectory === undefined
-    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`Audiobook Animator editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /map /map/subjects/:subjectId/images/:index /scene-descriptions /storyboard/jobs /storyboard/draft /storyboard/draw /storyboard/first-pass/plan /storyboard/first-pass /audio /peaks /speech /events\n`))
+    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`Audiobook Animator editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /map /map/subjects/:subjectId/images/:index /scene-descriptions /storyboard/jobs /storyboard/draft /storyboard/draw /storyboard/drafts /storyboard/drafts/:draftId/image /storyboard/drafts/discard /storyboard/snapshot /storyboard/first-pass/plan /storyboard/first-pass /audio /peaks /speech /events\n`))
     : HttpStaticServer.layer({ root: resolve(options.staticDirectory), index: "index.html", spa: true, cacheControl: "no-cache" });
-  return Layer.mergeAll(stories, story, timelineRoute, decisions, wordTiming, align, speech, shots, image, map, mapImage, sceneDescriptions, sceneDescriptionTake, storyboardJobs, storyboardDraft, storyboardDraw, storyboardFirstPassPlan, storyboardFirstPass, audio, peaks, events, apiFallback, root);
+  return Layer.mergeAll(stories, story, timelineRoute, decisions, wordTiming, align, speech, shots, image, map, mapImage, sceneDescriptions, sceneDescriptionTake, storyboardJobs, storyboardDraft, storyboardDraw, storyboardDrafts, storyboardDraftImage, storyboardDiscard, storyboardSnapshot, storyboardFirstPassPlan, storyboardFirstPass, audio, peaks, events, apiFallback, root);
 }

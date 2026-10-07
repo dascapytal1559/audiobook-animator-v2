@@ -1,12 +1,13 @@
 /** Typed wrappers over the editor server API. Every response is decoded with the shared domain schema before the client trusts it (Q9). */
 import { useEffect } from "react";
-import { AlignResponse, ApiErrorBody, decodeStrict, PeaksFile, SceneDescriptionsResponse, SceneDescriptionTake, ServedShotRecord, SpeechFile, StoriesResponse, StoryboardDraft, StoryboardFirstPassPlan, StoryboardFirstPassResult, StoryboardJobsResponse, StoryMapResponse, StoryResponse, TimelineResponse, type AlignRequest, type DecisionsBody, type SceneDescriptionTakeBody, type ShotMode, type StoryboardFirstPassApply, type WordTimingBody } from "@animator/domain";
+import { AlignResponse, ApiErrorBody, decodeStrict, PeaksFile, SceneDescriptionsResponse, SceneDescriptionTake, ServedShotRecord, SpeechFile, StoriesResponse, StoryboardDraft, StoryboardDraftsResponse, StoryboardFirstPassPlan, StoryboardFirstPassResult, StoryboardJobsResponse, StoryboardSnapshotResult, StoryMapResponse, StoryResponse, TimelineResponse, type AlignRequest, type DecisionsBody, type SceneDescriptionTakeBody, type ShotMode, type StoryboardDraftRequest, type StoryboardDrawRequest, type StoryboardFirstPassApply, type StoryboardSnapshotRequest, type WordTimingBody } from "@animator/domain";
 export type {
   AlignReport, AlignRequest, AlignResponse, AlignRun, CandidateGroup, Chunk, ClipIdentity, Decisions, DecisionsBody, EffectiveShot, ShotDecision, ShotMode,
   StitchedEntry, StoriesResponse, StoryChunking, StoryResponse, StorySummary, TimelineResponse, TimelineSettings, TimingMeasure, TimingSummary, WordTimingBody,
   ResolvedSection, ResolvedStoryMap, ResolvedSubject, SectionKind, ServedSubject, StoryMapResponse, SubjectKind, SceneDescriptionsResponse, SceneDescriptionTake,
   ServedShotRecord as ShotRecord, TimingEntry as Span, StoryWord as Word, PeaksFile as PeaksResponse, SpeechFile as SpeechResponse,
-  SceneDescriptionTakeBody, StoryboardDraft, StoryboardFirstPassApply, StoryboardFirstPassPlan, StoryboardFirstPassResult, StoryboardFirstPassShot, StoryboardFrame, StoryboardJob, StoryboardJobsResponse, StoryboardRenderer,
+  SceneDescriptionTakeBody, ServedStoryboardDraftDrawing, StoryboardDraft, StoryboardDraftRequest, StoryboardDrawRequest, StoryboardFirstPassApply, StoryboardFirstPassPlan, StoryboardFirstPassResult, StoryboardFirstPassShot,
+  StoryboardFrame, StoryboardJob, StoryboardJobsResponse, StoryboardRenderer, StoryboardSnapshotRequest, StoryboardSnapshotResult,
 } from "@animator/domain";
 export { SHOT_MODES } from "@animator/domain";
 
@@ -54,10 +55,16 @@ export function storyApi(storyId: string) {
     postSceneDescription: (body: SceneDescriptionTakeBody) => request(SceneDescriptionTake, `${base}/scene-descriptions`, jsonInit("POST", body)),
     /** The storyboard's drawings in the background (A66), oldest first. */
     getStoryboardJobs: () => request(StoryboardJobsResponse, `${base}/storyboard/jobs`),
-    /** A model's proposed description for a shot beginning at the word; nothing is recorded. */
-    postStoryboardDraft: (anchorWordId: string) => request(StoryboardDraft, `${base}/storyboard/draft`, jsonInit("POST", { anchorWordId })),
-    /** Start drawing the frame at the word from its newest description; answers with the one job started. */
-    postStoryboardDraw: (anchorWordId: string) => request(StoryboardJobsResponse, `${base}/storyboard/draw`, jsonInit("POST", { anchorWordId })),
+    /** A model's proposed description for a shot covering a span, revising its description as the person asked; nothing is recorded (A68). */
+    postStoryboardDraft: (body: StoryboardDraftRequest) => request(StoryboardDraft, `${base}/storyboard/draft`, jsonInit("POST", body)),
+    /** Start a draft drawing of a drafted description; answers with the one job started, which writes the shot's draft drawing (A68). */
+    postStoryboardDraw: (body: StoryboardDrawRequest) => request(StoryboardJobsResponse, `${base}/storyboard/draw`, jsonInit("POST", body)),
+    /** Every draft drawing of the story, not yet saved or discarded (A68). */
+    getStoryboardDrafts: () => request(StoryboardDraftsResponse, `${base}/storyboard/drafts`),
+    /** Drop the draft drawing of the shot drafted at a word; answers with the draft drawings left. */
+    postStoryboardDiscard: (anchorWordId: string) => request(StoryboardDraftsResponse, `${base}/storyboard/drafts/discard`, jsonInit("POST", { anchorWordId })),
+    /** Save the drafting space as one snapshot of the shot: what was written, and the old frame's shots to hide when it moved (A68). */
+    postStoryboardSnapshot: (body: StoryboardSnapshotRequest) => request(StoryboardSnapshotResult, `${base}/storyboard/snapshot`, jsonInit("POST", body)),
     /** A model's proposed shots for a beat or scene, judged against the storyboard as it stands; nothing is recorded (A67). */
     postStoryboardFirstPassPlan: (sectionId: string) => request(StoryboardFirstPassPlan, `${base}/storyboard/first-pass/plan`, jsonInit("POST", { sectionId })),
     /** Carry out a plan: declare its new frames, record its new descriptions, and queue its drawings; answers with what it did (A67). */

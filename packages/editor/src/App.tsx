@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ApiError, storyApi, useServerEvents, type PeaksResponse, type SpeechResponse, type StitchedEntry, type StorySummary, type Word } from "./api.js";
-import { clampSample, entryAt, mergeTimeline, millisecondsToSamples, retimeChunks, secondsToSamples, storyboardFrames, subtitleDefaults, timelineForTrack } from "@animator/domain";
+import { clampSample, entryAt, mergeTimeline, millisecondsToSamples, retimeChunks, secondsToSamples, STORYBOARD_TRACK, storyboardFrames, subtitleDefaults, timelineForTrack, type StoryboardSnapshotResult } from "@animator/domain";
 import { referenceChunks } from "./rows.js";
 import { planTick } from "./playback.js";
 import { selectItem, selectedRange, type SelectionItem } from "./selection.js";
@@ -123,6 +123,9 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const currentWordId = useMemo(() => wordAt(sortedWords, state.playhead)?.id ?? null, [sortedWords, state.playhead]);
   // The storyboard (A66) reads every track's timeline as the lanes show it, pending decisions included.
   const frames = useMemo(() => storyboardFrames(merged.stitched, state.takes), [merged.stitched, state.takes]);
+  const storyboardStarts = useMemo(() => merged.stitched.flatMap(e => (e.kind === "shot" && e.trackId === STORYBOARD_TRACK ? [e.startSample] : [])), [merged.stitched]);
+  const candidatesRef = useRef(merged.candidates);
+  candidatesRef.current = merged.candidates;
   // A first pass (A67) plans the beat or scene holding the playhead.
   const firstPassTarget = useMemo(() => firstPassSection(currentChain(mapView, state.playhead)), [mapView, state.playhead]);
   const mergedRef = useRef(activeTimeline);
@@ -166,6 +169,19 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   // The planning directory holds the timing overlays too, so the story is refetched with the timeline.
   const onTimelineChanged = useCallback(() => { void loadTimeline(); void loadStory(); void loadMap(); void loadDescriptions(); }, [loadTimeline, loadStory, loadMap, loadDescriptions]);
   const onStoryboardChanged = useCallback(() => { void loadTimeline(); void loadDescriptions(); }, [loadTimeline, loadDescriptions]);
+  /**
+   * A drafting-space snapshot (A68): its records join the timeline at once, and the old frame of a shot that moved off its word is hidden
+   * here, since the editor owns the decisions. An explicit selection of an older drawing at the new record's start would keep winning
+   * (A25), so the snapshot's record is selected in its place.
+   */
+  const onStoryboardSnapshot = useCallback((result: StoryboardSnapshotResult) => {
+    for (const record of [result.record, result.split]) if (record !== null) dispatch({ type: "record-added", record });
+    if (result.retire.length > 0) dispatch({ type: "shots-hidden", ids: result.retire });
+    const record = result.record;
+    const group = record === null ? undefined : candidatesRef.current.find(g => g.trackId === STORYBOARD_TRACK && g.startSample === record.startSample && g.selectionSource === "decision");
+    if (record !== null && group !== undefined) dispatch({ type: "shot-selected", id: record.id, groupIds: [record.id, ...group.shots.map(s => s.id)] });
+    onStoryboardChanged();
+  }, [onStoryboardChanged]);
   const onStatus = useCallback((ok: boolean) => setConnected(ok), []);
   useServerEvents(api.eventsUrl, { onTimelineChanged, onStatus });
 
@@ -379,7 +395,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
             <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} subtitles={subtitles} />
           </Panel>
           <Panel id="storyboard" title="Storyboard" open={panels.storyboard} onToggle={() => togglePanel("storyboard")} height={heights.storyboard} onResize={h => resizePanel("storyboard", h)}>
-            {state.story && <Storyboard api={api} frames={frames} words={sortedWords} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} tolerance={tolerance} section={firstPassTarget} onSeek={onSeek} onChanged={onStoryboardChanged} />}
+            {state.story && <Storyboard api={api} frames={frames} trackStarts={storyboardStarts} words={sortedWords} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} tolerance={tolerance} section={firstPassTarget} onSeek={onSeek} onChanged={onStoryboardChanged} onSnapshot={onStoryboardSnapshot} />}
           </Panel>
           <Panel id="scenes" title="Scenes" open={panels.scenes} onToggle={() => togglePanel("scenes")} height={heights.scenes} onResize={h => resizePanel("scenes", h)}>
             {state.story && <Scenes view={mapView} words={words} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} stitched={merged.stitched} tolerance={tolerance} takes={state.takes} selectedSubjectId={selectedSubjectId} onSelectSubject={selectSubject} onSeek={onSeek} />}

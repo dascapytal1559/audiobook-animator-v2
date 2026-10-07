@@ -3,7 +3,7 @@ import test from "node:test";
 import type { ClipIdentity } from "./identity.js";
 import type { SceneDescriptionTake } from "./scene-descriptions.js";
 import { mergeTimeline, type ShotRecord } from "./shots.js";
-import { cursorWord, frameAt, jobPending, latestJobs, STORYBOARD_TRACK, storyboardFrames, type StoryboardJob } from "./storyboard.js";
+import { cursorWord, frameAt, jobPending, judgeSpan, latestJobs, spanBounds, STORYBOARD_TRACK, storyboardFrames, type StoryboardJob } from "./storyboard.js";
 
 const clip: ClipIdentity = { bookId: "b", storyId: "s", audioSha256: "a".repeat(64), transcriptSha256: "b".repeat(64), sampleRateHz: 48000, sampleCount: 96000 };
 const record = (id: string, startSample: number, fields: Partial<ShotRecord> = {}): ShotRecord =>
@@ -38,9 +38,33 @@ test("the cursor's word is the word being spoken, else the next to start, else t
   assert.equal(cursorWord([], 5), null);
 });
 
-test("latestJobs keeps the newest job for each frame", () => {
-  const job = (id: string, anchorWordId: string, requestedAt: string): StoryboardJob => ({ id, anchorWordId, status: "done", requestedAt, attempts: [] });
-  const latest = latestJobs([job("01ARZ3NDEKTSV4RRFFQ69G5FA2", "w1", "2026-01-02T00:00:00Z"), job("01ARZ3NDEKTSV4RRFFQ69G5FA1", "w1", "2026-01-01T00:00:00Z"), job("01ARZ3NDEKTSV4RRFFQ69G5FA3", "w5", "2026-01-01T00:00:00Z")]);
-  assert.deepEqual([...latest].map(([word, j]) => [word, j.id]), [["w1", "01ARZ3NDEKTSV4RRFFQ69G5FA2"], ["w5", "01ARZ3NDEKTSV4RRFFQ69G5FA3"]]);
+test("latestJobs keeps the newest job of one kind for each shot", () => {
+  const job = (id: string, anchorWordId: string, requestedAt: string, kind: StoryboardJob["kind"] = "frame"): StoryboardJob => ({ id, kind, anchorWordId, status: "done", requestedAt, attempts: [] });
+  const jobs = [job("01ARZ3NDEKTSV4RRFFQ69G5FA2", "w1", "2026-01-02T00:00:00Z"), job("01ARZ3NDEKTSV4RRFFQ69G5FA1", "w1", "2026-01-01T00:00:00Z"), job("01ARZ3NDEKTSV4RRFFQ69G5FA3", "w5", "2026-01-01T00:00:00Z"),
+    job("01ARZ3NDEKTSV4RRFFQ69G5FA4", "w1", "2026-01-03T00:00:00Z", "draft")];
+  assert.deepEqual([...latestJobs(jobs, "frame")].map(([word, j]) => [word, j.id]), [["w1", "01ARZ3NDEKTSV4RRFFQ69G5FA2"], ["w5", "01ARZ3NDEKTSV4RRFFQ69G5FA3"]]);
+  assert.deepEqual([...latestJobs(jobs, "draft")].map(([word, j]) => [word, j.id]), [["w1", "01ARZ3NDEKTSV4RRFFQ69G5FA4"]]);
   assert.deepEqual((["queued", "running", "done", "failed"] as const).map(status => jobPending({ status })), [true, true, false, false]);
+});
+
+test("a drafted span may run from the word after the storyboard shot before to the word before the shot after, whatever the shot's own start", () => {
+  const words = [0, 10, 20, 30, 40, 50, 60].map(startSample => ({ startSample }));
+  assert.deepEqual(spanBounds(words, [20, 50], 20), { first: 0, last: 4 }, "the first frame may take the opening gap and holds to the word before the next");
+  assert.deepEqual(spanBounds(words, [20, 50], 50), { first: 3, last: 6 }, "the last frame holds to the last word");
+  assert.deepEqual(spanBounds(words, [20, 50], 30), { first: 3, last: 4 }, "a new shot inside a frame splits it");
+  assert.deepEqual(spanBounds(words, [], 30), { first: 0, last: 6 });
+  assert.equal(spanBounds([], [20], 20), null);
+});
+
+test("a drafted span is refused when it would swallow a neighbour or end before it starts; otherwise it says whether the shot moves and where an empty frame begins after a drawn-in end", () => {
+  const bounds = { first: 3, last: 8 };
+  assert.deepEqual(judgeSpan(bounds, 4, 4, 8), { ok: true, moved: false, splitAt: null });
+  assert.deepEqual(judgeSpan(bounds, 4, 3, 8), { ok: true, moved: true, splitAt: null });
+  assert.deepEqual(judgeSpan(bounds, 4, 5, 6), { ok: true, moved: true, splitAt: 7 });
+  assert.deepEqual(judgeSpan(bounds, null, 6, 8), { ok: true, moved: true, splitAt: null }, "a new shot always moves: it begins somewhere no frame does");
+  for (const [start, end, reason] of [[2, 8, /start at or before the shot before/], [4, 9, /run into the shot after/], [6, 5, /end before it starts/]] as const) {
+    const judged = judgeSpan(bounds, 4, start, end);
+    assert.equal(judged.ok, false);
+    if (!judged.ok) assert.match(judged.reason, reason);
+  }
 });

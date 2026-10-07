@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ResolvedSection, StoryboardDraft, StoryboardFirstPassShot, StoryboardJob, StoryResponse } from "./api.js";
-import { firstPassLine, firstPassProgress, firstPassSection, jobLine, openingWords, rendererLabel, takeToSave } from "./storyboard-view.js";
+import { judgeSpan } from "@animator/domain";
+import { EMPTY_DRAFT, firstPassLine, firstPassProgress, firstPassSection, isEmptyDraft, jobLine, openingWords, parseShotDrafts, rendererLabel, spanLines, spanText, takeToSave } from "./storyboard-view.js";
 
 test("a shot reads by the words spoken from its anchor on", () => {
   const elements: StoryResponse["elements"] = [{ kind: "word", id: "a" }, { kind: "punctuation", value: " " }, { kind: "word", id: "b" }, { kind: "punctuation", value: ". " }, { kind: "word", id: "c" }];
@@ -14,7 +15,7 @@ test("a shot reads by the words spoken from its anchor on", () => {
 test("the job line says who is drawing and for how long, why a renderer failed, and who drew it", () => {
   const at = (s: number) => new Date(Date.UTC(2026, 9, 3, 0, 0, s)).toISOString();
   const now = Date.parse(at(50));
-  const running: StoryboardJob = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", anchorWordId: "w", status: "running", requestedAt: at(0), attempts: [{ renderer: "codex-chatgpt", startedAt: at(2) }] };
+  const running: StoryboardJob = { id: "01ARZ3NDEKTSV4RRFFQ69G5FAV", kind: "frame", anchorWordId: "w", status: "running", requestedAt: at(0), attempts: [{ renderer: "codex-chatgpt", startedAt: at(2) }] };
   assert.equal(jobLine(running, now), "Drawing with ChatGPT (Codex CLI)… 48 s");
   const fellBack: StoryboardJob = { ...running, attempts: [{ renderer: "codex-chatgpt", startedAt: at(2), finishedAt: at(5), error: "not logged in" }, { renderer: "qwen-image-2.1", startedAt: at(5) }] };
   assert.equal(jobLine(fellBack, now), "Drawing with local Qwen Image 2.1… 45 s. ChatGPT (Codex CLI) failed: not logged in");
@@ -27,10 +28,46 @@ test("the job line says who is drawing and for how long, why a renderer failed, 
 
 test("a draft saved as drafted is the model's take; an edited or typed one is the user's", () => {
   const draft: StoryboardDraft = { anchorWordId: "w", text: "A man wakes.", model: "openai/gpt-6-astra", prompt: "p", seconds: 3 };
-  assert.deepEqual(takeToSave("w", " A man wakes. ", draft), { anchorWordId: "w", model: "openai/gpt-6-astra", text: "A man wakes.", prompt: "p", notes: "Drafted in the Storyboard section and saved unchanged." });
-  assert.deepEqual(takeToSave("w", "A man wakes, gasping.", draft), { anchorWordId: "w", model: "user", text: "A man wakes, gasping.", notes: "Edited from a draft by openai/gpt-6-astra." });
-  assert.deepEqual(takeToSave("w", "Typed.", null), { anchorWordId: "w", model: "user", text: "Typed." });
-  assert.deepEqual(takeToSave("v", "A man wakes.", draft), { anchorWordId: "v", model: "user", text: "A man wakes." }, "a draft for another word is not this take's source");
+  assert.deepEqual(takeToSave(" A man wakes. ", draft), { model: "openai/gpt-6-astra", text: "A man wakes.", prompt: "p", notes: "Drafted in the Storyboard section and saved unchanged." });
+  assert.deepEqual(takeToSave("A man wakes, gasping.", draft), { model: "user", text: "A man wakes, gasping.", notes: "Edited from a draft by openai/gpt-6-astra." });
+  assert.deepEqual(takeToSave("Typed.", null), { model: "user", text: "Typed." });
+});
+
+test("a span reads as written, punctuation and all, from its first word through its last", () => {
+  const elements: StoryResponse["elements"] = [{ kind: "word", id: "a" }, { kind: "punctuation", value: " " }, { kind: "word", id: "b" }, { kind: "punctuation", value: ", " }, { kind: "word", id: "c" }, { kind: "punctuation", value: "." }];
+  const words = new Map([["a", { value: "I" }], ["b", { value: "wake" }], ["c", { value: "screaming" }]]);
+  assert.equal(spanText(elements, words, "a", "c"), "I wake, screaming.");
+  assert.equal(spanText(elements, words, "b", "b"), "wake,");
+  assert.equal(spanText(elements, words, "c", "a"), "", "an end before the start reads as nothing");
+});
+
+test("the drafts a browser kept are read back part by part; anything malformed is dropped, and an empty draft is no draft", () => {
+  const source: StoryboardDraft = { anchorWordId: "w1", text: "A man wakes.", model: "openai/gpt-6-astra", prompt: "p", seconds: 3 };
+  const kept = parseShotDrafts({
+    w1: { request: "closer", text: "A man wakes.", source, span: { startWordId: "w1", endWordId: "w4" } },
+    w2: { request: 3, text: "Typed.", source: { text: "not a draft" }, span: { startWordId: "w2" } },
+    w3: { request: "", text: null, source, span: null },
+    w4: "junk",
+  });
+  assert.deepEqual(kept, { w1: { request: "closer", text: "A man wakes.", source, span: { startWordId: "w1", endWordId: "w4" } }, w2: { request: "", text: "Typed.", source: null, span: null } });
+  assert.deepEqual([parseShotDrafts(null), parseShotDrafts([1]), parseShotDrafts("x")], [{}, {}, {}]);
+  assert.equal(isEmptyDraft(EMPTY_DRAFT), true);
+  assert.equal(isEmptyDraft({ ...EMPTY_DRAFT, request: "x" }), false);
+});
+
+test("the span lines say which words a drafted span gives or takes, that a moved shot is saved anew, and where a drawn-in end starts an empty frame", () => {
+  const bounds = { first: 2, last: 9 };
+  const opening = (index: number) => `word ${index}`;
+  const lines = (current: { start: number; end: number } | null, start: number, end: number, hasBefore = true) => spanLines({ current, start, end, judged: judgeSpan(bounds, current?.start ?? null, start, end), hasBefore, opening });
+  assert.deepEqual(lines({ start: 4, end: 9 }, 4, 9), []);
+  assert.deepEqual(lines({ start: 4, end: 9 }, 6, 9), ["Its first 2 words go to the shot before.", "Its start moves to “word 6…”: it is saved as a frame there, and the frame at its old start is hidden, kept in history."]);
+  assert.deepEqual(lines({ start: 4, end: 9 }, 3, 9, false), ["It takes 1 word from the opening, before any frame.", "Its start moves to “word 3…”: it is saved as a frame there, and the frame at its old start is hidden, kept in history."]);
+  assert.equal(lines({ start: 4, end: 9 }, 5, 9)[0], "Its first word goes to the shot before.");
+  assert.deepEqual(lines({ start: 4, end: 9 }, 4, 7), ["Its end is drawn in: a new, empty frame will begin at “word 8…”."]);
+  assert.deepEqual(lines({ start: 4, end: 9 }, 2, 3), ["It takes 2 words from the shot before.", "Its start moves to “word 2…”: it is saved as a frame there.", "It ends just before its old start, so the frame there stays, as the shot after it."]);
+  assert.deepEqual(lines(null, 5, 9), ["A new shot inside the one before: that shot ends where this one starts."]);
+  assert.deepEqual(lines(null, 5, 9, false), []);
+  assert.deepEqual(lines({ start: 4, end: 9 }, 1, 9), ["The shot would start at or before the shot before it and swallow it; start it later."]);
 });
 
 test("a first pass plans the innermost beat or scene at the cursor, never an act", () => {
@@ -48,7 +85,7 @@ test("a first pass reads as counts of what is new and what is kept", () => {
 });
 
 test("the first pass progress line counts the newest pass's drawings by where they stand", () => {
-  const job = (id: string, status: StoryboardJob["status"], firstPassId?: string, requestedAt = "2026-10-07T00:00:00.000Z"): StoryboardJob => ({ id, anchorWordId: id, status, requestedAt, attempts: [], ...(firstPassId ? { firstPassId } : {}) });
+  const job = (id: string, status: StoryboardJob["status"], firstPassId?: string, requestedAt = "2026-10-07T00:00:00.000Z"): StoryboardJob => ({ id, kind: "frame", anchorWordId: id, status, requestedAt, attempts: [], ...(firstPassId ? { firstPassId } : {}) });
   assert.equal(firstPassProgress([job("01ARZ3NDEKTSV4RRFFQ69G5FA1", "running")]), null);
   const older = "01ARZ3NDEKTSV4RRFFQ69G5FB0";
   const newer = "01ARZ3NDEKTSV4RRFFQ69G5FB1";

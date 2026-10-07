@@ -6,7 +6,7 @@ import test, { after, type TestContext } from "node:test";
 import { NodeHttpServer, NodeServices } from "@effect/platform-node";
 import { Effect, Layer, Stream } from "effect";
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http";
-import { decodeStrict, jobPending, SceneDescriptionsResponse, SceneDescriptionTake, StoryboardDraft, StoryboardFirstPassPlan, StoryboardFirstPassResult, StoryboardJobsResponse, StoryMapResponse, TimelineResponse } from "@animator/domain";
+import { decodeStrict, jobPending, SceneDescriptionsResponse, SceneDescriptionTake, StoryboardDraft, StoryboardDraftsResponse, StoryboardFirstPassPlan, StoryboardFirstPassResult, StoryboardJobsResponse, StoryboardSnapshotResult, StoryMapResponse, TimelineResponse } from "@animator/domain";
 import { fixture, type FixtureWord } from "../story/context.fixture.js";
 import { storyboardDefaults, type StoryboardSettings } from "../storyboard/index.js";
 import { loadEditorLibrary, makeEditorRoutes } from "./index.js";
@@ -596,6 +596,10 @@ test("POST /storyboard/draft asks codex for a description of the shot at a word,
     const workDirectory = call!.argv[call!.argv.indexOf("--cd") + 1]!;
     assert.match(workDirectory, /animator-storyboard-text-/);
     assert.ok(call!.cwd.endsWith(workDirectory.replace(/^\/private/, "")), "codex runs in its own empty working directory");
+    const revised = decodeStrict(StoryboardDraft, yield* bodyJson(yield* postJson("/api/stories/pilot/storyboard/draft", { anchorWordId: "m2:e2", endWordId: "m2:e4", current: "A man in bed.", request: "close on his hands" })));
+    assert.match(revised.prompt, /The shot is described now as: "A man in bed\."\nThe director asks for this: "close on his hands"\./);
+    assert.match(revised.prompt, /Passage:\nUncorrected\. \[\[I wake\]\] up\.$/, "the excerpt marks the whole span the shot covers");
+    assert.equal((yield* postJson("/api/stories/pilot/storyboard/draft", { anchorWordId: "m2:e4", endWordId: "m2:e2" })).status, 400, "an end before the start is refused");
     assert.equal((yield* postJson("/api/stories/pilot/storyboard/draft", { anchorWordId: "gone" })).status, 400);
     assert.equal((yield* postJson("/api/stories/pilot/storyboard/draft", { anchorWordId: "m2:e4", extra: 1 })).status, 400);
   }));
@@ -610,75 +614,77 @@ test("POST /storyboard/draft asks codex for a description of the shot at a word,
   }));
 });
 
-test("POST /storyboard/draw draws the frame's newest description in the background through codex, and publishes a storyboard record at the word naming its renderer and prompt", async t => {
+const drafts = () => Effect.map(Effect.flatMap(get("/api/stories/pilot/storyboard/drafts"), bodyJson), body => decodeStrict(StoryboardDraftsResponse, body).drafts);
+const drawDraft = (anchorWordId: string, text: string, startWordId = anchorWordId) => Effect.gen(function* () {
+  const started = yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId, startWordId, text });
+  assert.equal(started.status, 202);
+  return decodeStrict(StoryboardJobsResponse, yield* bodyJson(started)).jobs[0]!;
+});
+
+test("POST /storyboard/draw draws a draft drawing of the drafted description in the background through codex, keeps it off the timeline as the shot's draft drawing, replaces it with a newer one, and drops it on discard", async t => {
   const home = await mkdtemp(join(tmpdir(), "codex-home-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const codex = await fakeCommand("codex", CODEX_DRAWS);
   const qwen = await fakeCommand("qwen", QWEN_DRAWS);
   const s = await serve(t, { words: DRAW_WORDS, storyboard: storyboardSettings(codex.path, qwen.path, home) });
   await s.run(Effect.gen(function* () {
-    const undeclared = yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e4" });
-    assert.equal(undeclared.status, 400);
-    assert.match((yield* bodyJson(undeclared))["message"], /No storyboard frame starts at m2:e4/);
-    yield* declareFrame("m2:e4", "A man wakes in the dark.");
-    assert.equal((yield* postJson("/api/stories/pilot/scene-descriptions", { anchorWordId: "m2:e4", model: "user", text: "A man sits up in bed, gasping." })).status, 201);
-    const started = yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e4" });
-    assert.equal(started.status, 202);
-    const [job] = decodeStrict(StoryboardJobsResponse, yield* bodyJson(started)).jobs;
-    assert.equal(job?.anchorWordId, "m2:e4");
-    const done = yield* waitForJob(job!.id);
+    assert.equal((yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "gone", startWordId: "m2:e4", text: "x" })).status, 400);
+    assert.equal((yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e4" })).status, 400);
+    const job = yield* drawDraft("m2:e4", "A man sits up in bed, gasping.");
+    assert.deepEqual([job.kind, job.anchorWordId], ["draft", "m2:e4"]);
+    const done = yield* waitForJob(job.id);
     assert.equal(done.status, "done", done.error);
-    assert.deepEqual(done.attempts.map(a => [a.renderer, a.error ?? null]), [["codex-chatgpt", null]]);
-    const timeline = decodeStrict(TimelineResponse, yield* bodyJson(yield* get("/api/stories/pilot/timeline")));
-    const drawn = timeline.records.find(r => r.id === done.recordId)!;
-    assert.deepEqual([drawn.trackId, drawn.anchorWordId, drawn.startSample, drawn.renderer, drawn.label, drawn.imagePath], ["storyboard", "m2:e4", 35, "codex-chatgpt", "Storyboard frame", "image.png"]);
-    assert.match(drawn.prompt ?? "", /^Use your image generation tool[\s\S]*The frame shows: A man sits up in bed, gasping\.[\s\S]*from "Pilot" \(context only; do not write it in the picture\): wake up\.$/);
-    assert.match(drawn.notes ?? "", /through the Codex CLI under the ChatGPT login \(model gpt-6-astra, thread thread-1\)\. \d+\.\d s, 1x1\.$/);
-    const shown = timeline.stitched.find(e => e.kind === "shot" && e.trackId === "storyboard");
-    assert.equal(shown?.kind === "shot" ? shown.id : null, drawn.id, "the newest drawing is the frame's shot");
+    assert.deepEqual([done.recordId, done.attempts.map(a => [a.renderer, a.error ?? null])], [undefined, [["codex-chatgpt", null]]]);
+    const [draft] = yield* drafts();
+    assert.deepEqual([draft?.id, draft?.anchorWordId, draft?.startWordId, draft?.description, draft?.renderer], [done.draftId, "m2:e4", "m2:e4", "A man sits up in bed, gasping.", "codex-chatgpt"]);
+    assert.match(draft!.prompt, /^Use your image generation tool[\s\S]*The frame shows: A man sits up in bed, gasping\.[\s\S]*from "Pilot" \(context only; do not write it in the picture\): wake up\.$/);
+    assert.match(draft!.notes, /through the Codex CLI under the ChatGPT login \(model gpt-6-astra, thread thread-1\)\. \d+\.\d s, 1x1\.$/);
+    const image = yield* get(draft!.imageUrl);
+    assert.deepEqual([image.status, image.headers["content-type"]], [200, "image/png"]);
+    assert.equal(decodeStrict(TimelineResponse, yield* bodyJson(yield* get("/api/stories/pilot/timeline"))).records.length, 0, "a draft drawing is not on the timeline");
     const [call] = yield* Effect.promise(codex.calls);
-    assert.equal(call?.stdin, drawn.prompt);
+    assert.equal(call?.stdin, draft!.prompt);
     assert.ok(call?.argv.includes("--enable") && call.argv.includes("image_generation"));
+    const newer = yield* waitForJob((yield* drawDraft("m2:e4", "Closer on his hands.")).id);
+    assert.deepEqual((yield* drafts()).map(d => [d.id, d.description]), [[newer.draftId, "Closer on his hands."]], "a newer draft drawing replaces the shot's earlier one");
+    assert.equal((yield* get(draft!.imageUrl)).status, 404);
+    const discarded = yield* postJson("/api/stories/pilot/storyboard/drafts/discard", { anchorWordId: "m2:e4" });
+    assert.deepEqual(decodeStrict(StoryboardDraftsResponse, yield* bodyJson(discarded)).drafts, []);
     assert.deepEqual(yield* Effect.promise(qwen.calls), [], "the fallback is not tried when the primary draws");
   }));
 });
 
-test("POST /storyboard/draw falls back to local Qwen when codex fails, records which renderer drew it and why, and reports both failing as a failed job; a frame being drawn refuses a second draw", async t => {
+test("a draft drawing falls back to local Qwen when codex fails, says which renderer drew it and why, and fails naming both when both fail; a shot being drawn refuses a second draft drawing", async t => {
   const home = await mkdtemp(join(tmpdir(), "codex-home-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const codex = await fakeCommand("codex", CODEX_FAILS);
   const qwen = await fakeCommand("qwen", `setTimeout(() => { ${QWEN_DRAWS} }, 300);`);
   const s = await serve(t, { words: DRAW_WORDS, storyboard: storyboardSettings(codex.path, qwen.path, home) });
   await s.run(Effect.gen(function* () {
-    yield* declareFrame("m2:e2", "A man lies still.");
-    const started = decodeStrict(StoryboardJobsResponse, yield* bodyJson(yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e2" }))).jobs[0]!;
-    const again = yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e2" });
+    const started = yield* drawDraft("m2:e2", "A man lies still.");
+    const again = yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e2", startWordId: "m2:e2", text: "x" });
     assert.equal(again.status, 409);
     assert.equal((yield* bodyJson(again))["code"], "JobRunning");
     const done = yield* waitForJob(started.id);
     assert.equal(done.status, "done", done.error);
     assert.deepEqual(done.attempts.map(a => [a.renderer, /not logged in/.test(a.error ?? "")]), [["codex-chatgpt", true], ["qwen-image-2.1", false]]);
-    const record = decodeStrict(TimelineResponse, yield* bodyJson(yield* get("/api/stories/pilot/timeline"))).records.find(r => r.id === done.recordId)!;
-    assert.equal(record.renderer, "qwen-image-2.1");
-    assert.match(record.prompt ?? "", /^A single storyboard frame for an animated film, drawn by hand/);
-    assert.match(record.notes ?? "", /Drawn by local Qwen Image 2\.1: .*\. \d+\.\d s, 1x1\. Drawn after the primary renderer failed: .*not logged in/);
+    const [draft] = yield* drafts();
+    assert.equal(draft?.renderer, "qwen-image-2.1");
+    assert.match(draft?.prompt ?? "", /^A single storyboard frame for an animated film, drawn by hand/);
+    assert.match(draft?.notes ?? "", /Drawn by local Qwen Image 2\.1: .*\. \d+\.\d s, 1x1\. Drawn after the primary renderer failed: .*not logged in/);
     const [call] = yield* Effect.promise(qwen.calls);
-    const promptFile = call!.argv[call!.argv.indexOf("--prompt-file") + 1]!;
-    assert.match(promptFile, /prompt\.txt$/);
+    assert.match(call!.argv[call!.argv.indexOf("--prompt-file") + 1]!, /prompt\.txt$/);
   }));
   const broken = await serve(t, { words: DRAW_WORDS, storyboard: storyboardSettings(codex.path, "/nonexistent/mflux-generate-qwen-2.1", home) });
   await broken.run(Effect.gen(function* () {
-    yield* declareFrame("m2:e2", "A man lies still.");
-    const started = decodeStrict(StoryboardJobsResponse, yield* bodyJson(yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e2" }))).jobs[0]!;
-    const failed = yield* waitForJob(started.id);
+    const failed = yield* waitForJob((yield* drawDraft("m2:e2", "A man lies still.")).id);
     assert.equal(failed.status, "failed");
     assert.match(failed.error ?? "", /Local Qwen Image 2\.1 could not start \/nonexistent\/mflux-generate-qwen-2\.1; is it installed\?/);
-    assert.equal(failed.recordId, undefined);
-    assert.equal(decodeStrict(TimelineResponse, yield* bodyJson(yield* get("/api/stories/pilot/timeline"))).records.filter(r => r.imagePath !== undefined).length, 0);
+    assert.deepEqual([failed.draftId, yield* drafts()], [undefined, []]);
   }));
 });
 
-test("a codex turn that outlives its timeout is stopped and the frame falls back", async t => {
+test("a codex turn that outlives its timeout is stopped and the drawing falls back", async t => {
   const home = await mkdtemp(join(tmpdir(), "codex-home-"));
   t.after(() => rm(home, { recursive: true, force: true }));
   const codex = await fakeCommand("codex", `setTimeout(() => {}, 60_000);`);
@@ -686,11 +692,80 @@ test("a codex turn that outlives its timeout is stopped and the frame falls back
   const settings = storyboardSettings(codex.path, qwen.path, home);
   const s = await serve(t, { words: DRAW_WORDS, storyboard: { ...settings, codex: { ...settings.codex, drawTimeoutMs: 500 } } });
   await s.run(Effect.gen(function* () {
-    yield* declareFrame("m2:e2", "A man lies still.");
-    const started = decodeStrict(StoryboardJobsResponse, yield* bodyJson(yield* postJson("/api/stories/pilot/storyboard/draw", { anchorWordId: "m2:e2" }))).jobs[0]!;
-    const done = yield* waitForJob(started.id);
+    const done = yield* waitForJob((yield* drawDraft("m2:e2", "A man lies still.")).id);
     assert.equal(done.status, "done", done.error);
     assert.deepEqual(done.attempts.map(a => [a.renderer, a.error ?? null]), [["codex-chatgpt", "ChatGPT through the Codex CLI timed out after 1 s."], ["qwen-image-2.1", null]]);
+  }));
+});
+
+const snapshot = (body: Record<string, unknown>) => postJson("/api/stories/pilot/storyboard/snapshot", { frameWordId: null, description: null, draftId: null, ...body });
+const saved = (response: { status: number; json: Effect.Effect<unknown, unknown> }) => Effect.gen(function* () {
+  const body = yield* bodyJson(response);
+  assert.equal(response.status, 201, body["message"]);
+  return decodeStrict(StoryboardSnapshotResult, body);
+});
+const storyboardShots = () => Effect.map(Effect.flatMap(get("/api/stories/pilot/timeline"), bodyJson), body =>
+  decodeStrict(TimelineResponse, body).stitched.flatMap(e => (e.kind === "shot" && e.trackId === "storyboard" ? [[e.anchorWordId ?? null, e.startSample, e.imagePath ?? null] as const] : [])));
+
+test("a snapshot saves the drafting space as one new record and take at the shot's start word: a new shot with its draft drawing, a description alone, a moved start carrying drawing and description, and a drawn-in end declaring the shot after", async t => {
+  const home = await mkdtemp(join(tmpdir(), "codex-home-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const codex = await fakeCommand("codex", CODEX_DRAWS);
+  const s = await serve(t, { words: DRAW_WORDS, storyboard: storyboardSettings(codex.path, "/nonexistent/qwen", home) });
+  await s.run(Effect.gen(function* () {
+    // A new shot at "wake": its draft drawing and its description, through the last word.
+    const drawn = yield* waitForJob((yield* drawDraft("m2:e4", "A man wakes.")).id);
+    const created = yield* saved(yield* snapshot({ startWordId: "m2:e4", endWordId: "m2:e6", description: { model: "user", text: "A man wakes." }, draftId: drawn.draftId }));
+    assert.deepEqual([created.record?.anchorWordId, created.record?.startSample, created.record?.renderer, created.record?.imagePath, created.take?.anchorWordId, created.take?.text, created.split, created.retire],
+      ["m2:e4", 35, "codex-chatgpt", "image.png", "m2:e4", "A man wakes.", null, []]);
+    assert.match(created.record?.notes ?? "", /^Saved from the drafting space \(A68\)\. Drawn by ChatGPT's image tool/);
+    assert.ok(created.record?.imageUrl);
+    assert.deepEqual(yield* drafts(), [], "the saved draft drawing is consumed");
+    // The same shot again, the description alone: a take, no record.
+    const described = yield* saved(yield* snapshot({ frameWordId: "m2:e4", startWordId: "m2:e4", endWordId: "m2:e6", description: { model: "openai/gpt-6-astra", text: "He sits up.", prompt: "p" } }));
+    assert.deepEqual([described.record, described.take?.text, described.take?.model], [null, "He sits up.", "openai/gpt-6-astra"]);
+    const nothing = yield* snapshot({ frameWordId: "m2:e4", startWordId: "m2:e4", endWordId: "m2:e6" });
+    assert.equal(nothing.status, 400);
+    assert.match((yield* bodyJson(nothing))["message"], /Nothing to save/);
+    // Its start moved to "I": the drawing is copied and the description carried to the new word; the old frame is named to retire.
+    const moved = yield* saved(yield* snapshot({ frameWordId: "m2:e4", startWordId: "m2:e2", endWordId: "m2:e6" }));
+    assert.deepEqual([moved.record?.anchorWordId, moved.record?.startSample, moved.record?.imagePath, moved.record?.renderer, moved.take?.text, moved.take?.model, moved.take?.prompt],
+      ["m2:e2", 30, "image.png", "codex-chatgpt", "He sits up.", "openai/gpt-6-astra", "p"]);
+    assert.match(moved.record?.notes ?? "", /Moved from m2:e4 to m2:e2\. The drawing is a copy of record /);
+    assert.match(moved.take?.notes ?? "", /Carried from m2:e4 when the shot's start moved to m2:e2 \(A68\)/);
+    assert.deepEqual(moved.retire, [created.record!.id], "the old frame's shots are for the editor to hide");
+    const put = yield* HttpClient.execute(HttpClientRequest.put("/api/stories/pilot/decisions").pipe(HttpClientRequest.bodyJsonUnsafe({ settings: { frameAspect: { width: 16, height: 9 } }, shots: Object.fromEntries(moved.retire.map(id => [id, { hidden: true }])) })));
+    assert.equal(put.status, 200);
+    assert.deepEqual(yield* storyboardShots(), [["m2:e2", 30, "image.png"]], "with the old frame hidden, the shot starts at its new word");
+    // Its end drawn in to "wake": an empty frame begins at "up".
+    const split = yield* saved(yield* snapshot({ frameWordId: "m2:e2", startWordId: "m2:e2", endWordId: "m2:e4" }));
+    assert.deepEqual([split.record, split.take, split.split?.anchorWordId, split.split?.imagePath, split.retire], [null, null, "m2:e6", undefined, []]);
+    assert.match(split.split?.notes ?? "", /Declared by a drafting-space snapshot \(A68\) of the shot at m2:e2, whose end was drawn in to m2:e4\./);
+    assert.deepEqual(yield* storyboardShots(), [["m2:e2", 30, "image.png"], ["m2:e6", 60, null]]);
+  }));
+});
+
+test("a snapshot is refused when its span would swallow a neighbouring shot, when a new shot starts where a frame does, or when the frame it names is gone; a start moved back onto the old frame's word keeps that frame", async t => {
+  const s = await serve(t, { words: DRAW_WORDS });
+  await s.run(Effect.gen(function* () {
+    yield* declareFrame("m2:e2", "A man lies still.");
+    yield* declareFrame("m2:e6", "He gets up.");
+    for (const [body, message] of [
+      [{ frameWordId: "m2:e2", startWordId: "m2:e2", endWordId: "m2:e6", description: { model: "user", text: "x" } }, /run into the shot after it and swallow it/],
+      [{ frameWordId: "m2:e6", startWordId: "m2:e2", endWordId: "m2:e6", description: { model: "user", text: "x" } }, /start at or before the shot before it and swallow it/],
+      [{ startWordId: "m2:e6", endWordId: "m2:e6", description: { model: "user", text: "x" } }, /A storyboard frame already starts at m2:e6/],
+      [{ frameWordId: "m2:e4", startWordId: "m2:e4", endWordId: "m2:e4" }, /No storyboard frame starts at m2:e4/],
+      [{ frameWordId: "m2:e2", startWordId: "m2:e4", endWordId: "m2:e2" }, /end before it starts/],
+      [{ frameWordId: "m2:e2", startWordId: "gone", endWordId: "m2:e2" }, /gone is not a word of the transcript/],
+    ] as const) {
+      const response = yield* snapshot(body);
+      assert.equal(response.status, 400, JSON.stringify(body));
+      assert.match((yield* bodyJson(response))["message"], message);
+    }
+    // The frame at "up" starts one word earlier and ends there, so the empty frame would land on its own old word: that frame is kept.
+    const kept = yield* saved(yield* snapshot({ frameWordId: "m2:e6", startWordId: "m2:e4", endWordId: "m2:e4" }));
+    assert.deepEqual([kept.record?.anchorWordId, kept.take?.text, kept.split, kept.retire], ["m2:e4", "He gets up.", null, []]);
+    assert.deepEqual((yield* storyboardShots()).map(([word]) => word), ["m2:e2", "m2:e4", "m2:e6"]);
   }));
 });
 

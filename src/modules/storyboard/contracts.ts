@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { errorsOf } from "../../core/error.js";
 import { NonNegative, Path, Positive, Text } from "@animator/domain";
-export { STORYBOARD_TRACK, StoryboardDraft, StoryboardDraftRequest, StoryboardDrawRequest, StoryboardFirstPassApply, StoryboardFirstPassPlan, StoryboardFirstPassPlanRequest, StoryboardFirstPassResult, StoryboardJob, StoryboardRenderer, USER_WRITER } from "@animator/domain";
+export { STORYBOARD_TRACK, StoryboardDiscardRequest, StoryboardDraft, StoryboardDraftDrawing, StoryboardDraftRequest, StoryboardDrawRequest, StoryboardFirstPassApply, StoryboardFirstPassPlan, StoryboardFirstPassPlanRequest, StoryboardFirstPassResult, StoryboardJob, StoryboardRenderer, StoryboardSnapshotRequest, StoryboardSnapshotResult, USER_WRITER } from "@animator/domain";
 
 /**
  * Settings for drafting and drawing storyboard frames (A66) and for a section's first pass (A67). Defaults live in code; a run file may
@@ -25,8 +25,8 @@ export const StoryboardSettings = Schema.Struct({
    */
   fallback: Schema.Struct({ argv: Schema.NonEmptyArray(Text), timeoutMs: Positive }),
   /**
-   * How much narration a prompt quotes: words before and after the shot's first word for a draft, words from it for a drawing, and words
-   * before the section, as context, for a first pass's plan.
+   * How much narration a prompt quotes: words before and after the shot's first word for a draft (after at least the words the shot
+   * covers, A68), words from it for a drawing, and words before the section, as context, for a first pass's plan.
    */
   excerpt: Schema.Struct({ draftWordsBefore: NonNegative, draftWordsAfter: Positive, drawWords: Positive, planWordsBefore: NonNegative }),
 });
@@ -44,7 +44,7 @@ export const storyboardDefaults: StoryboardSettings = {
   excerpt: { draftWordsBefore: 60, draftWordsAfter: 90, drawWords: 40, planWordsBefore: 60 },
 };
 
-export type StoryboardCode = "InvalidRequest" | "JobRunning" | "DraftFailed" | "PlanFailed" | "RendererFailed" | "IoFailed";
+export type StoryboardCode = "InvalidRequest" | "JobRunning" | "DraftFailed" | "PlanFailed" | "RendererFailed" | "InvalidDraft" | "IoFailed";
 const errors = errorsOf<"storyboard", StoryboardCode>("storyboard");
 /** A storyboard failure: the shared AnimatorError with this module's code union. */
 export const storyboardError = errors.make;

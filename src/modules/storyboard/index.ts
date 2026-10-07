@@ -1,27 +1,34 @@
 /**
- * Drafting and drawing storyboard frames (A66). A draft is one text turn of the Codex CLI under the user's ChatGPT login; a drawing is one
- * Codex turn that calls its image tool, else local Qwen Image 2.1 when that fails. Each runs in a fresh empty directory with a read-only
- * sandbox and without the user's Codex configuration, and is told only the shot's description and a short excerpt of the narration.
+ * Drafting and drawing storyboard frames (A66, A68). A draft is one text turn of the Codex CLI under the user's ChatGPT login; a drawing is
+ * one Codex turn that calls its image tool, else local Qwen Image 2.1 when that fails. Each runs in a fresh empty directory with a read-only
+ * sandbox and without the user's Codex configuration, and is told only the shot's description, what the person asked for, and a short
+ * excerpt of the narration. A drawing lands either as a storyboard record (a first pass's) or as a shot's draft drawing (the drafting space's).
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Duration, Effect, FileSystem, Semaphore, Stream } from "effect";
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process";
-import { type ChunkElement, jobPending, type StoryboardAttempt, type StoryboardJob, type StoryboardRenderer, STORYBOARD_TRACK } from "@animator/domain";
+import { type ChunkElement, jobPending, type StoryboardAttempt, type StoryboardDraftDrawing, type StoryboardJob, type StoryboardRenderer, STORYBOARD_TRACK } from "@animator/domain";
 import { AnimatorError } from "../../core/error.js";
 import { readBounded } from "../../core/io.js";
 import { type StoryContext } from "../story/index.js";
 import { addShot, mintUlid, type ShotRecord, type VisualTimelineSettings } from "../visual-timeline/index.js";
 import { storyboardError, type StoryboardCode, type StoryboardSettings } from "./contracts.js";
+import { type DraftTarget, writeDraftDrawing } from "./drafts.js";
 export * from "./contracts.js";
+export * from "./drafts.js";
 
 const fail = (code: StoryboardCode, message: string) => Effect.fail(storyboardError({ code, message }));
 const OUTPUT_LIMIT = 1_048_576;
 const ERROR_TAIL = 600;
 const tail = (text: string) => { const trimmed = text.trim().replace(/\s+/g, " "); return trimmed.length > ERROR_TAIL ? `…${trimmed.slice(-ERROR_TAIL)}` : trimmed; };
 
-/** The narration around a word, as written: words and the punctuation between them, `before` words ahead of it and `after` words from it on. `mark` brackets the word itself as `[[word]]`. Null when the word is not in the transcript. */
-export function excerpt(elements: ReadonlyArray<ChunkElement>, anchorWordId: string, before: number, after: number, mark: boolean): string | null {
+/**
+ * The narration around a word, as written: words and the punctuation between them, `before` words ahead of it and `after` words from it on.
+ * `markThrough` brackets the narration from the word through that later word as `[[like this]]` (the word itself, to mark only it), or
+ * null for no mark. Null when the word is not in the transcript.
+ */
+export function excerpt(elements: ReadonlyArray<ChunkElement>, anchorWordId: string, before: number, after: number, markThrough: string | null): string | null {
   const at = elements.findIndex(e => e.kind === "word" && e.id === anchorWordId);
   if (at < 0) return null;
   let from = at;
@@ -29,15 +36,24 @@ export function excerpt(elements: ReadonlyArray<ChunkElement>, anchorWordId: str
   while (from < at && elements[from]!.kind === "punctuation") from++;
   let to = at;
   for (let words = 0; to < elements.length && words < after; to++) if (elements[to]!.kind === "word") words++;
-  const text = elements.slice(from, to).map(e => e.kind === "word" && e.id === anchorWordId && mark ? `[[${e.value}]]` : e.value).join("");
+  const close = markThrough === null ? -1 : elements.findIndex((e, i) => i >= at && e.kind === "word" && e.id === markThrough);
+  const text = elements.slice(from, to).map((e, i) => `${close >= 0 && from + i === at ? "[[" : ""}${e.value}${close >= 0 && from + i === close ? "]]" : ""}`).join("");
   return text.replace(/\s+/g, " ").trim();
 }
 
-/** What a draft asks for: one shot, beginning at the marked word, described for a storyboard artist. */
-export function draftPrompt(options: { readonly title: string; readonly excerpt: string }): string {
+/**
+ * What a draft asks for: one shot, covering the narration marked in the excerpt, described for a storyboard artist. In the drafting space
+ * (A68) it may also revise the shot's `current` description and follow what the person asked for, `request`, which leads where it and the
+ * passage differ only in what to show.
+ */
+export function draftPrompt(options: { readonly title: string; readonly excerpt: string; readonly current?: string; readonly request?: string }): string {
+  const current = options.current?.trim() ?? "";
+  const request = options.request?.trim() ?? "";
   return [
     "You are helping storyboard an animated film made from an audiobook's narration.",
-    "Propose one shot: what the camera sees in the frame that begins at the word marked [[like this]] in the passage below, for as long as the narration stays on that moment.",
+    "Propose one shot: what the camera sees in the frame that covers the narration marked [[like this]] in the passage below, for as long as the narration stays on that moment.",
+    ...(current === "" ? [] : [`The shot is described now as: "${current}"`]),
+    ...(request === "" ? [] : [`The director asks for this: "${request}". Follow it${current === "" ? "" : ", and keep what it does not change from the description now"}.`]),
     "Write 30 to 60 words of plain present-tense description: subject, action, setting, framing, and light. Describe only what can be drawn. Stay faithful to the passage; do not invent names, faces, or events it does not support.",
     "Reply with only the description. Do not run commands or read files.",
     "",
@@ -287,6 +303,42 @@ function fallbackDraw(settings: StoryboardSettings, sketch: string, directory: s
   }));
 }
 
+/** A drawing made: which renderer drew it, its image, the exact prompt, the notes a record or draft carries, and why the primary failed. */
+type Rendered = { readonly renderer: StoryboardRenderer; readonly imagePath: string; readonly prompt: string; readonly notes: string };
+/**
+ * Draw one sketch: ChatGPT through the Codex CLI first, local Qwen Image 2.1 only when that fails for any reason (not installed, not logged
+ * in, refused, timed out, out of quota). The image is left in `directory` or where Codex keeps it; the notes name the model and thread or
+ * command, the seconds it took, the image's size, and, after a fallback, why the primary failed. Fails with the last renderer's reason
+ * when both fail.
+ */
+function renderSketch(settings: StoryboardSettings, sketch: string, directory: string, maxImageBytes: number, report: DrawReport): Effect.Effect<Rendered, AnimatorError, FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner> {
+  const renderers: ReadonlyArray<readonly [StoryboardRenderer, typeof codexDraw]> = [["codex-chatgpt", codexDraw], ["qwen-image-2.1", fallbackDraw]];
+  return Effect.gen(function* () {
+    const failures: string[] = [];
+    for (const [renderer, draw] of renderers) {
+      report.onAttempt(renderer);
+      const started = Date.now();
+      const drawn = yield* draw(settings, sketch, directory).pipe(Effect.result);
+      if (drawn._tag === "Failure") {
+        const message = drawn.failure.message;
+        failures.push(message);
+        report.onAttemptFailed(renderer, message);
+        continue;
+      }
+      const seconds = ((Date.now() - started) / 1000).toFixed(1);
+      const size = pngSize(yield* readBounded(drawn.success.imagePath, maxImageBytes).pipe(Effect.mapError(e => storyboardError({ code: "RendererFailed", message: e.message }))));
+      const fallbackNote = failures.length > 0 ? ` Drawn after the primary renderer failed: ${failures.join(" ")}` : "";
+      return { renderer, imagePath: drawn.success.imagePath, prompt: drawn.success.prompt, notes: `${drawn.success.notes} ${seconds} s${size === null ? "" : `, ${size.width}x${size.height}`}.${fallbackNote}` };
+    }
+    return yield* fail("RendererFailed", failures.at(-1) ?? "No renderer is configured.");
+  });
+}
+/** A fresh empty working directory for one drawing, removed with its scope. */
+const drawingDirectory = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.makeTempDirectoryScoped({ prefix: "animator-storyboard-draw-" }).pipe(Effect.mapError(() => storyboardError({ code: "IoFailed", message: "Cannot make a working directory for the drawing." })));
+});
+
 export type DrawFrameRequest = {
   readonly settings: StoryboardSettings; readonly story: StoryContext; readonly timeline: VisualTimelineSettings;
   readonly producer: { readonly name: string; readonly version: string };
@@ -296,34 +348,28 @@ export type DrawFrameRequest = {
   readonly report: DrawReport;
 };
 /**
- * Draw one frame: ChatGPT through the Codex CLI first, local Qwen Image 2.1 only when that fails for any reason (not installed, not logged
- * in, refused, timed out, out of quota), then publish the drawing as a new storyboard record anchored to the frame's word and naming its
- * renderer, its exact prompt, and how long it took. Fails with the last renderer's reason when both fail.
+ * Draw one frame (A66, A67) and publish the drawing as a new storyboard record anchored to the frame's word, naming its renderer, its exact
+ * prompt, and how long it took.
  */
 export function drawFrame(request: DrawFrameRequest): Effect.Effect<ShotRecord, AnimatorError, FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner> {
-  const renderers: ReadonlyArray<readonly [StoryboardRenderer, typeof codexDraw]> = [["codex-chatgpt", codexDraw], ["qwen-image-2.1", fallbackDraw]];
   return Effect.scoped(Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "animator-storyboard-draw-" }).pipe(Effect.mapError(() => storyboardError({ code: "IoFailed", message: "Cannot make a working directory for the drawing." })));
-    const failures: string[] = [];
-    for (const [renderer, draw] of renderers) {
-      request.report.onAttempt(renderer);
-      const started = Date.now();
-      const drawn = yield* draw(request.settings, request.sketch, directory).pipe(Effect.result);
-      if (drawn._tag === "Failure") {
-        const message = drawn.failure.message;
-        failures.push(message);
-        request.report.onAttemptFailed(renderer, message);
-        continue;
-      }
-      const seconds = ((Date.now() - started) / 1000).toFixed(1);
-      const size = pngSize(yield* readBounded(drawn.success.imagePath, request.timeline.limits.maxImageBytes).pipe(Effect.mapError(e => storyboardError({ code: "RendererFailed", message: e.message }))));
-      const fallbackNote = failures.length > 0 ? ` Drawn after the primary renderer failed: ${failures.join(" ")}` : "";
-      return yield* addShot({ story: request.story, settings: request.timeline, producer: request.producer, mode: "graphic-illustration", trackId: STORYBOARD_TRACK,
-        startSample: yield* request.startSample, anchorWordId: request.anchorWordId, renderer, label: "Storyboard frame", prompt: drawn.success.prompt,
-        notes: `${drawn.success.notes} ${seconds} s${size === null ? "" : `, ${size.width}x${size.height}`}.${fallbackNote}`, imageSourcePath: drawn.success.imagePath });
-    }
-    return yield* fail("RendererFailed", failures.at(-1) ?? "No renderer is configured.");
+    const drawn = yield* renderSketch(request.settings, request.sketch, yield* drawingDirectory, request.timeline.limits.maxImageBytes, request.report);
+    return yield* addShot({ story: request.story, settings: request.timeline, producer: request.producer, mode: "graphic-illustration", trackId: STORYBOARD_TRACK,
+      startSample: yield* request.startSample, anchorWordId: request.anchorWordId, renderer: drawn.renderer, label: "Storyboard frame", prompt: drawn.prompt,
+      notes: drawn.notes, imageSourcePath: drawn.imagePath });
+  }));
+}
+
+export type DrawDraftRequest = {
+  readonly settings: StoryboardSettings; readonly target: DraftTarget; readonly producer: { readonly name: string; readonly version: string };
+  readonly anchorWordId: string; readonly startWordId: string; readonly description: string; readonly sketch: string; readonly report: DrawReport;
+};
+/** Draw a shot's draft drawing (A68) and keep it as the shot's one draft drawing, off the timeline, until it is saved or discarded. */
+export function drawDraft(request: DrawDraftRequest): Effect.Effect<StoryboardDraftDrawing, AnimatorError, FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner> {
+  return Effect.scoped(Effect.gen(function* () {
+    const drawn = yield* renderSketch(request.settings, request.sketch, yield* drawingDirectory, request.target.maxImageBytes, request.report);
+    return yield* writeDraftDrawing(request.target, { anchorWordId: request.anchorWordId, startWordId: request.startWordId, description: request.description,
+      renderer: drawn.renderer, prompt: drawn.prompt, notes: drawn.notes, imageSourcePath: drawn.imagePath, producer: request.producer });
   }));
 }
 
@@ -343,16 +389,17 @@ export class StoryboardJobBook {
   list(storyId: string): ReadonlyArray<StoryboardJob> {
     return (this.jobs.get(storyId) ?? []).map(job => ({ ...job, attempts: job.attempts.map(a => ({ ...a })) }));
   }
-  /** Whether a drawing of the frame at this word is queued or running. */
-  pending(storyId: string, anchorWordId: string): boolean {
-    return (this.jobs.get(storyId) ?? []).some(job => job.anchorWordId === anchorWordId && jobPending(job));
+  /** Whether a drawing of this kind for the shot at this word is queued or running. */
+  pending(storyId: string, anchorWordId: string, kind: StoryboardJob["kind"]): boolean {
+    return (this.jobs.get(storyId) ?? []).some(job => job.kind === kind && job.anchorWordId === anchorWordId && jobPending(job));
   }
   /**
-   * A new queued job, and the effect that waits for a turn, runs `draw`, and records how it ended; that effect never fails. The caller has
-   * checked that no drawing of the same frame is pending, and forks the effect or waits for it.
+   * A new queued job, and the effect that waits for a turn, runs `draw`, and records how it ended; that effect never fails. `draw` answers
+   * the record a frame drawing published or the draft a draft drawing wrote. The caller has checked that no drawing of the same kind for
+   * the same shot is pending, and forks the effect or waits for it.
    */
-  queue<E extends { readonly message: string }, R>(storyId: string, anchorWordId: string, draw: (report: DrawReport) => Effect.Effect<{ readonly id: string }, E, R>, firstPassId?: string): { readonly job: StoryboardJob; readonly run: Effect.Effect<StoryboardJob, never, R> } {
-    const job: MutableJob = { id: mintUlid(), anchorWordId, status: "queued", requestedAt: new Date().toISOString(), attempts: [], ...(firstPassId !== undefined ? { firstPassId } : {}) };
+  queue<E extends { readonly message: string }, R>(storyId: string, kind: StoryboardJob["kind"], anchorWordId: string, draw: (report: DrawReport) => Effect.Effect<{ readonly id: string }, E, R>, firstPassId?: string): { readonly job: StoryboardJob; readonly run: Effect.Effect<StoryboardJob, never, R> } {
+    const job: MutableJob = { id: mintUlid(), kind, anchorWordId, status: "queued", requestedAt: new Date().toISOString(), attempts: [], ...(firstPassId !== undefined ? { firstPassId } : {}) };
     const list = this.jobs.get(storyId) ?? [];
     list.push(job);
     this.jobs.set(storyId, list);
@@ -361,16 +408,16 @@ export class StoryboardJobBook {
       onAttempt: renderer => { job.attempts.push({ renderer, startedAt: now() }); },
       onAttemptFailed: (_, message) => { const last = job.attempts.at(-1); if (last !== undefined) { last.finishedAt = now(); last.error = message; } },
     };
-    const finish = (outcome: { readonly recordId: string } | { readonly error: string }) => Effect.sync(() => {
+    const finish = (outcome: { readonly id: string } | { readonly error: string }) => Effect.sync(() => {
       const last = job.attempts.at(-1);
       if (last !== undefined && last.finishedAt === undefined) last.finishedAt = now();
       job.finishedAt = now();
-      if ("recordId" in outcome) { job.status = "done"; job.recordId = outcome.recordId; }
+      if ("id" in outcome) { job.status = "done"; if (kind === "frame") job.recordId = outcome.id; else job.draftId = outcome.id; }
       else { job.status = "failed"; job.error = outcome.error; }
       return { ...job, attempts: job.attempts.map(a => ({ ...a })) } satisfies StoryboardJob;
     });
     const run = this.turns.withPermits(1)(Effect.suspend(() => { job.status = "running"; return draw(report); })).pipe(
-      Effect.matchEffect({ onSuccess: record => finish({ recordId: record.id }), onFailure: e => finish({ error: e.message }) }),
+      Effect.matchEffect({ onSuccess: made => finish({ id: made.id }), onFailure: e => finish({ error: e.message }) }),
       Effect.catchDefect(defect => finish({ error: `The drawing stopped unexpectedly: ${String(defect)}` })));
     return { job: { ...job, attempts: [] }, run };
   }
