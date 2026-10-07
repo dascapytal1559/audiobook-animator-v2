@@ -3,7 +3,7 @@ import test from "node:test";
 import type { ClipIdentity } from "./identity.js";
 import type { SceneDescriptionTake } from "./scene-descriptions.js";
 import { mergeTimeline, type ShotRecord } from "./shots.js";
-import { cursorWord, frameAt, latestJobs, STORYBOARD_TRACK, storyboardFrames, type StoryboardJob } from "./storyboard.js";
+import { cursorWord, frameAt, jobPending, latestJobs, STORYBOARD_TRACK, storyboardFrames, type StoryboardJob } from "./storyboard.js";
 
 const clip: ClipIdentity = { bookId: "b", storyId: "s", audioSha256: "a".repeat(64), transcriptSha256: "b".repeat(64), sampleRateHz: 48000, sampleCount: 96000 };
 const record = (id: string, startSample: number, fields: Partial<ShotRecord> = {}): ShotRecord =>
@@ -39,7 +39,8 @@ test("the cursor's word is the word being spoken, else the next to start, else t
 });
 
 test("latestJobs keeps the newest job for each frame", () => {
-  const job = (id: string, anchorWordId: string, startedAt: string): StoryboardJob => ({ id, anchorWordId, status: "done", startedAt, attempts: [] });
+  const job = (id: string, anchorWordId: string, requestedAt: string): StoryboardJob => ({ id, anchorWordId, status: "done", requestedAt, attempts: [] });
   const latest = latestJobs([job("01ARZ3NDEKTSV4RRFFQ69G5FA2", "w1", "2026-01-02T00:00:00Z"), job("01ARZ3NDEKTSV4RRFFQ69G5FA1", "w1", "2026-01-01T00:00:00Z"), job("01ARZ3NDEKTSV4RRFFQ69G5FA3", "w5", "2026-01-01T00:00:00Z")]);
   assert.deepEqual([...latest].map(([word, j]) => [word, j.id]), [["w1", "01ARZ3NDEKTSV4RRFFQ69G5FA2"], ["w5", "01ARZ3NDEKTSV4RRFFQ69G5FA3"]]);
+  assert.deepEqual((["queued", "running", "done", "failed"] as const).map(status => jobPending({ status })), [true, true, false, false]);
 });

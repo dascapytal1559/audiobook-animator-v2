@@ -8,6 +8,7 @@ export { editorDefaults, editorError, isEditorError, type EditorCode, EditorSett
 export { computePeaksAndSpeech, type DecodeOptions, PeakAccumulator, type PeaksIdentity, readPeaksCache, readSpeechCache, type SpeechIdentity, writeCache } from "./peaks.js";
 export { type AlignOptions, alignTiming, type Caches, loadTiming, makeCaches, type StoryPayload, storyPayload, timingPaths, writeManualTiming } from "./timing.js";
 export { type ByteRange, parseRange } from "./range.js";
+export { applyFirstPass, planFirstPass, type StoryboardRun } from "./storyboard.js";
 export { type EditorShared, type EditorContext, type EditorLibrary, type EditorRouteOptions, type EditorWord, listStories, loadEditorContext, loadEditorLibrary, makeEditorRoutes, openStory, type OpenStory, type StorySummary } from "./routes.js";
 
 export type EditorServerOptions = EditorShared & EditorRouteOptions & { readonly port: number };

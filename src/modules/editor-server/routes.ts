@@ -9,12 +9,13 @@ import { addShot, type ClipIdentity, isUlid, loadVisualTimeline, ShotMode, ShotR
 import { type TimingEntries } from "../word-timing/index.js";
 import { type LoadedStoryMap, loadStoryMap } from "../story-map/index.js";
 import { addSceneDescriptionTake, loadSceneDescriptions, SceneDescriptionTakeBody } from "../scene-descriptions/index.js";
-import { codexDraft, draftPrompt, drawFrame, excerpt, sketchPrompt, StoryboardDraftRequest, StoryboardDrawRequest, StoryboardJobBook, storyboardError, type StoryboardSettings } from "../storyboard/index.js";
-import { type ChunkElement, declaredShots, type SceneDescriptionsResponse, type StoriesResponse, type StoryboardDraft, type StoryboardJobsResponse, storyboardFrames, type StoryMapResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
+import { codexDraft, draftPrompt, excerpt, StoryboardDraftRequest, StoryboardDrawRequest, StoryboardFirstPassApply, StoryboardFirstPassPlanRequest, StoryboardJobBook, type StoryboardSettings } from "../storyboard/index.js";
+import { type ChunkElement, declaredShots, type SceneDescriptionsResponse, type StoriesResponse, type StoryboardDraft, type StoryboardFirstPassPlan, type StoryboardFirstPassResult, type StoryboardJobsResponse, type StoryMapResponse, type StorySummary, type TimelineResponse } from "@animator/domain";
 export type { StorySummary };
 import { type EditorSettings, editorError, type EditorCode } from "./contracts.js";
 import type { PeaksIdentity, SpeechIdentity } from "./peaks.js";
 import { parseRange } from "./range.js";
+import { applyFirstPass, checkDrawable, planFirstPass, queueDraw, type StoryboardRun } from "./storyboard.js";
 import { alignTiming, type Caches, loadTiming, makeCaches, storyPayload, writeManualTiming } from "./timing.js";
 type Code = EditorCode;
 const fail = (code: Code, message: string) => Effect.fail(editorError({ code, message }));
@@ -48,7 +49,7 @@ export type EditorLibrary = EditorShared & {
 };
 export type EditorRouteOptions = {
   readonly producer: { readonly name: string; readonly version: string }; readonly staticDirectory?: string;
-  /** How storyboard frames are drafted and drawn (A66). */
+  /** How storyboard frames are drafted, planned, and drawn (A66, A67). */
   readonly storyboard: StoryboardSettings;
 };
 
@@ -121,7 +122,7 @@ function errorResponse(error: unknown, options: { readonly decisionsFromClient?:
       timeline: { InvalidConfig: 500, InvalidRequest: 400, InvalidRecord: 500, InvalidDecisions: options.decisionsFromClient ? 400 : 500, IdentityMismatch: 409, RecordExists: 409, IoFailed: 500 },
       map: { NotFound: 404, InvalidMap: 500, IdentityMismatch: 409, IoFailed: 500 },
       descriptions: { InvalidRequest: 400, InvalidDescriptions: 500, IdentityMismatch: 409, TakeExists: 409, IoFailed: 500 },
-      storyboard: { InvalidRequest: 400, JobRunning: 409, DraftFailed: 502, RendererFailed: 502, IoFailed: 500 },
+      storyboard: { InvalidRequest: 400, JobRunning: 409, DraftFailed: 502, PlanFailed: 502, RendererFailed: 502, IoFailed: 500 },
     };
     return errorJson(byModule[error.module]?.[error.code] ?? 500, error.code, error.message);
   }
@@ -297,13 +298,17 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     const recorded = yield* addSceneDescriptionTake({ story: ctx.story, maxBytes: ctx.settings.editor.limits.maxSceneDescriptionsBytes, take, shots: declaredShots(stitched), producer: options.producer });
     return json(recorded, 201);
   })))));
-  /** Storyboard frames (A66): drafts answer in the request; drawings run in the background and are reported by the jobs route. */
-  const jobs = new StoryboardJobBook();
-  const decodeBody = <S extends typeof StoryboardDraftRequest | typeof StoryboardDrawRequest>(schema: S, body: unknown) =>
-    Schema.decodeUnknownEffect(schema, { onExcessProperty: "error" })(body).pipe(Effect.mapError(e => editorError({ code: "InvalidRequest", message: `Body must be { anchorWordId }. ${e.message.replace(/\s+/g, " ")}` })));
+  /**
+   * Storyboard frames (A66) and first passes (A67): drafts and plans answer in the request; drawings are queued in the background, a few
+   * at a time, and reported by the jobs route.
+   */
+  const jobs = new StoryboardJobBook(options.storyboard.concurrentDraws);
+  const storyboardRun: StoryboardRun = { settings: options.storyboard, producer: options.producer, jobs };
+  const decodeBody = <S extends Schema.Top>(schema: S, body: unknown, shape: string) =>
+    Schema.decodeUnknownEffect(schema, { onExcessProperty: "error" })(body).pipe(Effect.mapError(e => editorError({ code: "InvalidRequest", message: `Body must be ${shape}. ${e.message.replace(/\s+/g, " ")}` })));
   const storyboardJobs = HttpRouter.add("GET", at("/storyboard/jobs"), handle(withStory(({ ctx }) => Effect.succeed(json({ jobs: jobs.list(ctx.clip.storyId) } satisfies StoryboardJobsResponse)))));
   const storyboardDraft = HttpRouter.add("POST", at("/storyboard/draft"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
-    const { anchorWordId } = yield* decodeBody(StoryboardDraftRequest, yield* readJsonObject(request, 4096));
+    const { anchorWordId } = yield* decodeBody(StoryboardDraftRequest, yield* readJsonObject(request, 4096), "{ anchorWordId }");
     const { draftWordsBefore, draftWordsAfter } = options.storyboard.excerpt;
     const passage = excerpt(ctx.elements, anchorWordId, draftWordsBefore, draftWordsAfter, true);
     if (passage === null) return yield* fail("InvalidRequest", `anchorWordId ${anchorWordId} is not a word of the transcript.`);
@@ -312,25 +317,26 @@ export function makeEditorRoutes(library: EditorLibrary, options: EditorRouteOpt
     return json({ anchorWordId, ...draft, prompt } satisfies StoryboardDraft);
   }))));
   const storyboardDraw = HttpRouter.add("POST", at("/storyboard/draw"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
-    const { anchorWordId } = yield* decodeBody(StoryboardDrawRequest, yield* readJsonObject(request, 4096));
-    const storyId = ctx.clip.storyId;
-    const frame = storyboardFrames((yield* timeline(ctx)).stitched, yield* descriptions(ctx)).find(f => f.anchorWordId === anchorWordId);
-    if (frame === undefined) return yield* fail("InvalidRequest", `No storyboard frame starts at ${anchorWordId}: describe a shot there first.`);
-    if (frame.description === null) return yield* fail("InvalidRequest", `The storyboard frame at ${anchorWordId} has no description to draw from.`);
-    if (jobs.running(storyId, anchorWordId)) return yield* Effect.fail(storyboardError({ code: "JobRunning", message: `The storyboard frame at ${anchorWordId} is already being drawn.` }));
-    const sketch = sketchPrompt({ title: ctx.story.story.title, description: frame.description.text, excerpt: excerpt(ctx.elements, anchorWordId, 0, options.storyboard.excerpt.drawWords, false) });
-    const job = jobs.begin(storyId, anchorWordId);
-    const startSample = Effect.map(loadTiming(ctx), ({ wordStarts }) => wordStarts.get(anchorWordId) ?? frame.startSample);
-    yield* drawFrame({ settings: options.storyboard, story: ctx.story, timeline: ctx.settings.timeline, producer: options.producer, anchorWordId, sketch, startSample,
-      onAttempt: renderer => jobs.attempt(storyId, job.id, renderer), onAttemptFailed: (_, message) => jobs.attemptFailed(storyId, job.id, message) }).pipe(
-      Effect.matchEffect({ onSuccess: record => Effect.sync(() => jobs.finish(storyId, job.id, { recordId: record.id })), onFailure: e => Effect.sync(() => jobs.finish(storyId, job.id, { error: e.message })) }),
-      Effect.catchDefect(defect => Effect.sync(() => jobs.finish(storyId, job.id, { error: `The drawing stopped unexpectedly: ${String(defect)}` }))),
-      Effect.forkDetach);
-    return json({ jobs: jobs.list(storyId).filter(j => j.id === job.id) } satisfies StoryboardJobsResponse, 202);
+    const { anchorWordId } = yield* decodeBody(StoryboardDrawRequest, yield* readJsonObject(request, 4096), "{ anchorWordId }");
+    yield* checkDrawable(ctx, jobs, anchorWordId);
+    const { job, run } = queueDraw(ctx, storyboardRun, anchorWordId);
+    yield* Effect.forkDetach(run);
+    return json({ jobs: [job] } satisfies StoryboardJobsResponse, 202);
+  }))));
+  const storyboardFirstPassPlan = HttpRouter.add("POST", at("/storyboard/first-pass/plan"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
+    const { sectionId } = yield* decodeBody(StoryboardFirstPassPlanRequest, yield* readJsonObject(request, 4096), "{ sectionId }");
+    return json((yield* planFirstPass(ctx, storyboardRun, sectionId)) satisfies StoryboardFirstPassPlan);
+  }))));
+  /** A first pass writes records and takes, so it holds the story's take lock while it does; its drawings are queued after. */
+  const storyboardFirstPass = HttpRouter.add("POST", at("/storyboard/first-pass"), request => handle(withStory(({ ctx }) => Effect.gen(function* () {
+    const body = yield* decodeBody(StoryboardFirstPassApply, yield* readJsonObject(request, ctx.settings.editor.limits.maxSceneDescriptionsBytes), "{ sectionId, model, prompt, shots: [{ anchorWordId, text }] }");
+    const { result, runs } = yield* takeLock(ctx.clip.storyId).withPermits(1)(applyFirstPass(ctx, storyboardRun, body));
+    yield* Effect.forEach(runs, run => Effect.forkDetach(run), { discard: true });
+    return json(result satisfies StoryboardFirstPassResult, 202);
   }))));
   const apiFallback = HttpRouter.add("*", "/api/*", errorJson(404, "NotFound", "No such API route."));
   const root = options.staticDirectory === undefined
-    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`Audiobook Animator editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /map /map/subjects/:subjectId/images/:index /scene-descriptions /storyboard/jobs /storyboard/draft /storyboard/draw /audio /peaks /speech /events\n`))
+    ? HttpRouter.add("GET", "/", HttpServerResponse.text(`Audiobook Animator editor server: ${library.stories.length} stories under ${library.storiesDirectory}.\nNo static client directory was given. API routes: /api/stories, then under /api/stories/:storyId: /story /timeline /decisions /word-timing /word-timing/align /shots /shots/:id/image /map /map/subjects/:subjectId/images/:index /scene-descriptions /storyboard/jobs /storyboard/draft /storyboard/draw /storyboard/first-pass/plan /storyboard/first-pass /audio /peaks /speech /events\n`))
     : HttpStaticServer.layer({ root: resolve(options.staticDirectory), index: "index.html", spa: true, cacheControl: "no-cache" });
-  return Layer.mergeAll(stories, story, timelineRoute, decisions, wordTiming, align, speech, shots, image, map, mapImage, sceneDescriptions, sceneDescriptionTake, storyboardJobs, storyboardDraft, storyboardDraw, audio, peaks, events, apiFallback, root);
+  return Layer.mergeAll(stories, story, timelineRoute, decisions, wordTiming, align, speech, shots, image, map, mapImage, sceneDescriptions, sceneDescriptionTake, storyboardJobs, storyboardDraft, storyboardDraw, storyboardFirstPassPlan, storyboardFirstPass, audio, peaks, events, apiFallback, root);
 }

@@ -1,12 +1,12 @@
 /** Typed wrappers over the editor server API. Every response is decoded with the shared domain schema before the client trusts it (Q9). */
 import { useEffect } from "react";
-import { AlignResponse, ApiErrorBody, decodeStrict, PeaksFile, SceneDescriptionsResponse, SceneDescriptionTake, ServedShotRecord, SpeechFile, StoriesResponse, StoryboardDraft, StoryboardJobsResponse, StoryMapResponse, StoryResponse, TimelineResponse, type AlignRequest, type DecisionsBody, type SceneDescriptionTakeBody, type ShotMode, type WordTimingBody } from "@animator/domain";
+import { AlignResponse, ApiErrorBody, decodeStrict, PeaksFile, SceneDescriptionsResponse, SceneDescriptionTake, ServedShotRecord, SpeechFile, StoriesResponse, StoryboardDraft, StoryboardFirstPassPlan, StoryboardFirstPassResult, StoryboardJobsResponse, StoryMapResponse, StoryResponse, TimelineResponse, type AlignRequest, type DecisionsBody, type SceneDescriptionTakeBody, type ShotMode, type StoryboardFirstPassApply, type WordTimingBody } from "@animator/domain";
 export type {
   AlignReport, AlignRequest, AlignResponse, AlignRun, CandidateGroup, Chunk, ClipIdentity, Decisions, DecisionsBody, EffectiveShot, ShotDecision, ShotMode,
   StitchedEntry, StoriesResponse, StoryChunking, StoryResponse, StorySummary, TimelineResponse, TimelineSettings, TimingMeasure, TimingSummary, WordTimingBody,
   ResolvedSection, ResolvedStoryMap, ResolvedSubject, SectionKind, ServedSubject, StoryMapResponse, SubjectKind, SceneDescriptionsResponse, SceneDescriptionTake,
   ServedShotRecord as ShotRecord, TimingEntry as Span, StoryWord as Word, PeaksFile as PeaksResponse, SpeechFile as SpeechResponse,
-  SceneDescriptionTakeBody, StoryboardDraft, StoryboardFrame, StoryboardJob, StoryboardJobsResponse, StoryboardRenderer,
+  SceneDescriptionTakeBody, StoryboardDraft, StoryboardFirstPassApply, StoryboardFirstPassPlan, StoryboardFirstPassResult, StoryboardFirstPassShot, StoryboardFrame, StoryboardJob, StoryboardJobsResponse, StoryboardRenderer,
 } from "@animator/domain";
 export { SHOT_MODES } from "@animator/domain";
 
@@ -58,6 +58,10 @@ export function storyApi(storyId: string) {
     postStoryboardDraft: (anchorWordId: string) => request(StoryboardDraft, `${base}/storyboard/draft`, jsonInit("POST", { anchorWordId })),
     /** Start drawing the frame at the word from its newest description; answers with the one job started. */
     postStoryboardDraw: (anchorWordId: string) => request(StoryboardJobsResponse, `${base}/storyboard/draw`, jsonInit("POST", { anchorWordId })),
+    /** A model's proposed shots for a beat or scene, judged against the storyboard as it stands; nothing is recorded (A67). */
+    postStoryboardFirstPassPlan: (sectionId: string) => request(StoryboardFirstPassPlan, `${base}/storyboard/first-pass/plan`, jsonInit("POST", { sectionId })),
+    /** Carry out a plan: declare its new frames, record its new descriptions, and queue its drawings; answers with what it did (A67). */
+    postStoryboardFirstPass: (body: StoryboardFirstPassApply) => request(StoryboardFirstPassResult, `${base}/storyboard/first-pass`, jsonInit("POST", body)),
     putWordTiming: (body: WordTimingBody) => request(StoryResponse, `${base}/word-timing`, jsonInit("PUT", body)),
     postAlign: (body: AlignRequest) => request(AlignResponse, `${base}/word-timing/align`, jsonInit("POST", body)),
     putDecisions: (body: DecisionsBody) => request(TimelineResponse, `${base}/decisions`, jsonInit("PUT", body)),

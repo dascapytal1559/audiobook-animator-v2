@@ -13,7 +13,8 @@ import { Storyboard } from "./Storyboard.js";
 import { StoryPicker } from "./StoryPicker.js";
 import { decisionsForView, initialState, isDecisionsDirty, isDirty, isTimingDirty, reduce, wordsForView, workingBounds } from "./state.js";
 import { booleanFlags, clampSectionHeight, defaultSectionHeights, renamedField, sectionHeights, sectionMaxHeight, useViewPreference } from "./preferences.js";
-import { resolveMapView } from "./story-map-view.js";
+import { currentChain, resolveMapView } from "./story-map-view.js";
+import { firstPassSection } from "./storyboard-view.js";
 import { Timeline, type SubtitleToggles, type TimingRowData } from "./Timeline.js";
 import { effectiveWords, wordStartMap } from "./timing.js";
 import { Transport } from "./Transport.js";
@@ -122,6 +123,8 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const currentWordId = useMemo(() => wordAt(sortedWords, state.playhead)?.id ?? null, [sortedWords, state.playhead]);
   // The storyboard (A66) reads every track's timeline as the lanes show it, pending decisions included.
   const frames = useMemo(() => storyboardFrames(merged.stitched, state.takes), [merged.stitched, state.takes]);
+  // A first pass (A67) plans the beat or scene holding the playhead.
+  const firstPassTarget = useMemo(() => firstPassSection(currentChain(mapView, state.playhead)), [mapView, state.playhead]);
   const mergedRef = useRef(activeTimeline);
   mergedRef.current = activeTimeline;
 
@@ -376,7 +379,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
             <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} subtitles={subtitles} />
           </Panel>
           <Panel id="storyboard" title="Storyboard" open={panels.storyboard} onToggle={() => togglePanel("storyboard")} height={heights.storyboard} onResize={h => resizePanel("storyboard", h)}>
-            {state.story && <Storyboard api={api} frames={frames} words={sortedWords} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} tolerance={tolerance} onSeek={onSeek} onChanged={onStoryboardChanged} />}
+            {state.story && <Storyboard api={api} frames={frames} words={sortedWords} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} tolerance={tolerance} section={firstPassTarget} onSeek={onSeek} onChanged={onStoryboardChanged} />}
           </Panel>
           <Panel id="scenes" title="Scenes" open={panels.scenes} onToggle={() => togglePanel("scenes")} height={heights.scenes} onResize={h => resizePanel("scenes", h)}>
             {state.story && <Scenes view={mapView} words={words} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} stitched={merged.stitched} tolerance={tolerance} takes={state.takes} selectedSubjectId={selectedSubjectId} onSelectSubject={selectSubject} onSeek={onSeek} />}

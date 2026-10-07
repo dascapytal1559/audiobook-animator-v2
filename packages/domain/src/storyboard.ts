@@ -5,7 +5,7 @@
  */
 import { Schema } from "effect";
 import { ModelId, type SceneDescriptionTake, takesForShot } from "./scene-descriptions.js";
-import { IsoUtc, Text } from "./schema.js";
+import { IsoUtc, NonNegative, Text } from "./schema.js";
 import { ShotId, type StitchedEntry } from "./shots.js";
 
 /** The image track every storyboard frame lives on. */
@@ -80,14 +80,17 @@ export type StoryboardDrawRequest = typeof StoryboardDrawRequest.Type;
 export const StoryboardAttempt = Schema.Struct({ renderer: StoryboardRenderer, startedAt: IsoUtc, finishedAt: Schema.optionalKey(IsoUtc), error: Schema.optionalKey(Schema.String) });
 export type StoryboardAttempt = typeof StoryboardAttempt.Type;
 /**
- * A drawing in the background, kept by the server for its lifetime only: the primary renderer's try, then the fallback's if the first
- * failed. A finished job names the record it wrote; a failed one says why the last try failed.
+ * A drawing in the background, kept by the server for its lifetime only. It is `queued` from `requestedAt` until a renderer is free (the
+ * server draws a few frames at a time, A67), then `running`: the primary renderer's try, then the fallback's if the first failed. A finished
+ * job names the record it wrote; a failed one says why the last try failed. A drawing a first pass asked for names that pass.
  */
 export const StoryboardJob = Schema.Struct({
-  id: ShotId, anchorWordId: Text, status: Schema.Literals(["running", "done", "failed"]), startedAt: IsoUtc, finishedAt: Schema.optionalKey(IsoUtc),
-  attempts: Schema.Array(StoryboardAttempt), recordId: Schema.optionalKey(ShotId), error: Schema.optionalKey(Schema.String),
+  id: ShotId, anchorWordId: Text, status: Schema.Literals(["queued", "running", "done", "failed"]), requestedAt: IsoUtc, finishedAt: Schema.optionalKey(IsoUtc),
+  attempts: Schema.Array(StoryboardAttempt), recordId: Schema.optionalKey(ShotId), error: Schema.optionalKey(Schema.String), firstPassId: Schema.optionalKey(ShotId),
 });
 export type StoryboardJob = typeof StoryboardJob.Type;
+/** A job that has not ended: queued or running. */
+export const jobPending = (job: Pick<StoryboardJob, "status">): boolean => job.status === "queued" || job.status === "running";
 /** `GET .../storyboard/jobs`, oldest first; also the reply to `POST .../storyboard/draw`, as the one job it started. */
 export const StoryboardJobsResponse = Schema.Struct({ jobs: Schema.Array(StoryboardJob) });
 export type StoryboardJobsResponse = typeof StoryboardJobsResponse.Type;
@@ -95,6 +98,42 @@ export type StoryboardJobsResponse = typeof StoryboardJobsResponse.Type;
 /** The newest job for each frame, keyed by its anchor word: what the Storyboard section reports for a frame. */
 export const latestJobs = (jobs: ReadonlyArray<StoryboardJob>): ReadonlyMap<string, StoryboardJob> => {
   const latest = new Map<string, StoryboardJob>();
-  for (const job of [...jobs].sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id))) latest.set(job.anchorWordId, job);
+  for (const job of [...jobs].sort((a, b) => a.requestedAt.localeCompare(b.requestedAt) || a.id.localeCompare(b.id))) latest.set(job.anchorWordId, job);
   return latest;
 };
+
+/** `POST .../storyboard/first-pass/plan`: propose the shots of one beat or scene of the story map (A67). Nothing is recorded. */
+export const StoryboardFirstPassPlanRequest = Schema.Struct({ sectionId: Text });
+export type StoryboardFirstPassPlanRequest = typeof StoryboardFirstPassPlanRequest.Type;
+/**
+ * One shot of a first pass (A67) and what the pass does there, judged against the storyboard as it stands; nothing that exists is
+ * overwritten. `frame` is `new` when no storyboard frame starts at the word yet, so an image-less storyboard record declares one.
+ * `description` is `new` when the shot has no description take yet and the model proposed one, `kept` when it has one, and `none` when it
+ * has none and the model proposed none. `drawing` is `new` when the frame has no drawing and a description to draw from, `kept` when it has
+ * a drawing, `busy` when one is already queued or running, and `none` when there is nothing to draw from.
+ */
+export const StoryboardFirstPassShot = Schema.Struct({
+  anchorWordId: Text, startSample: NonNegative,
+  /** The model's description of the shot, or null for a shot already declared in the section that the model left out. */
+  text: Schema.NullOr(Text),
+  frame: Schema.Literals(["new", "kept"]), description: Schema.Literals(["new", "kept", "none"]), drawing: Schema.Literals(["new", "kept", "busy", "none"]),
+});
+export type StoryboardFirstPassShot = typeof StoryboardFirstPassShot.Type;
+/** A proposed shot whose opening words were not found in the section, after the shot before it, and so is left out. */
+export const StoryboardFirstPassUnmatched = Schema.Struct({ opens: Schema.String, text: Schema.String, reason: Text });
+export type StoryboardFirstPassUnmatched = typeof StoryboardFirstPassUnmatched.Type;
+/** The proposal: the section, the shots in narration order, what could not be placed, and the model and exact prompt that proposed them. */
+export const StoryboardFirstPassPlan = Schema.Struct({
+  sectionId: Text, model: ModelId, prompt: Text, seconds: Schema.Number,
+  shots: Schema.Array(StoryboardFirstPassShot), unmatched: Schema.Array(StoryboardFirstPassUnmatched),
+});
+export type StoryboardFirstPassPlan = typeof StoryboardFirstPassPlan.Type;
+/** `POST .../storyboard/first-pass`: carry out a plan, as proposed or trimmed. Each shot is judged again against the storyboard as it stands then. */
+export const StoryboardFirstPassApply = Schema.Struct({
+  sectionId: Text, model: ModelId, prompt: Text,
+  shots: Schema.Array(Schema.Struct({ anchorWordId: Text, text: Schema.NullOr(Text) })),
+});
+export type StoryboardFirstPassApply = typeof StoryboardFirstPassApply.Type;
+/** What a first pass did: each shot as judged when it ran, and the drawings it queued, all named by its id. */
+export const StoryboardFirstPassResult = Schema.Struct({ firstPassId: ShotId, sectionId: Text, shots: Schema.Array(StoryboardFirstPassShot), jobs: Schema.Array(StoryboardJob) });
+export type StoryboardFirstPassResult = typeof StoryboardFirstPassResult.Type;

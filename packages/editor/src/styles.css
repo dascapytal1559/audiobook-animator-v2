@@ -255,16 +255,24 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .storyboard-drawing.empty { border-style: dashed; aspect-ratio: 16 / 9; max-height: 100%; }
 .storyboard-side { min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; }
 .storyboard-heading { margin: 0; font-size: 13px; font-weight: 600; }
-.storyboard-heading .link, .storyboard-new { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-align: left; }
-.storyboard-heading .link:hover { text-decoration: underline; }
+.storyboard-heading .link, .storyboard-proposal .link, .storyboard-new { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-align: left; }
+.storyboard-heading .link:hover, .storyboard-proposal .link:hover { text-decoration: underline; }
 .storyboard-text { min-height: 84px; line-height: 1.4; }
 .storyboard-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .storyboard-status { margin: 0; font-size: 12px; }
 .storyboard-message { margin: 0; font-size: 12px; color: #ffb4b0; }
 .storyboard-new { align-self: flex-start; font-size: 12px; }
+.storyboard-pass { flex-shrink: 0; display: flex; flex-direction: column; gap: 4px; padding: 4px 14px 0; font-size: 12px; min-width: 0; }
+.storyboard-pass-bar { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; min-width: 0; }
+.storyboard-proposal { display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; padding: 6px 8px; border: 1px solid var(--accent); border-radius: 4px; background: var(--bg-2); }
+.storyboard-proposal p { margin: 0; }
+.storyboard-proposal ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.storyboard-proposal-text { display: block; color: var(--muted); overflow-wrap: anywhere; }
 .storyboard-strip { flex-shrink: 0; display: flex; gap: 6px; margin: 0; padding: 4px 14px 8px; list-style: none; overflow-x: auto; }
 .storyboard-strip li { flex-shrink: 0; }
 .storyboard-strip button { display: flex; flex-direction: column; align-items: stretch; gap: 2px; width: 112px; padding: 2px; background: var(--bg-2); }
 .storyboard-strip li.current button { border-color: var(--accent); }
 .storyboard-strip img, .storyboard-blank { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: flex; align-items: center; justify-content: center; border-radius: 3px; background: color-mix(in srgb, #000 30%, var(--bg-2)); font-size: 11px; color: var(--muted); }
+/* Storyboard drawings are black line on white (A67); a renderer may leave the white transparent, so they are shown on paper. */
+img.on-paper { background: #fff; }
 .storyboard-strip-label { font-size: 11px; text-align: left; }

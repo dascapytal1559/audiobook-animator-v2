@@ -1,4 +1,4 @@
-import type { StoryResponse, StoryWord } from "@animator/domain";
+import { STORYBOARD_TRACK, type StoryResponse, type StoryWord } from "@animator/domain";
 import type { StitchedEntry } from "./api.js";
 import { GAP_COLOR, MODE_COLORS, MODE_LABELS } from "./modes.js";
 import { Subtitles } from "./Subtitles.js";
@@ -22,7 +22,7 @@ export function Preview({ entry, aspect, story, words, sample, currentWordId, su
               <div className="preview-card-body">{entry === null ? "Waiting for the story to load." : "No shot starts before this point."}</div>
             </div>
           ) : entry.imageUrl !== undefined ? (
-            <img className="preview-image" src={entry.imageUrl} alt={entry.label ?? entry.id} draggable={false} />
+            <img className={`preview-image${entry.trackId === STORYBOARD_TRACK ? " on-paper" : ""}`} src={entry.imageUrl} alt={entry.label ?? entry.id} draggable={false} />
           ) : (
             <div className="preview-card" style={{ borderColor: MODE_COLORS[entry.mode], background: `${MODE_COLORS[entry.mode]}22` }}>
               <div className="preview-card-mode" style={{ color: MODE_COLORS[entry.mode] }}>{MODE_LABELS[entry.mode]}</div>

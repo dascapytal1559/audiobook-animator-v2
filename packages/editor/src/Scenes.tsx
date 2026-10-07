@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { STORYBOARD_TRACK } from "@animator/domain";
 import type { ResolvedSection, SceneDescriptionTake, StitchedEntry, StoryResponse, Word } from "./api.js";
 import { Divider } from "./Divider.js";
 import { MapNotice } from "./MapNotice.js";
@@ -194,7 +195,7 @@ function ImageGallery({ takes, from, clock }: GalleryProps) {
         {takes.map(({ trackId, shot }) => (
           <figure key={shot.id} className="image-take" data-testid={`image-take-${trackId}`}>
             <button type="button" className="image-take-open" onClick={() => setOpenId(shot.id)} title={`Open ${shot.label ?? shot.id} large`} aria-label={`Open the ${trackId} take large`}>
-              <img src={shot.imageUrl} alt={shot.label ?? shot.id} draggable={false} loading="lazy" />
+              <img src={shot.imageUrl} alt={shot.label ?? shot.id} draggable={false} loading="lazy" className={trackId === STORYBOARD_TRACK ? "on-paper" : undefined} />
             </button>
             <figcaption>
               <span className="take-label">{trackId}</span>
@@ -207,7 +208,7 @@ function ImageGallery({ takes, from, clock }: GalleryProps) {
       <dialog ref={dialog} className="image-take-dialog" onClose={() => setOpenId(null)} onClick={e => { if (e.target === e.currentTarget) setOpenId(null); }} data-testid="image-take-dialog">
         {open !== null && (
           <figure>
-            <img src={open.shot.imageUrl} alt={open.shot.label ?? open.shot.id} draggable={false} />
+            <img src={open.shot.imageUrl} alt={open.shot.label ?? open.shot.id} draggable={false} className={open.trackId === STORYBOARD_TRACK ? "on-paper" : undefined} />
             <figcaption><span className="take-label">{open.trackId}</span> {open.shot.label !== undefined && <span className="muted">{open.shot.label}</span>}
               <button type="button" className="detail-close" onClick={() => setOpenId(null)} aria-label="Close" title="Close">×</button></figcaption>
           </figure>

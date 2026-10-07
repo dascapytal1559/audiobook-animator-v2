@@ -3,7 +3,7 @@ import { Effect, Option, Stdio, Stream } from "effect";
 import { CliError, Flag } from "effect/unstable/cli";
 import { loadRun, type RunSettings, selectStory } from "../run.js";
 
-export const runFlag = Flag.optional(Flag.string("run")).pipe(Flag.withDescription("JSON run file laid over the code defaults; any subset of storiesDirectory, booksDirectory, story, timeline, editor, inventory, transcription."));
+export const runFlag = Flag.optional(Flag.string("run")).pipe(Flag.withDescription("JSON run file laid over the code defaults; any subset of storiesDirectory, booksDirectory, story, timeline, editor, storyboard, inventory, transcription."));
 export const storyFlag = Flag.optional(Flag.string("story")).pipe(Flag.withDescription("Story id: the folder name under the stories directory. Omit it to list the ids."));
 
 /** Every module error carries a stable code and a message naming the file or rule; that pair is the whole of what a user needs. */

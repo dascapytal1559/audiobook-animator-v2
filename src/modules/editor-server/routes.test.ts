@@ -6,7 +6,7 @@ import test, { after, type TestContext } from "node:test";
 import { NodeHttpServer, NodeServices } from "@effect/platform-node";
 import { Effect, Layer, Stream } from "effect";
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http";
-import { decodeStrict, SceneDescriptionsResponse, SceneDescriptionTake, StoryboardDraft, StoryboardJobsResponse, StoryMapResponse, TimelineResponse } from "@animator/domain";
+import { decodeStrict, jobPending, SceneDescriptionsResponse, SceneDescriptionTake, StoryboardDraft, StoryboardFirstPassPlan, StoryboardFirstPassResult, StoryboardJobsResponse, StoryMapResponse, TimelineResponse } from "@animator/domain";
 import { fixture, type FixtureWord } from "../story/context.fixture.js";
 import { storyboardDefaults, type StoryboardSettings } from "../storyboard/index.js";
 import { loadEditorLibrary, makeEditorRoutes } from "./index.js";
@@ -559,7 +559,7 @@ const waitForJob = (id: string) => Effect.gen(function* () {
   for (let i = 0; i < 200; i++) {
     const { jobs } = decodeStrict(StoryboardJobsResponse, yield* bodyJson(yield* get("/api/stories/pilot/storyboard/jobs")));
     const job = jobs.find(j => j.id === id);
-    if (job !== undefined && job.status !== "running") return job;
+    if (job !== undefined && !jobPending(job)) return job;
     yield* Effect.sleep("50 millis");
   }
   throw new Error(`job ${id} never finished`);
@@ -594,7 +594,7 @@ test("POST /storyboard/draft asks codex for a description of the shot at a word,
     assert.equal(call?.stdin, draft.prompt);
     for (const flag of ["exec", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "read-only", "--disable", "image_generation", "shell_tool", "browser_use", "computer_use", 'web_search="disabled"', "--json", "gpt-6-astra", "-"]) assert.ok(call?.argv.includes(flag), flag);
     const workDirectory = call!.argv[call!.argv.indexOf("--cd") + 1]!;
-    assert.match(workDirectory, /animator-storyboard-draft-/);
+    assert.match(workDirectory, /animator-storyboard-text-/);
     assert.ok(call!.cwd.endsWith(workDirectory.replace(/^\/private/, "")), "codex runs in its own empty working directory");
     assert.equal((yield* postJson("/api/stories/pilot/storyboard/draft", { anchorWordId: "gone" })).status, 400);
     assert.equal((yield* postJson("/api/stories/pilot/storyboard/draft", { anchorWordId: "m2:e4", extra: 1 })).status, 400);
@@ -691,5 +691,97 @@ test("a codex turn that outlives its timeout is stopped and the frame falls back
     const done = yield* waitForJob(started.id);
     assert.equal(done.status, "done", done.error);
     assert.deepEqual(done.attempts.map(a => [a.renderer, a.error ?? null]), [["codex-chatgpt", "ChatGPT through the Codex CLI timed out after 1 s."], ["qwen-image-2.1", null]]);
+  }));
+});
+
+/** Words for a first pass: a beat of two sentences after the fixture's "Uncorrected." */
+const PASS_WORDS: ReadonlyArray<FixtureWord> = [{ value: "I", startSeconds: 3, endSeconds: 3.5, punctuation: " " }, { value: "wake", startSeconds: 3.5, endSeconds: 4, punctuation: " " }, { value: "up", startSeconds: 4, endSeconds: 4.5, punctuation: ". " },
+  { value: "Ice", startSeconds: 6, endSeconds: 6.5, punctuation: " " }, { value: "again", startSeconds: 6.5, endSeconds: 7, punctuation: "." }];
+/** codex exec that answers a plan as a text turn and draws as an image turn. */
+const codexPlansAndDraws = (plan: unknown) => `if (argv.includes("--enable")) { ${CODEX_DRAWS} } else {
+  console.log(JSON.stringify({ type: "thread.started", thread_id: "plan" }));
+  console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: ${JSON.stringify("```json\n" + JSON.stringify(plan) + "\n```")} } })); }`;
+const writeMap = (s: Awaited<ReturnType<typeof serve>>) => writeFile(join(s.planningDirectory, "story-map.json"), encode({ schemaVersion: 1, kind: "story-map", clip: s.clip, createdAt: "2026-10-07T00:00:00.000Z", producer: { name: "test", version: "1" }, subjects: [],
+  sections: [{ id: "act-1", kind: "act", title: "All", startWordId: "m2:e0", endWordId: "m2:e10" }, { id: "beat-1", kind: "beat", title: "Waking", summary: "He wakes.", startWordId: "m2:e2", endWordId: "m2:e10" }] }));
+
+test("a first pass plans a beat's shots through codex, keeps the shots already declared there, then declares frames, records the model's descriptions, and queues drawings without overwriting anything", async t => {
+  const home = await mkdtemp(join(tmpdir(), "codex-home-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const codex = await fakeCommand("codex", codexPlansAndDraws({ shots: [{ opens: "I wake up", description: "A man jolts upright in bed in a dark room, seen from the doorway." }, { opens: "Nowhere to be found", description: "Lost." }] }));
+  const qwen = await fakeCommand("qwen", QWEN_DRAWS);
+  const s = await serve(t, { words: PASS_WORDS, storyboard: storyboardSettings(codex.path, qwen.path, home) });
+  await s.run(Effect.gen(function* () {
+    const absent = yield* postJson("/api/stories/pilot/storyboard/first-pass/plan", { sectionId: "beat-1" });
+    assert.equal(absent.status, 404, "no story map, no sections to plan");
+    yield* Effect.promise(() => writeMap(s));
+    // A shot already declared at "Ice" by another track's image, with a description.
+    const ice = yield* bodyJson(yield* HttpClient.execute(shotForm({ anchorWordId: "m2:e8", trackId: "gpt", mode: "graphic-illustration" }, { name: "ice.png", bytes: PNG })));
+    assert.equal(ice["startSample"], 60);
+    assert.equal((yield* postJson("/api/stories/pilot/scene-descriptions", { anchorWordId: "m2:e8", model: "anthropic/claude-fable-5.1", text: "Ice everywhere." })).status, 201);
+    for (const [sectionId, message] of [["act-1", /is an act; a first pass plans one beat or scene/], ["nope", /no section nope/]] as const) {
+      const refused = yield* postJson("/api/stories/pilot/storyboard/first-pass/plan", { sectionId });
+      assert.equal(refused.status, 400);
+      assert.match((yield* bodyJson(refused))["message"], message);
+    }
+
+    const planned = yield* postJson("/api/stories/pilot/storyboard/first-pass/plan", { sectionId: "beat-1" });
+    assert.equal(planned.status, 200);
+    const plan = decodeStrict(StoryboardFirstPassPlan, yield* bodyJson(planned));
+    assert.equal(plan.model, "openai/gpt-6-astra");
+    assert.match(plan.prompt, /keep each as a shot that starts exactly there: "Ice again\."\./);
+    assert.match(plan.prompt, /Story: Pilot\nBeat: Waking \(He wakes\.\)\nNarration just before it \(context only; no shots here\): Uncorrected\.\nThe beat:\n1\. I wake up\.\n2\. Ice again\.$/);
+    assert.deepEqual(plan.shots, [
+      { anchorWordId: "m2:e2", startSample: 30, text: "A man jolts upright in bed in a dark room, seen from the doorway.", frame: "new", description: "new", drawing: "new" },
+      { anchorWordId: "m2:e8", startSample: 60, text: null, frame: "new", description: "kept", drawing: "new" },
+    ]);
+    assert.deepEqual(plan.unmatched.map(u => u.opens), ["Nowhere to be found"]);
+    const [planCall] = yield* Effect.promise(codex.calls);
+    assert.equal(planCall?.stdin, plan.prompt);
+    assert.ok(planCall?.argv.includes("--disable") && planCall.argv.includes("image_generation") && !planCall.argv.includes("--enable"), "the plan is a text turn");
+    assert.equal(decodeStrict(TimelineResponse, yield* bodyJson(yield* get("/api/stories/pilot/timeline"))).records.length, 1, "planning writes nothing");
+
+    const outside = yield* postJson("/api/stories/pilot/storyboard/first-pass", { sectionId: "beat-1", model: plan.model, prompt: plan.prompt, shots: [{ anchorWordId: "m2:e0", text: "x" }] });
+    assert.equal(outside.status, 400);
+    assert.match((yield* bodyJson(outside))["message"], /m2:e0 does not begin inside section beat-1/);
+    const applied = yield* postJson("/api/stories/pilot/storyboard/first-pass", { sectionId: plan.sectionId, model: plan.model, prompt: plan.prompt, shots: plan.shots.map(({ anchorWordId, text }) => ({ anchorWordId, text })) });
+    assert.equal(applied.status, 202);
+    const result = decodeStrict(StoryboardFirstPassResult, yield* bodyJson(applied));
+    assert.deepEqual(result.shots, plan.shots);
+    assert.deepEqual(result.jobs.map(j => [j.anchorWordId, j.firstPassId]), [["m2:e2", result.firstPassId], ["m2:e8", result.firstPassId]]);
+    for (const job of result.jobs) assert.equal((yield* waitForJob(job.id)).status, "done");
+
+    const takes = decodeStrict(SceneDescriptionsResponse, yield* bodyJson(yield* get("/api/stories/pilot/scene-descriptions"))).takes;
+    assert.deepEqual(takes.map(t => [t.anchorWordId, t.model, t.text]), [["m2:e8", "anthropic/claude-fable-5.1", "Ice everywhere."], ["m2:e2", "openai/gpt-6-astra", plan.shots[0]!.text]]);
+    assert.equal(takes[1]!.prompt, plan.prompt);
+    assert.match(takes[1]!.notes ?? "", new RegExp(`^First pass ${result.firstPassId} of beat beat-1 \\("Waking"\\): shot 1 of 2\\.$`));
+    const timeline = decodeStrict(TimelineResponse, yield* bodyJson(yield* get("/api/stories/pilot/timeline")));
+    const storyboard = timeline.records.filter(r => r.trackId === "storyboard");
+    assert.deepEqual(storyboard.filter(r => r.imagePath === undefined).map(r => `${r.anchorWordId} ${r.label}`).sort(), ["m2:e2 Storyboard frame", "m2:e8 Storyboard frame"]);
+    const drawn = storyboard.filter(r => r.imagePath !== undefined);
+    assert.deepEqual(drawn.map(r => r.anchorWordId).sort(), ["m2:e2", "m2:e8"]);
+    assert.match(drawn.find(r => r.anchorWordId === "m2:e8")!.prompt ?? "", /The frame shows: Ice everywhere\./, "an existing description is the one drawn");
+
+    // A second pass over the same beat keeps everything and draws nothing.
+    const again = decodeStrict(StoryboardFirstPassPlan, yield* bodyJson(yield* postJson("/api/stories/pilot/storyboard/first-pass/plan", { sectionId: "beat-1" })));
+    assert.deepEqual(again.shots.map(x => [x.anchorWordId, x.frame, x.description, x.drawing]), [["m2:e2", "kept", "kept", "kept"], ["m2:e8", "kept", "kept", "kept"]]);
+    const rerun = decodeStrict(StoryboardFirstPassResult, yield* bodyJson(yield* postJson("/api/stories/pilot/storyboard/first-pass", { sectionId: "beat-1", model: again.model, prompt: again.prompt, shots: again.shots.map(({ anchorWordId, text }) => ({ anchorWordId, text })) })));
+    assert.deepEqual(rerun.jobs, []);
+    assert.equal(decodeStrict(SceneDescriptionsResponse, yield* bodyJson(yield* get("/api/stories/pilot/scene-descriptions"))).takes.length, 2);
+    assert.equal(decodeStrict(TimelineResponse, yield* bodyJson(yield* get("/api/stories/pilot/timeline"))).records.length, timeline.records.length);
+  }));
+});
+
+test("a plan the model does not answer as JSON is a 502 naming what it said", async t => {
+  const home = await mkdtemp(join(tmpdir(), "codex-home-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const codex = await fakeCommand("codex", `console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "I would start with the ice." } }));`);
+  const s = await serve(t, { words: PASS_WORDS, storyboard: storyboardSettings(codex.path, "/nonexistent/qwen", home) });
+  await s.run(Effect.gen(function* () {
+    yield* Effect.promise(() => writeMap(s));
+    const failed = yield* postJson("/api/stories/pilot/storyboard/first-pass/plan", { sectionId: "beat-1" });
+    assert.equal(failed.status, 502);
+    const body = yield* bodyJson(failed);
+    assert.equal(body["code"], "PlanFailed");
+    assert.match(body["message"], /did not answer with the JSON object it was asked for: I would start with the ice\./);
   }));
 });

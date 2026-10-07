@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cursorWord, frameAt, latestJobs, STORYBOARD_TRACK } from "@animator/domain";
-import { ApiError, type StoryApi, type StoryboardDraft, type StoryboardFrame, type StoryboardJob, type StoryResponse, type Word } from "./api.js";
+import { cursorWord, frameAt, jobPending, latestJobs, STORYBOARD_TRACK } from "@animator/domain";
+import { ApiError, type ResolvedSection, type StoryApi, type StoryboardDraft, type StoryboardFirstPassPlan, type StoryboardFrame, type StoryboardJob, type StoryResponse, type Word } from "./api.js";
 import { clock as clipClock } from "./story-map-view.js";
-import { jobLine, openingWords, rendererLabel, takeToSave } from "./storyboard-view.js";
+import { firstPassLine, firstPassProgress, jobLine, openingWords, rendererLabel, takeToSave } from "./storyboard-view.js";
 
 type Props = {
   api: StoryApi;
@@ -11,6 +11,8 @@ type Props = {
   /** The effective words sorted by start, and the transcript's element order for a frame's opening words. */
   words: ReadonlyArray<Word>; elements: StoryResponse["elements"];
   playhead: number; sampleRateHz: number; tolerance: number;
+  /** The beat or scene of the story map at the cursor, which a first pass plans (A67); null outside any, or without a map. */
+  section: ResolvedSection | null;
   onSeek: (sample: number, andPlay: boolean) => void;
   /** Something this section wrote: refetch the timeline and the descriptions without waiting for the server's change notice. */
   onChanged: () => void;
@@ -20,14 +22,18 @@ type Props = {
 const OPENING_WORDS = 6;
 /** How often the drawings in the background are asked after while one runs. */
 const POLL_MS = 1500;
+/** Where a first pass stands in this section (A67): asking the model, its proposal awaiting a yes, or carrying it out. */
+type Pass = { readonly status: "idle" } | { readonly status: "planning"; readonly title: string }
+  | { readonly status: "proposed" | "applying"; readonly title: string; readonly plan: StoryboardFirstPassPlan };
 const describe = (e: unknown) => (e instanceof ApiError ? `${e.code}: ${e.message}` : e instanceof Error ? e.message : String(e));
 
 /**
  * The Storyboard section (A66): the frame at the cursor, and a strip of every frame. It follows the playhead: when a frame starts at or
  * before the cursor it shows that frame's drawing and description, which can be edited, drafted, and drawn again; otherwise it offers to
  * describe a new shot at the cursor's word. Drawing runs on the server in the background; this section reports its progress and never waits on it.
+ * A first pass (A67) proposes the shots of the beat at the cursor, shows what it would do, and on a yes declares, describes, and draws them.
  */
-export function Storyboard({ api, frames, words, elements, playhead, sampleRateHz, tolerance, onSeek, onChanged }: Props) {
+export function Storyboard({ api, frames, words, elements, playhead, sampleRateHz, tolerance, section, onSeek, onChanged }: Props) {
   const wordById = useMemo(() => new Map(words.map(w => [w.id, w] as const)), [words]);
   const frame = frameAt(frames, playhead, tolerance);
   const cursor = cursorWord(words, playhead);
@@ -52,12 +58,12 @@ export function Storyboard({ api, frames, words, elements, playhead, sampleRateH
   const jobsRef = useRef(jobs);
   jobsRef.current = jobs;
   const [now, setNow] = useState(() => Date.now());
-  const running = jobs.some(job => job.status === "running");
+  const running = jobs.some(jobPending);
   /** A drawing that finished since the last look has published a record, so the timeline is refetched at once. */
   const refreshJobs = useCallback(async () => {
     try {
       const next = (await api.getStoryboardJobs()).jobs;
-      const finished = next.some(job => job.status !== "running" && jobsRef.current.find(p => p.id === job.id)?.status === "running");
+      const finished = next.some(job => !jobPending(job) && jobsRef.current.some(p => p.id === job.id && jobPending(p)));
       setJobs(next);
       if (finished) onChanged();
     } catch (e) { setMessage(`Cannot read the drawings in progress. ${describe(e)}`); }
@@ -117,13 +123,37 @@ export function Storyboard({ api, frames, words, elements, playhead, sampleRateH
     finally { setBusy(null); }
   };
 
-  const drawing = job?.status === "running";
+  /** Ask the model for the shots of the beat at the cursor; nothing is written until the proposal is applied. */
+  const [pass, setPass] = useState<Pass>({ status: "idle" });
+  const [passMessage, setPassMessage] = useState<{ readonly text: string; readonly failed: boolean } | null>(null);
+  const planPass = async () => {
+    if (section === null) return;
+    setPass({ status: "planning", title: section.title }); setPassMessage(null);
+    try { setPass({ status: "proposed", title: section.title, plan: await api.postStoryboardFirstPassPlan(section.id) }); }
+    catch (e) { setPass({ status: "idle" }); setPassMessage({ text: `First pass failed. ${describe(e)}`, failed: true }); }
+  };
+  const applyPass = async () => {
+    if (pass.status !== "proposed") return;
+    const { plan, title } = pass;
+    setPass({ status: "applying", title, plan });
+    try {
+      const result = await api.postStoryboardFirstPass({ sectionId: plan.sectionId, model: plan.model, prompt: plan.prompt, shots: plan.shots.map(({ anchorWordId, text }) => ({ anchorWordId, text })) });
+      setJobs(previous => [...previous, ...result.jobs]);
+      setNow(Date.now());
+      setPass({ status: "idle" });
+      setPassMessage({ text: `First pass of “${title}” applied to ${firstPassLine(result.shots)}`, failed: false });
+      onChanged();
+    } catch (e) { setPass({ status: "proposed", title, plan }); setPassMessage({ text: `First pass failed. ${describe(e)}`, failed: true }); }
+  };
+  const progress = firstPassProgress(jobs);
+
+  const drawing = job !== undefined && jobPending(job);
   const image = current?.shot.imageUrl;
   return (
     <section className="storyboard" data-testid="storyboard">
       <div className="storyboard-main">
         <div className={`storyboard-drawing${image === undefined ? " empty" : ""}`} data-testid="storyboard-drawing">
-          {image !== undefined ? <img src={image} alt={current?.description?.text ?? "Storyboard frame"} draggable={false} />
+          {image !== undefined ? <img className="on-paper" src={image} alt={current?.description?.text ?? "Storyboard frame"} draggable={false} />
             : <p className="muted">{drawing ? "Drawing…" : current === null ? "A new shot: describe it, then draw." : "No drawing yet."}</p>}
         </div>
         <div className="storyboard-side">
@@ -155,6 +185,37 @@ export function Storyboard({ api, frames, words, elements, playhead, sampleRateH
           </>}
         </div>
       </div>
+      <div className="storyboard-pass" data-testid="storyboard-pass">
+        <div className="storyboard-pass-bar">
+          <button type="button" onClick={() => { void planPass(); }} disabled={section === null || pass.status !== "idle"} data-testid="storyboard-first-pass"
+            title={section === null ? "Put the cursor in a beat or scene of the story map" : "Have a model propose this beat's shots, with a description each; you confirm before anything is written"}>
+            {pass.status === "planning" ? "Planning…" : "First pass"}
+          </button>
+          <span className="muted">{pass.status === "planning" ? `Asking for the shots of “${pass.title}”; this takes a minute or so.`
+            : section === null ? "First pass: put the cursor in a beat of the story map." : `of the ${section.kind} “${section.title}”`}</span>
+          {progress !== null && <span className="muted" data-testid="storyboard-pass-progress">{progress}</span>}
+        </div>
+        {passMessage !== null && <p className={passMessage.failed ? "storyboard-message" : "storyboard-status muted"} data-testid="storyboard-pass-message">{passMessage.text}</p>}
+        {(pass.status === "proposed" || pass.status === "applying") && (
+          <div className="storyboard-proposal" data-testid="storyboard-proposal">
+            <p>First pass of “{pass.title}” proposes {firstPassLine(pass.plan.shots)} Planned by {pass.plan.model} in {Math.round(pass.plan.seconds)} s.</p>
+            <ol>
+              {pass.plan.shots.map(shot => (
+                <li key={shot.anchorWordId}>
+                  <button type="button" className="link" onClick={() => onSeek(shot.startSample, false)}>“{opening(shot.anchorWordId)}…”</button> <span className="mono muted">{clock(shot.startSample)}</span>{" "}
+                  <span className="muted">frame {shot.frame}, description {shot.description}, drawing {shot.drawing}</span>
+                  {shot.text !== null && shot.description === "new" && <span className="storyboard-proposal-text">{shot.text}</span>}
+                </li>
+              ))}
+            </ol>
+            {pass.plan.unmatched.length > 0 && <p className="muted">Left out, since their opening words were not found in order: {pass.plan.unmatched.map(u => `“${u.opens}”`).join(", ")}.</p>}
+            <div className="storyboard-actions">
+              <button type="button" onClick={() => { void applyPass(); }} disabled={pass.status === "applying"} data-testid="storyboard-pass-apply">{pass.status === "applying" ? "Applying…" : `Apply: ${pass.plan.shots.filter(s => s.drawing === "new").length} drawings`}</button>
+              <button type="button" onClick={() => setPass({ status: "idle" })} disabled={pass.status === "applying"}>Discard</button>
+            </div>
+          </div>
+        )}
+      </div>
       <ol className="storyboard-strip" data-testid="storyboard-strip">
         {frames.length === 0 && <li className="muted">No frames yet.</li>}
         {frames.map((f, i) => {
@@ -162,8 +223,8 @@ export function Storyboard({ api, frames, words, elements, playhead, sampleRateH
           return (
             <li key={f.anchorWordId} className={f === current ? "current" : ""}>
               <button type="button" onClick={() => onSeek(f.startSample, false)} title={`${clock(f.startSample)} “${opening(f.anchorWordId)}…”`} data-testid={`storyboard-frame-${i + 1}`}>
-                {f.shot.imageUrl !== undefined ? <img src={f.shot.imageUrl} alt="" draggable={false} loading="lazy" /> : <span className="storyboard-blank">{status === "running" ? "drawing" : "no drawing"}</span>}
-                <span className="storyboard-strip-label"><span className="badge">{i + 1}</span> <span className="mono">{clock(f.startSample)}</span>{status === "running" && " ✎"}{status === "failed" && " ⚠"}</span>
+                {f.shot.imageUrl !== undefined ? <img className="on-paper" src={f.shot.imageUrl} alt="" draggable={false} loading="lazy" /> : <span className="storyboard-blank">{status === "running" ? "drawing" : status === "queued" ? "waiting" : "no drawing"}</span>}
+                <span className="storyboard-strip-label"><span className="badge">{i + 1}</span> <span className="mono">{clock(f.startSample)}</span>{status === "running" && " ✎"}{status === "queued" && " …"}{status === "failed" && " ⚠"}</span>
               </button>
             </li>
           );
