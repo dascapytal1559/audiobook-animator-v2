@@ -23,10 +23,11 @@ const shotFields = {
  * Immutable generation record at `<story>/shots/<id>/record.json`. `startSample` is on the clip's own clock; its upper bound is checked against the clip.
  * A writer that places the shot at a word records that word as `anchorWordId` (A66), so the shot follows the word like a decision anchor (A51)
  * without anyone writing `decisions.json`; `startSample` is then the word's start when the record was written. `renderer` names what drew the
- * image when it was generated rather than uploaded, such as `codex-chatgpt` (A66).
+ * image when it was generated rather than uploaded, such as `codex-chatgpt` (A66). `stationVersionId` names the shot station version a storyboard
+ * frame was saved from (A69).
  */
 export const ShotRecord = Schema.Struct({ schemaVersion: Schema.Literal(1), kind: Schema.Literal("visual-shot-generation"), clip: ClipIdentity, ...shotFields,
-  anchorWordId: Schema.optionalKey(Text), renderer: Schema.optionalKey(Text) });
+  anchorWordId: Schema.optionalKey(Text), renderer: Schema.optionalKey(Text), stationVersionId: Schema.optionalKey(ShotId) });
 export type ShotRecord = typeof ShotRecord.Type;
 /** A record as the editor server serves it: `imageUrl` is added when the record has an image. */
 export const ServedShotRecord = Schema.Struct({ ...ShotRecord.fields, imageUrl: Schema.optionalKey(Text) });
@@ -56,7 +57,7 @@ export const DEFAULT_SETTINGS: TimelineSettings = { frameAspect: { width: 16, he
 const SelectionSource = Schema.Literals(["decision", "default"]);
 /** A record after its decision: overrides applied, anchor reported, selection resolved within its candidate group. */
 export const EffectiveShot = Schema.Struct({
-  ...shotFields, trackId: ImageTrackId, imageUrl: Schema.optionalKey(Text), anchorWordId: Schema.optionalKey(Text), renderer: Schema.optionalKey(Text),
+  ...shotFields, trackId: ImageTrackId, imageUrl: Schema.optionalKey(Text), anchorWordId: Schema.optionalKey(Text), renderer: Schema.optionalKey(Text), stationVersionId: Schema.optionalKey(ShotId),
   hidden: Schema.Boolean, selected: Schema.Boolean, selectionSource: Schema.optionalKey(SelectionSource),
 });
 export type EffectiveShot = typeof EffectiveShot.Type;

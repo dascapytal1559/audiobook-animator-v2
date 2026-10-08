@@ -14,7 +14,7 @@ const firstPass = Command.make("first-pass", {
   const storyDirectory = yield* story(settings, flags.story);
   const ctx = yield* loadEditorContext({ storiesDirectory: settings.storiesDirectory, settings: { story: settings.story, timeline: settings.timeline, editor: settings.editor }, storyId: storyDirectory.slice(storyDirectory.lastIndexOf("/") + 1) });
   const storyboard: StoryboardRun = { settings: settings.storyboard, producer: { name: "storyboard-cli", version: packageJson.version }, jobs: new StoryboardJobBook(settings.storyboard.concurrentDraws) };
-  yield* Console.error(`Planning ${flags.section} of ${ctx.clip.storyId} with ${settings.storyboard.codex.model}…`);
+  yield* Console.error(`Planning ${flags.section} of ${ctx.clip.storyId} with ${settings.storyboard.codex.writerModel}…`);
   const plan = yield* planFirstPass(ctx, storyboard, flags.section);
   yield* Console.error(`Planned ${plan.shots.length} shots in ${Math.round(plan.seconds)} s${plan.unmatched.length === 0 ? "" : `; ${plan.unmatched.length} proposed shots could not be placed`}.`);
   if (flags.dryRun) return yield* printJson({ dryRun: true, plan });

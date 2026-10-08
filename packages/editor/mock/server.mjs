@@ -170,33 +170,34 @@ const takes = [
 ];
 const storyboardJobs = [];
 /**
- * A drawing in the mock: queued for a moment, then running. A frame drawing then fails, since the mock draws no frames; a draft drawing
- * (A68) succeeds with a card naming its description, replacing the shot's earlier draft drawing, so the drafting space can be tried.
+ * A drawing in the mock: queued for a moment, then running. A frame drawing then fails, since the mock draws no frames; a station drawing
+ * (A69) succeeds with a card naming its direction, so the shot station can be tried, except a direction titled with "fail", which fails.
  */
-function queueDrawing(storyId, kind, anchorWordId, firstPassId, description) {
+function queueDrawing(storyId, target, card) {
   const requestedAt = new Date().toISOString();
-  const job = { storyId, id: ulid(8000 + storyboardJobs.length + 1), kind, anchorWordId, status: "queued", requestedAt, attempts: [], ...(firstPassId !== undefined ? { firstPassId } : {}) };
+  const job = { storyId, id: ulid(8000 + storyboardJobs.length + 1), ...target, status: "queued", requestedAt, attempts: [] };
   storyboardJobs.push(job);
   setTimeout(() => { Object.assign(job, { status: "running" }); job.attempts.push({ renderer: "codex-chatgpt", startedAt: new Date().toISOString() }); }, 700);
   setTimeout(() => {
     const at = new Date().toISOString();
-    if (kind === "draft") {
-      const id = ulid(6000 + storyboardJobs.length + draftDrawings.length + 1);
-      for (let i = draftDrawings.length - 1; i >= 0; i--) if (draftDrawings[i].storyId === storyId && draftDrawings[i].anchorWordId === anchorWordId) draftDrawings.splice(i, 1);
-      draftDrawings.push({ storyId, id, anchorWordId, startWordId: anchorWordId, description, renderer: "codex-chatgpt", prompt: "mock drawing prompt", notes: "Drawn by the mock.", imagePath: "image.svg", createdAt: at,
-        bytes: Buffer.from(svg("#444", description.slice(0, 24))) });
-      Object.assign(job.attempts[0], { finishedAt: at });
-      return Object.assign(job, { status: "done", finishedAt: at, draftId: id });
-    }
-    Object.assign(job.attempts[0], { finishedAt: at, error: "The mock server draws nothing." });
-    Object.assign(job, { status: "failed", finishedAt: at, error: "The mock server draws nothing." });
+    const failed = target.kind === "frame" || /fail/i.test(card ?? "") ? "The mock server draws nothing here." : null;
+    const id = ulid(6000 + storyboardJobs.length + stationImages.length + 1);
+    if (target.kind === "station") stationImages.push({ storyId, id, versionId: target.versionId, direction: target.direction, prompt: "mock drawing prompt", createdAt: at,
+      ...(failed === null ? { renderer: "codex-chatgpt", notes: "Drawn by the mock.", imagePath: "image.svg", bytes: Buffer.from(svg(["#3b6e8f", "#8f5a3b", "#5a8f3b", "#6e3b8f"][target.direction % 4], card.slice(0, 24))) } : { error: failed }) });
+    Object.assign(job.attempts[0], { finishedAt: at, ...(failed === null ? {} : { error: failed }) });
+    Object.assign(job, { finishedAt: at }, failed === null ? { status: "done", imageId: id } : { status: "failed", error: failed });
   }, 2200);
   return job;
 }
-/** Draft drawings (A68), in memory: one per shot at most. */
-const draftDrawings = [];
-const servedDraftDrawing = (storyId) => ({ storyId: _, bytes: __, ...draft }) => ({ schemaVersion: 1, kind: "storyboard-draft-drawing", clip: { ...clip, storyId }, ...draft, producer: { name: "mock", version: "1" }, imageUrl: `/api/stories/${storyId}/storyboard/drafts/${draft.id}/image` });
-const draftsOf = (storyId) => draftDrawings.filter(d => d.storyId === storyId).map(servedDraftDrawing(storyId));
+/** The shot station (A69), in memory: versions as written, and image tries with an SVG card or a reason. */
+const stationVersions = [];
+const stationImages = [];
+const servedStationImage = (storyId) => ({ storyId: _, bytes: __, ...image }) => ({ schemaVersion: 1, kind: "shot-station-image", clip: { ...clip, storyId }, ...image, producer: { name: "mock", version: "1" },
+  ...(image.imagePath !== undefined ? { imageUrl: `/api/stories/${storyId}/storyboard/station/images/${image.id}/image` } : {}) });
+const servedVersion = (storyId) => ({ storyId: _, ...version }) => ({ schemaVersion: 1, kind: "shot-station-version", clip: { ...clip, storyId }, ...version, producer: { name: "mock", version: "1" } });
+/** A canned direction: the mock writes the same few ideas whatever it is told, naming what it was asked for. */
+const mockDirection = (title, said) => ({ title, description: `${title}: ${said}`.slice(0, 200), prompt: `A mock image prompt for “${title}”, from “${said}”.`, motion: null, motionOptions: ["slow push in", "held still", "pull back to reveal"] });
+const MOCK_TITLES = ["Wide from above", "Close on the face", "Low angle", "Through the trees", "Silhouette", "Overhead"];
 const servedMap = (storyId) => ({ ...storyMap, clip: { ...clip, storyId }, subjects: storyMap.subjects.map(({ images, ...subject }) => images === undefined ? subject
   : { ...subject, images: images.map((image, index) => ({ ...image, url: `/api/stories/${storyId}/map/subjects/${subject.id}/images/${index}` })) }) });
 
@@ -260,36 +261,45 @@ const server = createServer(async (req, res) => {
       json(res, 201, take);
       return broadcast("timeline-changed");
     }
-    // Storyboard (A66): a canned draft, and drawings that run for a moment and then fail, since the mock draws nothing.
+    // Storyboard (A66): drawings that run for a moment; frames fail, since the mock draws none.
     if (req.method === "GET" && path === "/api/storyboard/jobs") return json(res, 200, { jobs: storyboardJobs.filter(job => job.storyId === storyId).map(({ storyId: _, ...job }) => job) });
-    if (req.method === "POST" && path === "/api/storyboard/draft") {
-      const body = JSON.parse((await readBody(req)).toString());
-      if (!original.some(w => w.id === body?.anchorWordId)) return fail(res, 400, "InvalidRequest", `anchorWordId ${body?.anchorWordId} is not a word of the transcript.`);
-      const asked = typeof body.request === "string" && body.request.trim() !== "" ? ` As asked: ${body.request.trim()}.` : "";
-      return json(res, 200, { anchorWordId: body.anchorWordId, text: `A wide shot of the rainforest canopy at dawn, a single grey parrot on a branch in the foreground.${asked}`, model: "mock/drafter", prompt: "mock draft prompt", seconds: 0.1 });
+    // The shot station (A69): canned directions, picks and motion carried, mixes and edits written as one, and SVG cards for images.
+    if (req.method === "GET" && path === "/api/storyboard/station") {
+      return json(res, 200, { versions: stationVersions.filter(v => v.storyId === storyId).map(servedVersion(storyId)), images: stationImages.filter(i => i.storyId === storyId).map(servedStationImage(storyId)) });
     }
-    // The drafting space (A68): draft drawings that succeed with a card, discards, and snapshots judged by the shared span rule.
-    if (req.method === "POST" && path === "/api/storyboard/draw") {
+    if (req.method === "POST" && path === "/api/storyboard/station/versions") {
       const body = JSON.parse((await readBody(req)).toString());
-      if (typeof body?.anchorWordId !== "string" || typeof body?.startWordId !== "string" || typeof body?.text !== "string") return fail(res, 400, "InvalidRequest", "Body must be { anchorWordId, startWordId, text }.");
-      if (storyboardJobs.some(j => j.storyId === storyId && j.kind === "draft" && j.anchorWordId === body.anchorWordId && (j.status === "queued" || j.status === "running"))) return fail(res, 409, "JobRunning", `A draft drawing of the shot at ${body.anchorWordId} is already being drawn.`);
-      const job = queueDrawing(storyId, "draft", body.anchorWordId, undefined, body.text);
-      posts.push({ at: job.requestedAt, route: "/api/storyboard/draw", body });
+      const parent = body?.parentId === null ? null : stationVersions.find(v => v.storyId === storyId && v.id === body?.parentId);
+      if (parent === undefined) return fail(res, 400, "InvalidRequest", `No shot station version ${body?.parentId}.`);
+      const action = body?.action ?? {};
+      const carry = (i, extra = {}) => { const d = parent.directions[i]; return { ...d, ...extra, carried: d.carried ?? { versionId: parent.id, direction: i } }; };
+      const directions = action.kind === "describe" ? MOCK_TITLES.slice(0, action.count).map(title => mockDirection(title, action.director))
+        : action.kind === "pick" ? [carry(action.direction)] : action.kind === "motion" ? [carry(0, { motion: action.motion })]
+        : action.kind === "mix" ? [mockDirection(`Mix of ${action.directions.map(i => i + 1).join(" + ")}`, action.instruction || "combined")]
+        : action.kind === "edit" ? [{ ...mockDirection(parent.directions[action.direction].title, action.instruction), title: `${parent.directions[action.direction].title}, ${action.instruction}`.slice(0, 60) }] : null;
+      if (directions === null || parent === null && action.kind !== "describe") return fail(res, 400, "InvalidRequest", "The mock takes a describe, pick, mix, edit, or motion.");
+      if (action.kind !== "pick" && action.kind !== "motion") await new Promise(resolve => setTimeout(resolve, 800));
+      const version = { storyId, id: ulid(5000 + stationVersions.length + 1), shotWordId: body.shotWordId, span: { startWordId: body.startWordId, endWordId: body.endWordId }, parentId: body.parentId, action,
+        writer: action.kind === "pick" || action.kind === "motion" ? null : { model: "mock/writer", prompt: "mock writer prompt", seconds: 0.8 }, directions, createdAt: new Date().toISOString() };
+      stationVersions.push(version);
+      const jobs = directions.flatMap((d, i) => (d.carried === undefined ? [queueDrawing(storyId, { kind: "station", anchorWordId: body.shotWordId, versionId: version.id, direction: i }, d.title)] : []));
+      posts.push({ at: version.createdAt, route: "/api/storyboard/station/versions", body });
+      return json(res, 201, { version: servedVersion(storyId)(version), jobs: jobs.map(({ storyId: _, ...job }) => job) });
+    }
+    if (req.method === "POST" && path === "/api/storyboard/station/draw") {
+      const body = JSON.parse((await readBody(req)).toString());
+      const version = stationVersions.find(v => v.storyId === storyId && v.id === body?.versionId);
+      if (version?.directions[body.direction] === undefined) return fail(res, 400, "InvalidRequest", "No such direction.");
+      const job = queueDrawing(storyId, { kind: "station", anchorWordId: version.shotWordId, versionId: version.id, direction: body.direction }, version.directions[body.direction].title.replace(/fail/gi, ""));
       const { storyId: _, ...served } = job;
       return json(res, 202, { jobs: [served] });
     }
-    if (req.method === "GET" && path === "/api/storyboard/drafts") return json(res, 200, { drafts: draftsOf(storyId) });
-    const draftImage = /^\/api\/storyboard\/drafts\/([A-Z0-9]{26})\/image$/.exec(path);
-    if (req.method === "GET" && draftImage) {
-      const draft = draftDrawings.find(d => d.storyId === storyId && d.id === draftImage[1]);
-      if (!draft) return fail(res, 404, "NotFound", "No such draft drawing.");
-      res.writeHead(200, { "content-type": "image/svg+xml", "content-length": draft.bytes.length });
-      return res.end(draft.bytes);
-    }
-    if (req.method === "POST" && path === "/api/storyboard/drafts/discard") {
-      const body = JSON.parse((await readBody(req)).toString());
-      for (let i = draftDrawings.length - 1; i >= 0; i--) if (draftDrawings[i].storyId === storyId && draftDrawings[i].anchorWordId === body?.anchorWordId) draftDrawings.splice(i, 1);
-      return json(res, 200, { drafts: draftsOf(storyId) });
+    const stationImage = /^\/api\/storyboard\/station\/images\/([A-Z0-9]{26})\/image$/.exec(path);
+    if (req.method === "GET" && stationImage) {
+      const image = stationImages.find(i => i.storyId === storyId && i.id === stationImage[1]);
+      if (!image?.bytes) return fail(res, 404, "NotFound", "No such station image.");
+      res.writeHead(200, { "content-type": "image/svg+xml", "content-length": image.bytes.length });
+      return res.end(image.bytes);
     }
     if (req.method === "POST" && path === "/api/storyboard/snapshot") {
       const body = JSON.parse((await readBody(req)).toString());
@@ -304,13 +314,19 @@ const server = createServer(async (req, res) => {
       if (frame === undefined) return fail(res, 400, "InvalidRequest", `No storyboard frame starts at ${body.frameWordId}.`);
       const judged = judgeSpan(spanBounds(words, shots.map(e => e.startSample), frame?.startSample ?? words[start].startSample), frame === null ? null : index.get(frame.anchorWordId), start, end);
       if (!judged.ok) return fail(res, 400, "InvalidRequest", judged.reason);
-      const draft = body.draftId === null ? null : draftDrawings.find(d => d.storyId === storyId && d.id === body.draftId);
-      if (draft === undefined) return fail(res, 400, "InvalidRequest", `No draft drawing ${body.draftId}.`);
+      const version = body.versionId === null ? null : stationVersions.find(v => v.storyId === storyId && v.id === body.versionId);
+      if (version === undefined) return fail(res, 400, "InvalidRequest", `No shot station version ${body.versionId}.`);
+      if (version !== null && version.directions.length !== 1) return fail(res, 400, "InvalidRequest", "Pick one direction before saving it as the frame.");
+      const origin = version === null ? null : version.directions[0].carried ?? { versionId: version.id, direction: 0 };
+      const drawn = origin === null ? null : stationImages.filter(i => i.storyId === storyId && i.versionId === origin.versionId && i.direction === origin.direction && i.bytes).at(-1);
+      if (version !== null && drawn === undefined) return fail(res, 400, "InvalidRequest", "That version is not drawn yet.");
       const startWord = words[start];
-      const card = draft !== null ? { name: "image.svg", type: "image/svg+xml", bytes: draft.bytes } : frame?.imagePath !== undefined ? images.get(frame.id) : undefined;
-      const added = judged.moved || draft !== null ? addRecord(startWord.startSample, "graphic-illustration", { trackId: STORYBOARD_TRACK, anchorWordId: startWord.id, label: "Storyboard frame", notes: "Saved from the drafting space (A68)." }, card) : null;
+      const card = drawn != null ? { name: "image.svg", type: "image/svg+xml", bytes: drawn.bytes } : frame?.imagePath !== undefined ? images.get(frame.id) : undefined;
+      const added = judged.moved || version !== null ? addRecord(startWord.startSample, "graphic-illustration", { trackId: STORYBOARD_TRACK, anchorWordId: startWord.id, label: "Storyboard frame", notes: "Saved by the mock (A68, A69).",
+        ...(version !== null ? { stationVersionId: version.id } : {}) }, card) : null;
       const shown = frame === null ? undefined : takes.filter(t => t.anchorWordId === frame.anchorWordId).at(-1);
-      const description = body.description ?? (judged.moved && shown !== undefined ? { model: shown.model, text: shown.text, notes: `Carried from ${frame.anchorWordId} (A68).` } : null);
+      const description = version !== null ? { model: "mock/writer", text: version.directions[0].description, notes: `From shot station version ${version.id} (A69).` }
+        : judged.moved && shown !== undefined ? { model: shown.model, text: shown.text, notes: `Carried from ${frame.anchorWordId} (A68).` } : null;
       const take = description === null || takes.some(t => t.anchorWordId === startWord.id && t.model === description.model && t.text === description.text) ? null
         : { id: ulid(9000 + takes.length + 1), anchorWordId: startWord.id, ...description, createdAt: new Date().toISOString(), producer: { name: "mock", version: "1" } };
       if (take !== null) takes.push(take);
@@ -318,7 +334,6 @@ const server = createServer(async (req, res) => {
       const keepsOld = frame !== null && judged.moved && splitWord?.id === frame.anchorWordId;
       const split = splitWord === null || keepsOld ? null : addRecord(splitWord.startSample, "graphic-illustration", { trackId: STORYBOARD_TRACK, anchorWordId: splitWord.id, label: "Storyboard frame" });
       const retire = frame === null || !judged.moved || keepsOld ? [] : candidates.filter(g => g.trackId === STORYBOARD_TRACK && g.startSample === frame.startSample).flatMap(g => g.shots.filter(x => x.anchorWordId === frame.anchorWordId && !x.hidden).map(x => x.id));
-      if (draft !== null) draftDrawings.splice(draftDrawings.indexOf(draft), 1);
       posts.push({ at: new Date().toISOString(), route: "/api/storyboard/snapshot", body });
       json(res, 201, { record: added === null ? null : withUrl(storyId)(added), take, split: split === null ? null : withUrl(storyId)(split), retire });
       return broadcast("timeline-changed");
@@ -357,7 +372,7 @@ const server = createServer(async (req, res) => {
         if (!described && text !== null) takes.push({ id: ulid(9000 + takes.length + 1), anchorWordId, model: body.model, text, prompt: body.prompt, notes: `First pass ${firstPassId}.`, createdAt: new Date().toISOString(), producer: { name: "mock", version: "1" } });
         shots.push({ anchorWordId, startSample: word.startSample, text, frame: frame === undefined ? "new" : "kept", description: described ? "kept" : text === null ? "none" : "new", drawing: frame?.imagePath !== undefined ? "kept" : "new" });
       }
-      const jobs = shots.filter(s => s.drawing === "new").map(s => { const { storyId: _, ...served } = queueDrawing(storyId, "frame", s.anchorWordId, firstPassId); return served; });
+      const jobs = shots.filter(s => s.drawing === "new").map(s => { const { storyId: _, ...served } = queueDrawing(storyId, { kind: "frame", anchorWordId: s.anchorWordId, firstPassId }); return served; });
       posts.push({ at: new Date().toISOString(), route: "/api/storyboard/first-pass", body });
       json(res, 202, { firstPassId, sectionId: body.sectionId, shots, jobs });
       return broadcast("timeline-changed");

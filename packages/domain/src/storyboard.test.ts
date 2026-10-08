@@ -41,9 +41,9 @@ test("the cursor's word is the word being spoken, else the next to start, else t
 test("latestJobs keeps the newest job of one kind for each shot", () => {
   const job = (id: string, anchorWordId: string, requestedAt: string, kind: StoryboardJob["kind"] = "frame"): StoryboardJob => ({ id, kind, anchorWordId, status: "done", requestedAt, attempts: [] });
   const jobs = [job("01ARZ3NDEKTSV4RRFFQ69G5FA2", "w1", "2026-01-02T00:00:00Z"), job("01ARZ3NDEKTSV4RRFFQ69G5FA1", "w1", "2026-01-01T00:00:00Z"), job("01ARZ3NDEKTSV4RRFFQ69G5FA3", "w5", "2026-01-01T00:00:00Z"),
-    job("01ARZ3NDEKTSV4RRFFQ69G5FA4", "w1", "2026-01-03T00:00:00Z", "draft")];
+    job("01ARZ3NDEKTSV4RRFFQ69G5FA4", "w1", "2026-01-03T00:00:00Z", "station")];
   assert.deepEqual([...latestJobs(jobs, "frame")].map(([word, j]) => [word, j.id]), [["w1", "01ARZ3NDEKTSV4RRFFQ69G5FA2"], ["w5", "01ARZ3NDEKTSV4RRFFQ69G5FA3"]]);
-  assert.deepEqual([...latestJobs(jobs, "draft")].map(([word, j]) => [word, j.id]), [["w1", "01ARZ3NDEKTSV4RRFFQ69G5FA4"]]);
+  assert.deepEqual([...latestJobs(jobs, "station")].map(([word, j]) => [word, j.id]), [["w1", "01ARZ3NDEKTSV4RRFFQ69G5FA4"]]);
   assert.deepEqual((["queued", "running", "done", "failed"] as const).map(status => jobPending({ status })), [true, true, false, false]);
 });
 

@@ -170,7 +170,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const onTimelineChanged = useCallback(() => { void loadTimeline(); void loadStory(); void loadMap(); void loadDescriptions(); }, [loadTimeline, loadStory, loadMap, loadDescriptions]);
   const onStoryboardChanged = useCallback(() => { void loadTimeline(); void loadDescriptions(); }, [loadTimeline, loadDescriptions]);
   /**
-   * A drafting-space snapshot (A68): its records join the timeline at once, and the old frame of a shot that moved off its word is hidden
+   * A snapshot (A68, A69): its records join the timeline at once, and the old frame of a shot that moved off its word is hidden
    * here, since the editor owns the decisions. An explicit selection of an older drawing at the new record's start would keep winning
    * (A25), so the snapshot's record is selected in its place.
    */
@@ -229,9 +229,12 @@ export function App({ storyId, stories, onSelectStory }: Props) {
     if (audio !== null) audio.currentTime = target / rate;
     dispatch({ type: "playhead-set", sample: target });
   }, []);
+  /** Playing a shot's span (A69): where it stops, and where the playhead goes back to then. Any other seek ends it. */
+  const spanPlayRef = useRef<{ readonly end: number; readonly back: number } | null>(null);
   /** A user seek re-anchors the loop at wherever playback resumes. */
   const seek = useCallback((sample: number) => {
     loopAnchorRef.current = null;
+    spanPlayRef.current = null;
     seekKeepingLoop(sample);
     const clip = stateRef.current.story?.clip;
     if (clip === undefined) return;
@@ -266,6 +269,21 @@ export function App({ storyId, stories, onSelectStory }: Props) {
   const pause = useCallback(() => { audioRef.current?.pause(); }, []);
   const togglePlay = useCallback(() => { if (stateRef.current.playing) pause(); else play(); }, [play, pause]);
   const onSeek = useCallback((sample: number, andPlay: boolean) => { seek(sample); if (andPlay) play(); }, [seek, play]);
+  /** Play the narration a shot covers, then put the playhead back where it was, so the Storyboard section stays on that shot (A69). */
+  const playSpan = useCallback((startSample: number, endSample: number) => {
+    const audio = audioRef.current;
+    if (audio === null) return;
+    const back = stateRef.current.playhead;
+    seek(startSample);
+    spanPlayRef.current = { end: endSample, back };
+    void audio.play().catch(e => dispatch({ type: "error", message: `Playback failed. ${describe(e)}` }));
+  }, [seek]);
+  /** Stop playing; a span being played returns the playhead to where it was before. */
+  const stopSpan = useCallback(() => {
+    const span = spanPlayRef.current;
+    audioRef.current?.pause();
+    if (span !== null) seek(span.back);
+  }, [seek]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -276,6 +294,8 @@ export function App({ storyId, stories, onSelectStory }: Props) {
     const onEnded = () => {
       const s = stateRef.current;
       if (s.story === null) return;
+      const span = spanPlayRef.current;
+      if (span !== null) { dispatch({ type: "playing-set", playing: false }); seekKeepingLoop(span.back); spanPlayRef.current = null; return; }
       const count = s.story.clip.sampleCount;
       const plan = planTick({ sample: count, sampleCount: count, toleranceSamples: millisecondsToSamples(SEEK_TOLERANCE_MS, s.story.clip.sampleRateHz), stitched: mergedRef.current.stitched, loop: s.loop, loopAnchorStart: loopAnchorRef.current, region: workingBounds(s, count) });
       if (plan.kind === "wrap") { loopAnchorRef.current = plan.loopAnchorStart; seekKeepingLoop(plan.target); void audio.play().catch(e => dispatch({ type: "error", message: `Playback failed. ${describe(e)}` })); }
@@ -297,6 +317,8 @@ export function App({ storyId, stories, onSelectStory }: Props) {
       const rate = s.story.clip.sampleRateHz;
       const count = s.story.clip.sampleCount;
       const sample = clampSample(secondsToSamples(audio.currentTime, rate), count);
+      const span = spanPlayRef.current;
+      if (span !== null && sample >= span.end) { audio.pause(); seek(span.back); return; }
       const plan = planTick({ sample, sampleCount: count, toleranceSamples: millisecondsToSamples(SEEK_TOLERANCE_MS, rate), stitched: mergedRef.current.stitched, loop: s.loop, loopAnchorStart: loopAnchorRef.current, region: workingBounds(s, count) });
       if (plan.kind === "stop") { audio.pause(); seek(plan.target); return; }
       loopAnchorRef.current = plan.loopAnchorStart;
@@ -395,7 +417,7 @@ export function App({ storyId, stories, onSelectStory }: Props) {
             <Preview entry={currentEntry} aspect={state.decisions.settings.frameAspect} story={state.story} words={words} sample={state.playhead} currentWordId={currentWordId} subtitles={subtitles} />
           </Panel>
           <Panel id="storyboard" title="Storyboard" open={panels.storyboard} onToggle={() => togglePanel("storyboard")} height={heights.storyboard} onResize={h => resizePanel("storyboard", h)}>
-            {state.story && <Storyboard api={api} frames={frames} trackStarts={storyboardStarts} words={sortedWords} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} tolerance={tolerance} section={firstPassTarget} onSeek={onSeek} onChanged={onStoryboardChanged} onSnapshot={onStoryboardSnapshot} />}
+            {state.story && <Storyboard api={api} frames={frames} trackStarts={storyboardStarts} words={sortedWords} elements={state.story.elements} playhead={state.playhead} playing={state.playing} sampleRateHz={sampleRateHz} tolerance={tolerance} section={firstPassTarget} onSeek={onSeek} onPlaySpan={playSpan} onStop={stopSpan} onChanged={onStoryboardChanged} onSnapshot={onStoryboardSnapshot} />}
           </Panel>
           <Panel id="scenes" title="Scenes" open={panels.scenes} onToggle={() => togglePanel("scenes")} height={heights.scenes} onResize={h => resizePanel("scenes", h)}>
             {state.story && <Scenes view={mapView} words={words} elements={state.story.elements} playhead={state.playhead} sampleRateHz={sampleRateHz} stitched={merged.stitched} tolerance={tolerance} takes={state.takes} selectedSubjectId={selectedSubjectId} onSelectSubject={selectSubject} onSeek={onSeek} />}

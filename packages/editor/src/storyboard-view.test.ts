@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { ResolvedSection, StoryboardDraft, StoryboardFirstPassShot, StoryboardJob, StoryResponse } from "./api.js";
+import type { ResolvedSection, StoryboardFirstPassShot, StoryboardJob, StoryResponse } from "./api.js";
 import { judgeSpan } from "@animator/domain";
-import { EMPTY_DRAFT, firstPassLine, firstPassProgress, firstPassSection, isEmptyDraft, jobLine, openingWords, parseShotDrafts, rendererLabel, spanLines, spanText, takeToSave } from "./storyboard-view.js";
+import { firstPassLine, firstPassProgress, firstPassSection, jobLine, openingWords, rendererLabel, spanLines, spanText } from "./storyboard-view.js";
 
 test("a shot reads by the words spoken from its anchor on", () => {
   const elements: StoryResponse["elements"] = [{ kind: "word", id: "a" }, { kind: "punctuation", value: " " }, { kind: "word", id: "b" }, { kind: "punctuation", value: ". " }, { kind: "word", id: "c" }];
@@ -26,13 +26,6 @@ test("the job line says who is drawing and for how long, why a renderer failed, 
   assert.equal(rendererLabel("something-else"), "something-else");
 });
 
-test("a draft saved as drafted is the model's take; an edited or typed one is the user's", () => {
-  const draft: StoryboardDraft = { anchorWordId: "w", text: "A man wakes.", model: "openai/gpt-6-astra", prompt: "p", seconds: 3 };
-  assert.deepEqual(takeToSave(" A man wakes. ", draft), { model: "openai/gpt-6-astra", text: "A man wakes.", prompt: "p", notes: "Drafted in the Storyboard section and saved unchanged." });
-  assert.deepEqual(takeToSave("A man wakes, gasping.", draft), { model: "user", text: "A man wakes, gasping.", notes: "Edited from a draft by openai/gpt-6-astra." });
-  assert.deepEqual(takeToSave("Typed.", null), { model: "user", text: "Typed." });
-});
-
 test("a span reads as written, punctuation and all, from its first word through its last", () => {
   const elements: StoryResponse["elements"] = [{ kind: "word", id: "a" }, { kind: "punctuation", value: " " }, { kind: "word", id: "b" }, { kind: "punctuation", value: ", " }, { kind: "word", id: "c" }, { kind: "punctuation", value: "." }];
   const words = new Map([["a", { value: "I" }], ["b", { value: "wake" }], ["c", { value: "screaming" }]]);
@@ -41,21 +34,7 @@ test("a span reads as written, punctuation and all, from its first word through 
   assert.equal(spanText(elements, words, "c", "a"), "", "an end before the start reads as nothing");
 });
 
-test("the drafts a browser kept are read back part by part; anything malformed is dropped, and an empty draft is no draft", () => {
-  const source: StoryboardDraft = { anchorWordId: "w1", text: "A man wakes.", model: "openai/gpt-6-astra", prompt: "p", seconds: 3 };
-  const kept = parseShotDrafts({
-    w1: { request: "closer", text: "A man wakes.", source, span: { startWordId: "w1", endWordId: "w4" } },
-    w2: { request: 3, text: "Typed.", source: { text: "not a draft" }, span: { startWordId: "w2" } },
-    w3: { request: "", text: null, source, span: null },
-    w4: "junk",
-  });
-  assert.deepEqual(kept, { w1: { request: "closer", text: "A man wakes.", source, span: { startWordId: "w1", endWordId: "w4" } }, w2: { request: "", text: "Typed.", source: null, span: null } });
-  assert.deepEqual([parseShotDrafts(null), parseShotDrafts([1]), parseShotDrafts("x")], [{}, {}, {}]);
-  assert.equal(isEmptyDraft(EMPTY_DRAFT), true);
-  assert.equal(isEmptyDraft({ ...EMPTY_DRAFT, request: "x" }), false);
-});
-
-test("the span lines say which words a drafted span gives or takes, that a moved shot is saved anew, and where a drawn-in end starts an empty frame", () => {
+test("the span lines say which words a span gives or takes, that a moved shot is saved anew, and where a drawn-in end starts an empty frame", () => {
   const bounds = { first: 2, last: 9 };
   const opening = (index: number) => `word ${index}`;
   const lines = (current: { start: number; end: number } | null, start: number, end: number, hasBefore = true) => spanLines({ current, start, end, judged: judgeSpan(bounds, current?.start ?? null, start, end), hasBefore, opening });

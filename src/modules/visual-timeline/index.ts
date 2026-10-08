@@ -97,6 +97,8 @@ export type AddShotRequest = TimelineTarget & {
   readonly anchorWordId?: string;
   /** What drew the image, when it was generated (A66). */
   readonly renderer?: string;
+  /** The shot station version a storyboard frame was saved from (A69). */
+  readonly stationVersionId?: string;
   readonly producer: { readonly name: string; readonly version: string };
 };
 /** Prepare the image and record in a hidden directory, then publish the completed `shots/<id>/` by one rename. Never overwrites a shot; readers see only complete records. */
@@ -124,6 +126,7 @@ export function addShot(request: AddShotRequest) {
       ...(request.label !== undefined ? { label: request.label } : {}), ...(request.prompt !== undefined ? { prompt: request.prompt } : {}),
       ...(image ? { imagePath: image.name } : {}), ...(request.notes !== undefined ? { notes: request.notes } : {}),
       ...(request.anchorWordId !== undefined ? { anchorWordId: request.anchorWordId } : {}), ...(request.renderer !== undefined ? { renderer: request.renderer } : {}),
+      ...(request.stationVersionId !== undefined ? { stationVersionId: request.stationVersionId } : {}),
       createdAt: request.createdAt ?? new Date().toISOString(), producer: request.producer };
     const bytes = encode(record);
     const decoded = yield* decode(ShotRecord, bytes, "InvalidRequest", `the new record ${id}`);

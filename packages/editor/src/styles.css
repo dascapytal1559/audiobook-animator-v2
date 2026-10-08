@@ -250,8 +250,8 @@ input:read-only, textarea:read-only { color: var(--muted); }
 /* Storyboard (A66): the frame at the cursor, its drawing beside its description, and a strip of every frame underneath. */
 .storyboard { height: 100%; display: flex; flex-direction: column; min-height: 0; }
 .storyboard-empty { padding: 8px 14px; }
-/* The drafting space (A68): the frame as saved on the left, its draft on the right; stacked when the section is narrow. */
-.storyboard-space { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 8px 14px; overflow-y: auto; }
+/* The frame as saved on the left, narrow, and the shot station (A69) on the right; stacked when the section is narrow. */
+.storyboard-space { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(200px, 0.32fr) minmax(0, 1fr); gap: 12px; padding: 8px 14px; overflow-y: auto; }
 .storyboard-column { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .storyboard-current { padding-right: 12px; border-right: 1px solid var(--line); }
 .storyboard-column-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 10px; font-size: 12px; min-width: 0; }
@@ -276,13 +276,54 @@ input:read-only, textarea:read-only { color: var(--muted); }
 .storyboard-heading { margin: 0; font-size: 13px; font-weight: 600; }
 .storyboard-column-head .link, .storyboard-proposal .link, .storyboard-new { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; text-align: left; }
 .storyboard-column-head .link:hover, .storyboard-proposal .link:hover { text-decoration: underline; }
-.storyboard-text { min-height: 72px; line-height: 1.4; resize: vertical; }
-.storyboard-request { min-height: 40px; line-height: 1.4; resize: vertical; }
+.storyboard-current-narration { max-height: 8em; overflow-y: auto; color: var(--muted); }
 .storyboard-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .storyboard-actions button.primary:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .storyboard-status { margin: 0; font-size: 12px; }
 .storyboard-message { margin: 0; font-size: 12px; color: #ffb4b0; }
 .storyboard-new { align-self: flex-start; margin-top: 4px; font-size: 12px; }
+/* The shot station (A69): narration, the director's words, the versions, and the open version's directions as cards. */
+.station-play { padding: 1px 8px; font-size: 11px; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.station-director { min-height: 64px; line-height: 1.45; resize: vertical; font-size: 13px; }
+.station-instruction { min-height: 40px; line-height: 1.4; resize: vertical; }
+.station-count { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.station-count select { width: auto; }
+.station-history { display: flex; flex-direction: column; gap: 4px; }
+.station-history ol { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; max-height: 8.5em; overflow-y: auto; }
+.station-history li { flex-shrink: 0; }
+.station-version { display: flex; align-items: center; gap: 6px; max-width: 260px; padding: 2px 8px 2px 2px; font-size: 11px; text-align: left; background: var(--bg-2); }
+.station-version img, .station-thumb-blank { flex-shrink: 0; width: 48px; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 2px; background: color-mix(in srgb, #000 30%, var(--bg-2)); }
+.station-version span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.station-version.open { border-color: var(--accent); color: var(--accent); }
+.station-version.framed { box-shadow: inset 0 -2px 0 var(--ok); }
+.station-version-view { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg-2); }
+.station-version-head { margin: 0; font-size: 12px; }
+.station-version-head .link, .station-said .link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; }
+.station-framed { color: var(--ok); }
+.station-said { font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.station-said .link { margin-left: 6px; }
+.station-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.station-cards.single { grid-template-columns: minmax(0, 560px); }
+.station-card { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+.station-card.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.station-image { aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; border-radius: 4px; overflow: hidden; background: color-mix(in srgb, #000 30%, var(--bg-2)); }
+.station-image.empty { border: 1px dashed var(--line); }
+.station-image p { margin: 0; padding: 6px; font-size: 12px; text-align: center; }
+.station-image-open { width: 100%; height: 100%; padding: 0; border: 0; border-radius: 0; background: none; cursor: zoom-in; }
+.station-image-open img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.station-image-missing { display: flex; flex-direction: column; align-items: center; gap: 4px; max-height: 100%; padding: 6px; }
+.station-image-missing p { max-height: 6em; overflow-y: auto; font-size: 11px; overflow-wrap: anywhere; }
+.station-card-text { display: flex; flex-direction: column; gap: 2px; padding: 0 2px; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.station-card-text h5 { margin: 0; font-size: 12px; }
+.station-card-text p { margin: 0; }
+.station-card-text details summary { cursor: pointer; font-size: 11px; }
+.station-prompt { font-size: 11px; color: var(--muted); }
+.station-card-actions { padding: 0 2px 2px; }
+.station-card-actions button.on { border-color: var(--accent); color: var(--accent); }
+.station-change, .station-motion-choice { display: flex; flex-direction: column; gap: 4px; }
+.station-motion-choice .chip { padding: 2px 8px; font-size: 12px; border-radius: 10px; }
+.station-motion-choice .chip.on { border-color: var(--accent); color: var(--accent); }
+.station-motion-own { display: flex; gap: 6px; }
 @media (max-width: 760px) {
   .storyboard-space { grid-template-columns: minmax(0, 1fr); }
   .storyboard-current { padding-right: 0; padding-bottom: 10px; border-right: 0; border-bottom: 1px solid var(--line); }

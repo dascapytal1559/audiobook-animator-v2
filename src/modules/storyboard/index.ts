@@ -1,22 +1,23 @@
 /**
- * Drafting and drawing storyboard frames (A66, A68). A draft is one text turn of the Codex CLI under the user's ChatGPT login; a drawing is
- * one Codex turn that calls its image tool, else local Qwen Image 2.1 when that fails. Each runs in a fresh empty directory with a read-only
- * sandbox and without the user's Codex configuration, and is told only the shot's description, what the person asked for, and a short
- * excerpt of the narration. A drawing lands either as a storyboard record (a first pass's) or as a shot's draft drawing (the drafting space's).
+ * Writing and drawing for the storyboard (A66, A67, A69). Writing is one text turn of the Codex CLI under the user's ChatGPT login; a
+ * drawing is one Codex turn that calls its image tool, else local Qwen Image 2.1 when that fails. Each runs in a fresh empty directory with
+ * a read-only sandbox and without the user's Codex configuration, and is told only what the shot needs: the director's words, a
+ * description or image prompt, and a short excerpt of the narration. A drawing lands either as a storyboard record (a first pass's) or as
+ * an image try of a shot station version (A69).
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Duration, Effect, FileSystem, Semaphore, Stream } from "effect";
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process";
-import { type ChunkElement, jobPending, type StoryboardAttempt, type StoryboardDraftDrawing, type StoryboardJob, type StoryboardRenderer, STORYBOARD_TRACK } from "@animator/domain";
+import { type ChunkElement, jobPending, type StationImage, type StoryboardAttempt, type StoryboardJob, type StoryboardRenderer, STORYBOARD_TRACK } from "@animator/domain";
 import { AnimatorError } from "../../core/error.js";
 import { readBounded } from "../../core/io.js";
 import { type StoryContext } from "../story/index.js";
 import { addShot, mintUlid, type ShotRecord, type VisualTimelineSettings } from "../visual-timeline/index.js";
 import { storyboardError, type StoryboardCode, type StoryboardSettings } from "./contracts.js";
-import { type DraftTarget, writeDraftDrawing } from "./drafts.js";
+import { framePrompt, type StationTarget, writeStationImage } from "./station.js";
 export * from "./contracts.js";
-export * from "./drafts.js";
+export * from "./station.js";
 
 const fail = (code: StoryboardCode, message: string) => Effect.fail(storyboardError({ code, message }));
 const OUTPUT_LIMIT = 1_048_576;
@@ -42,29 +43,7 @@ export function excerpt(elements: ReadonlyArray<ChunkElement>, anchorWordId: str
 }
 
 /**
- * What a draft asks for: one shot, covering the narration marked in the excerpt, described for a storyboard artist. In the drafting space
- * (A68) it may also revise the shot's `current` description and follow what the person asked for, `request`, which leads where it and the
- * passage differ only in what to show.
- */
-export function draftPrompt(options: { readonly title: string; readonly excerpt: string; readonly current?: string; readonly request?: string }): string {
-  const current = options.current?.trim() ?? "";
-  const request = options.request?.trim() ?? "";
-  return [
-    "You are helping storyboard an animated film made from an audiobook's narration.",
-    "Propose one shot: what the camera sees in the frame that covers the narration marked [[like this]] in the passage below, for as long as the narration stays on that moment.",
-    ...(current === "" ? [] : [`The shot is described now as: "${current}"`]),
-    ...(request === "" ? [] : [`The director asks for this: "${request}". Follow it${current === "" ? "" : ", and keep what it does not change from the description now"}.`]),
-    "Write 30 to 60 words of plain present-tense description: subject, action, setting, framing, and light. Describe only what can be drawn. Stay faithful to the passage; do not invent names, faces, or events it does not support.",
-    "Reply with only the description. Do not run commands or read files.",
-    "",
-    `Story: ${options.title}`,
-    "Passage:",
-    options.excerpt,
-  ].join("\n");
-}
-
-/**
- * The picture a renderer is asked for, the one prompt every storyboard drawing uses (A66, A67): a plain, unstyled black line drawing of the
+ * The picture a renderer is asked for, the one prompt a first pass's drawings use (A66, A67): a plain, unstyled black line drawing of the
  * description, with the narration as context only. It sets staging and framing and nothing else, so a coherent style can be chosen later;
  * colours, materials, and lighting the description names are kept out of the picture.
  */
@@ -83,7 +62,7 @@ export function sketchPrompt(options: { readonly title: string; readonly descrip
 export type PlanSection = { readonly kind: string; readonly title: string; readonly summary?: string };
 /**
  * What a first pass asks for (A67): the shots of one section of the story map, each beginning at a word the model quotes, with a 30 to 60
- * word description in the style of a draft. `sentences` are the section's narration, one sentence each; `before` is the narration just
+ * word description of the shot. `sentences` are the section's narration, one sentence each; `before` is the narration just
  * ahead of it, as context; `kept` quotes the opening words of shots already declared in the section, which the model is told to keep.
  */
 export function planPrompt(options: { readonly title: string; readonly section: PlanSection; readonly before: string | null; readonly sentences: ReadonlyArray<string>; readonly kept: ReadonlyArray<string> }): string {
@@ -218,16 +197,16 @@ export function readCodexEvents(stdout: string): CodexTurn {
 
 /** Where the Codex CLI keeps its login and generated images. */
 export const codexHome = (settings: StoryboardSettings): string => settings.codex.home ?? process.env["CODEX_HOME"] ?? join(homedir(), ".codex");
-/** Codex tools a drawing or a draft never needs, switched off so the turn cannot run commands, browse, or reach the user's apps. */
+/** Codex tools a drawing or a text turn never needs, switched off so the turn cannot run commands, browse, or reach the user's apps. */
 const CODEX_TOOLS_OFF = ["shell_tool", "apps", "plugins", "browser_use", "browser_use_external", "computer_use", "in_app_browser", "hooks"].flatMap(feature => ["--disable", feature]);
 /**
  * The fixed part of every Codex turn: no user configuration (so no MCP servers, notifications, or full-access sandbox), nothing persisted,
- * a read-only sandbox in the turn's own empty directory, no shell, web search, browser, or apps, the configured model, and the prompt read
+ * a read-only sandbox in the turn's own empty directory, no shell, web search, browser, or apps, the given model, and the prompt read
  * from stdin so it never appears in a process listing.
  */
-const codexArgs = (settings: StoryboardSettings, workDirectory: string, extra: ReadonlyArray<string>) => [
+const codexArgs = (settings: StoryboardSettings, model: string, workDirectory: string, extra: ReadonlyArray<string>) => [
   "exec", "--ignore-user-config", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--json", "--cd", workDirectory,
-  "--model", settings.codex.model, "-c", `model_reasoning_effort="${settings.codex.reasoningEffort}"`, "-c", `web_search="disabled"`, ...CODEX_TOOLS_OFF, ...extra, "-",
+  "--model", model, "-c", `model_reasoning_effort="${settings.codex.reasoningEffort}"`, "-c", `web_search="disabled"`, ...CODEX_TOOLS_OFF, ...extra, "-",
 ];
 /** What a failed Codex turn said, led by the likely cause when it is a missing login, so the section can say what to do. */
 export function codexReason(output: string): string {
@@ -237,25 +216,29 @@ export function codexReason(output: string): string {
 const codexFailure = (label: string, result: ProcessResult, turn: CodexTurn) =>
   `${label} failed (codex exited with code ${result.exitCode}). ${codexReason([...turn.errors, result.stderr].join(" "))}`;
 
-/** One text-only Codex turn: its final message, with the model that wrote it and how long it took. A turn that fails or answers nothing fails with `code`. */
+/** One text-only Codex turn by the writer model: its final message, with the model that wrote it and how long it took. A turn that fails or answers nothing fails with `code`. */
 function codexText(settings: StoryboardSettings, prompt: string, turn: { readonly timeoutMs: number; readonly code: StoryboardCode; readonly label: string }): Effect.Effect<{ readonly text: string; readonly model: string; readonly seconds: number }, AnimatorError, FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.scoped(Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "animator-storyboard-text-" }).pipe(Effect.mapError(() => storyboardError({ code: "IoFailed", message: `Cannot make a working directory for ${turn.label.toLowerCase()}.` })));
     const started = Date.now();
-    const result = yield* runProcess({ command: settings.codex.executable, args: codexArgs(settings, directory, ["--disable", "image_generation"]), cwd: directory,
+    const result = yield* runProcess({ command: settings.codex.executable, args: codexArgs(settings, settings.codex.writerModel, directory, ["--disable", "image_generation"]), cwd: directory,
       env: { CODEX_HOME: codexHome(settings) }, stdin: prompt, timeoutMs: turn.timeoutMs, code: turn.code, label: turn.label });
     const events = readCodexEvents(result.stdout);
     if (result.exitCode !== 0) return yield* fail(turn.code, codexFailure(turn.label, result, events));
     const text = (events.messages.at(-1) ?? "").trim();
     if (text === "") return yield* fail(turn.code, `${turn.label} came back empty. ${tail(events.errors.join(" "))}`.trim());
-    return { text, model: `openai/${settings.codex.model}`, seconds: (Date.now() - started) / 1000 };
+    return { text, model: `openai/${settings.codex.writerModel}`, seconds: (Date.now() - started) / 1000 };
   }));
 }
 
-/** One draft: a text-only Codex turn whose final message is the proposed description. */
-export const codexDraft = (settings: StoryboardSettings, prompt: string) =>
-  codexText(settings, prompt, { timeoutMs: settings.codex.draftTimeoutMs, code: "DraftFailed", label: "The draft" }).pipe(Effect.map(draft => ({ ...draft, text: draft.text.replace(/^["“]|["”]$/g, "").trim() })));
+/** One shot station turn (A69): a text-only Codex turn whose final message is the JSON `read` takes, failing with what it said when it is not. */
+export const codexWrite = <A>(settings: StoryboardSettings, prompt: string, label: string, read: (reply: string) => A | null) => Effect.gen(function* () {
+  const answer = yield* codexText(settings, prompt, { timeoutMs: settings.codex.writeTimeoutMs, code: "WriteFailed", label });
+  const value = read(answer.text);
+  if (value === null) return yield* fail("WriteFailed", `${label} did not answer with the JSON object it was asked for: ${tail(answer.text)}`);
+  return { value, model: answer.model, seconds: answer.seconds };
+});
 
 /** A first pass's plan: one text-only Codex turn whose final message is the JSON object `planPrompt` asks for, read into proposed shots. */
 export const codexPlan = (settings: StoryboardSettings, prompt: string) => Effect.gen(function* () {
@@ -272,7 +255,7 @@ function codexDraw(settings: StoryboardSettings, sketch: string, directory: stri
     const fs = yield* FileSystem.FileSystem;
     const prompt = codexDrawInstruction(sketch);
     const home = codexHome(settings);
-    const result = yield* runProcess({ command: settings.codex.executable, args: codexArgs(settings, directory, ["--enable", "image_generation"]), cwd: directory,
+    const result = yield* runProcess({ command: settings.codex.executable, args: codexArgs(settings, settings.codex.drawModel, directory, ["--enable", "image_generation"]), cwd: directory,
       env: { CODEX_HOME: home }, stdin: prompt, timeoutMs: settings.codex.drawTimeoutMs, code: "RendererFailed", label: "ChatGPT through the Codex CLI" });
     const turn = readCodexEvents(result.stdout);
     if (result.exitCode !== 0) return yield* fail("RendererFailed", codexFailure("ChatGPT through the Codex CLI", result, turn));
@@ -282,7 +265,7 @@ function codexDraw(settings: StoryboardSettings, sketch: string, directory: stri
     const dated = yield* Effect.forEach(names, name => fs.stat(join(images, name)).pipe(Effect.map(info => ({ name, at: info.mtime._tag === "Some" ? info.mtime.value.getTime() : 0 })), Effect.orElseSucceed(() => ({ name, at: 0 }))));
     const newest = dated.sort((a, b) => b.at - a.at)[0];
     if (newest === undefined) return yield* fail("RendererFailed", `ChatGPT through the Codex CLI finished without an image. ${tail(turn.messages.join(" ")) || "It gave no reason."}`);
-    return { imagePath: join(images, newest.name), prompt, notes: `Drawn by ChatGPT's image tool through the Codex CLI under the ChatGPT login (model ${settings.codex.model}, thread ${turn.threadId}).` };
+    return { imagePath: join(images, newest.name), prompt, notes: `Drawn by ChatGPT's image tool through the Codex CLI under the ChatGPT login (model ${settings.codex.drawModel}, thread ${turn.threadId}).` };
   });
 }
 
@@ -303,7 +286,7 @@ function fallbackDraw(settings: StoryboardSettings, sketch: string, directory: s
   }));
 }
 
-/** A drawing made: which renderer drew it, its image, the exact prompt, the notes a record or draft carries, and why the primary failed. */
+/** A drawing made: which renderer drew it, its image, the exact prompt, the notes a record or image try carries, and why the primary failed. */
 type Rendered = { readonly renderer: StoryboardRenderer; readonly imagePath: string; readonly prompt: string; readonly notes: string };
 /**
  * Draw one sketch: ChatGPT through the Codex CLI first, local Qwen Image 2.1 only when that fails for any reason (not installed, not logged
@@ -360,21 +343,35 @@ export function drawFrame(request: DrawFrameRequest): Effect.Effect<ShotRecord, 
   }));
 }
 
-export type DrawDraftRequest = {
-  readonly settings: StoryboardSettings; readonly target: DraftTarget; readonly producer: { readonly name: string; readonly version: string };
-  readonly anchorWordId: string; readonly startWordId: string; readonly description: string; readonly sketch: string; readonly report: DrawReport;
+export type DrawStationRequest = {
+  readonly settings: StoryboardSettings; readonly target: StationTarget; readonly producer: { readonly name: string; readonly version: string };
+  readonly versionId: string; readonly direction: number; readonly prompt: string; readonly report: DrawReport;
 };
-/** Draw a shot's draft drawing (A68) and keep it as the shot's one draft drawing, off the timeline, until it is saved or discarded. */
-export function drawDraft(request: DrawDraftRequest): Effect.Effect<StoryboardDraftDrawing, AnimatorError, FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner> {
+/**
+ * Draw one direction of a shot station version (A69) from its image prompt as written, and record the try: the image with its renderer and
+ * notes, or, when both renderers fail, why each failed, so the failure stays visible; the drawing then fails with the last reason.
+ */
+export function drawStation(request: DrawStationRequest): Effect.Effect<StationImage, AnimatorError, FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner> {
+  const sketch = framePrompt(request.prompt);
+  const record = { versionId: request.versionId, direction: request.direction, producer: request.producer };
+  // Every renderer's reason is kept with a failed try, not only the last one's.
+  const reasons: string[] = [];
+  const report: DrawReport = { onAttempt: request.report.onAttempt, onAttemptFailed: (renderer, message) => { reasons.push(message); request.report.onAttemptFailed(renderer, message); } };
   return Effect.scoped(Effect.gen(function* () {
-    const drawn = yield* renderSketch(request.settings, request.sketch, yield* drawingDirectory, request.target.maxImageBytes, request.report);
-    return yield* writeDraftDrawing(request.target, { anchorWordId: request.anchorWordId, startWordId: request.startWordId, description: request.description,
-      renderer: drawn.renderer, prompt: drawn.prompt, notes: drawn.notes, imageSourcePath: drawn.imagePath, producer: request.producer });
+    const drawn = yield* renderSketch(request.settings, sketch, yield* drawingDirectory, request.target.maxImageBytes, report).pipe(Effect.result);
+    if (drawn._tag === "Failure") {
+      const error = reasons.length > 0 ? reasons.join(" ") : drawn.failure.message;
+      yield* writeStationImage(request.target, { ...record, prompt: codexDrawInstruction(sketch), drawn: { error } }).pipe(Effect.ignore);
+      return yield* Effect.fail(drawn.failure);
+    }
+    return yield* writeStationImage(request.target, { ...record, prompt: drawn.success.prompt, drawn: { renderer: drawn.success.renderer, notes: drawn.success.notes, imageSourcePath: drawn.success.imagePath } });
   }));
 }
 
 /** What a drawing reports while it runs: each renderer's try, and why one failed. */
 export type DrawReport = { readonly onAttempt: (renderer: StoryboardRenderer) => void; readonly onAttemptFailed: (renderer: StoryboardRenderer, message: string) => void };
+/** What a drawing is for: its kind, the shot, and for a station drawing the version and direction; a first pass's drawing names the pass. */
+export type JobTarget = Pick<StoryboardJob, "kind" | "anchorWordId" | "firstPassId" | "versionId" | "direction">;
 /**
  * The drawings, per story, for the book's lifetime (the server's, or one CLI run's): a restart forgets them, and a drawing running then is
  * lost. A queued drawing waits for one of `concurrentDraws` turns (A67), so a first pass's drawings run a few at a time rather than all at
@@ -389,17 +386,17 @@ export class StoryboardJobBook {
   list(storyId: string): ReadonlyArray<StoryboardJob> {
     return (this.jobs.get(storyId) ?? []).map(job => ({ ...job, attempts: job.attempts.map(a => ({ ...a })) }));
   }
-  /** Whether a drawing of this kind for the shot at this word is queued or running. */
-  pending(storyId: string, anchorWordId: string, kind: StoryboardJob["kind"]): boolean {
-    return (this.jobs.get(storyId) ?? []).some(job => job.kind === kind && job.anchorWordId === anchorWordId && jobPending(job));
+  /** Whether a drawing that `matches` is queued or running. */
+  pending(storyId: string, matches: (job: StoryboardJob) => boolean): boolean {
+    return (this.jobs.get(storyId) ?? []).some(job => jobPending(job) && matches(job));
   }
   /**
    * A new queued job, and the effect that waits for a turn, runs `draw`, and records how it ended; that effect never fails. `draw` answers
-   * the record a frame drawing published or the draft a draft drawing wrote. The caller has checked that no drawing of the same kind for
-   * the same shot is pending, and forks the effect or waits for it.
+   * the record a frame drawing published or the image a station drawing wrote. The caller has checked that no drawing of the same target
+   * is pending, and forks the effect or waits for it.
    */
-  queue<E extends { readonly message: string }, R>(storyId: string, kind: StoryboardJob["kind"], anchorWordId: string, draw: (report: DrawReport) => Effect.Effect<{ readonly id: string }, E, R>, firstPassId?: string): { readonly job: StoryboardJob; readonly run: Effect.Effect<StoryboardJob, never, R> } {
-    const job: MutableJob = { id: mintUlid(), kind, anchorWordId, status: "queued", requestedAt: new Date().toISOString(), attempts: [], ...(firstPassId !== undefined ? { firstPassId } : {}) };
+  queue<E extends { readonly message: string }, R>(storyId: string, target: JobTarget, draw: (report: DrawReport) => Effect.Effect<{ readonly id: string }, E, R>): { readonly job: StoryboardJob; readonly run: Effect.Effect<StoryboardJob, never, R> } {
+    const job: MutableJob = { id: mintUlid(), ...target, status: "queued", requestedAt: new Date().toISOString(), attempts: [] };
     const list = this.jobs.get(storyId) ?? [];
     list.push(job);
     this.jobs.set(storyId, list);
@@ -412,7 +409,7 @@ export class StoryboardJobBook {
       const last = job.attempts.at(-1);
       if (last !== undefined && last.finishedAt === undefined) last.finishedAt = now();
       job.finishedAt = now();
-      if ("id" in outcome) { job.status = "done"; if (kind === "frame") job.recordId = outcome.id; else job.draftId = outcome.id; }
+      if ("id" in outcome) { job.status = "done"; if (target.kind === "frame") job.recordId = outcome.id; else job.imageId = outcome.id; }
       else { job.status = "failed"; job.error = outcome.error; }
       return { ...job, attempts: job.attempts.map(a => ({ ...a })) } satisfies StoryboardJob;
     });
